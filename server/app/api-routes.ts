@@ -360,6 +360,9 @@ app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context
         deleted_decisions: result.deleted_decisions,
         outcome: result.failed.length === 0 ? 'queued' : result.deleted_alerts > 0 ? 'partial' : 'failure',
       });
+      if (result.deleted_decisions > 0) {
+        void runNotificationEvaluation('bulk alert delete');
+      }
       return context.json(result);
     }
     if (!Array.isArray(body.ids) || body.ids.length === 0) {
@@ -606,6 +609,9 @@ app.delete(`${config.basePath}/api/instances/:instanceId/alerts/:id`, ensureAuth
       instance_id: instance.id,
       outcome: 'queued',
     });
+    if (result.deleted_decisions > 0) {
+      void runNotificationEvaluation('alert decision delete');
+    }
     return context.json(result);
   } catch (error: any) {
     return context.json({ error: error?.message || 'Failed to delete alert' }, 502);

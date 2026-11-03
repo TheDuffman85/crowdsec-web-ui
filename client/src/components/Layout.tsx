@@ -105,7 +105,7 @@ export function Layout() {
             >
                 <div ref={pageTopRef} className="pointer-events-none absolute left-0 top-80 h-px w-px" aria-hidden="true" />
                 <div className="sticky top-0 z-30 bg-gray-50 dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800">
-                    <div className="container mx-auto px-4 lg:px-8 max-w-[1920px]">
+                    <div className="px-4 lg:px-8">
                         <div className="flex items-center gap-4 h-16">
                             {/* Mobile hamburger button */}
                             <button
@@ -122,7 +122,7 @@ export function Layout() {
                     </div>
                 </div>
                 
-                <div className="container mx-auto p-4 lg:p-8 max-w-[1920px]">
+                <div className="p-4 lg:p-8">
                     <Outlet />
                 </div>
                 <BackToTop visibilityTargetRef={pageTopRef} />

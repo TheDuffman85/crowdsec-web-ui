@@ -11,8 +11,11 @@ import type { LapiClient } from '../lapi';
 import type { DatabaseQueryWorker } from '../query-worker-client';
 
 const PENDING_DELETION_WRITE_BATCH_SIZE = 100;
+// Per instance, so a slow LAPI cannot hold up another one. Kept low because bouncers use the same LAPI.
+const PENDING_DELETION_CONCURRENCY = 4;
 
 type HonoContext = any;
+type PendingAlertDeletionRow = ReturnType<CrowdsecDatabase['getPendingAlertDeletions']>[number];
 type AnyError = Error & {
   code?: string;
   response?: { data?: unknown; status: number };
@@ -276,6 +279,12 @@ function parsePendingDecisionIds(value: string): string[] {
   }
 }
 
+// Legacy queue keys are primary-instance upstream IDs; new keys include the instance.
+function getPendingDeletionInstanceId(queueKey: string): string {
+  const separator = queueKey.indexOf('\u0000');
+  return separator < 0 ? config.instances[0].id : queueKey.slice(0, separator);
+}
+
 function clearPendingAlertDeletionTimeout(): void {
   if (!state.pendingAlertDeletionTimeout) return;
   clearTimeout(state.pendingAlertDeletionTimeout);
@@ -294,17 +303,22 @@ function getPendingAlertDeletionNextRunAt(
 ): number | null {
   if (rows.length === 0) return null;
   const retryDelayMs = 30_000;
-  return Math.min(...rows.map((row) => {
+  // A loop, because spreading a queue of this size into Math.min overflows the stack.
+  let nextRunAt = Number.POSITIVE_INFINITY;
+  for (const row of rows) {
     const lastAttempt = row.last_attempt_at ? Date.parse(row.last_attempt_at) : 0;
     const retryAt = row.last_error && lastAttempt > 0 ? lastAttempt + retryDelayMs : 0;
     const requestedAt = Date.parse(row.requested_at);
     const expiresAt = config.deletionQueueMaxAgeMs > 0 && Number.isFinite(requestedAt)
       ? requestedAt + config.deletionQueueMaxAgeMs
       : Number.POSITIVE_INFINITY;
-    if (!row.decisions_deleted_at) return Math.min(retryAt || now, expiresAt);
     const deleteAt = row.delete_after ? Date.parse(row.delete_after) : now;
-    return Math.min(Math.max(deleteAt, retryAt), expiresAt);
-  }));
+    const rowRunAt = row.decisions_deleted_at
+      ? Math.min(Math.max(deleteAt, retryAt), expiresAt)
+      : Math.min(retryAt || now, expiresAt);
+    if (rowRunAt < nextRunAt) nextRunAt = rowRunAt;
+  }
+  return nextRunAt;
 }
 
 function logPendingAlertDeletionQueue(
@@ -368,7 +382,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
       })(undefined));
     };
 
-    for (const row of rows) {
+    const processRow = async (row: PendingAlertDeletionRow): Promise<void> => {
       if (writes.length >= PENDING_DELETION_WRITE_BATCH_SIZE) await flushWrites();
       const requestedAt = Date.parse(row.requested_at);
       if (
@@ -383,19 +397,18 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
         console.error(
           `[deletion-queue] Stopped retrying alert ${row.alert_id} after ${maxAge}; its tombstone remains active.${row.last_error ? ` Last error: ${row.last_error}` : ''}`,
         );
-        continue;
+        return;
       }
 
-      // Legacy queue keys are primary-instance upstream IDs; new keys include the instance.
       const separator = row.alert_id.indexOf('\u0000');
-      const instanceId = separator < 0 ? config.instances[0].id : row.alert_id.slice(0, separator);
+      const instanceId = getPendingDeletionInstanceId(row.alert_id);
       const upstreamId = separator < 0 ? row.alert_id : row.alert_id.slice(separator + 1);
       const instance = config.instances.find((candidate) => candidate.id === instanceId);
       const client: LapiClient | undefined = lapiClients?.get(instanceId) ?? (separator < 0 ? lapiClient : undefined);
       if (!instance || !client) {
         const attemptedAt = new Date().toISOString();
         writes.push(() => database.recordAlertDeletionFailure(row.alert_id, attemptedAt, `Instance ${instanceId} is not configured`));
-        continue;
+        return;
       }
       let decisionsDeletedAt = row.decisions_deleted_at;
       let deleteAfter = row.delete_after;
@@ -420,12 +433,12 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
           const attemptedAt = new Date().toISOString();
           writes.push(() => database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Decision deletion failed'));
           console.error(`[deletion-queue] Alert ${row.alert_id} decision deletion failed and remains queued: ${typedError.message}`);
-          continue;
+          return;
         }
       }
 
       if (!decisionsDeletedAt || (deleteAfter && Date.parse(deleteAfter) > Date.now())) {
-        continue;
+        return;
       }
 
       try {
@@ -443,7 +456,35 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
         writes.push(() => database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Alert deletion failed'));
         console.error(`[deletion-queue] Alert ${row.alert_id} deletion failed and remains queued: ${typedError.message}`);
       }
+    };
+
+    const rowsByInstance = new Map<string, PendingAlertDeletionRow[]>();
+    for (const row of rows) {
+      const instanceId = getPendingDeletionInstanceId(row.alert_id);
+      const instanceRows = rowsByInstance.get(instanceId);
+      if (instanceRows) instanceRows.push(row);
+      else rowsByInstance.set(instanceId, [row]);
     }
+
+    // A row's own decisions and alert stay in order. A failed write stops every worker,
+    // and all of them finish before this run ends so that a later run cannot overlap it.
+    let writeFailed = false;
+    const workers = Array.from(rowsByInstance.values()).flatMap((instanceRows) => {
+      let nextRow = 0;
+      return Array.from({ length: Math.min(PENDING_DELETION_CONCURRENCY, instanceRows.length) }, async () => {
+        while (!writeFailed && nextRow < instanceRows.length) {
+          try {
+            await processRow(instanceRows[nextRow++]);
+          } catch (error) {
+            writeFailed = true;
+            throw error;
+          }
+        }
+      });
+    });
+    const results = await Promise.allSettled(workers);
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) throw failure.reason;
 
     await flushWrites();
 
@@ -476,9 +517,8 @@ async function queueAlertsForDeletion(linkedDecisionIdsByAlert: Map<string, stri
     const queue = database.transaction<Map<string, string[]>>((entries) => {
       for (const [alertId, decisionIds] of entries) {
         database.queueAlertDeletion(alertId, decisionIds, requestedAt);
-        database.deleteDecisionsByAlertId(alertId);
-        database.deleteAlert(alertId);
       }
+      database.deleteCachedAlerts(Array.from(entries.keys()));
     });
     try {
       queue(linkedDecisionIdsByAlert);
@@ -519,10 +559,13 @@ async function deleteAlertsByRefs(refs: InstanceEntityRef[], knownAlerts?: Map<s
   await syncWorker.runExclusive(() => {
     try {
       database.transaction<void>(() => {
+        const internalIds: number[] = [];
         for (const { key, ref, decisionIds } of entries) {
           database.queueAlertDeletion(key, decisionIds, new Date().toISOString());
-          database.deleteAlertByInstanceId(ref.instance_id, ref.id);
+          const internalId = database.getAlertInternalId(ref.instance_id, ref.id);
+          if (internalId !== null) internalIds.push(internalId);
         }
+        database.deleteCachedAlerts(internalIds);
         database.refreshDecisionDuplicateFlags(new Date().toISOString());
       })(undefined);
     } finally {
