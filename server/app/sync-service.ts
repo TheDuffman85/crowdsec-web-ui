@@ -130,6 +130,9 @@ export function createSyncService(dependencies: SyncServiceDependencies) {
   const state = dependencies.state;
   let schedulerGeneration = 0;
   let retentionCleanupBatchSize = RETENTION_CLEANUP_MIN_BATCH_SIZE;
+  let notificationEvaluation: Promise<void> | null = null;
+  let notificationEvaluationRerunRequested = false;
+  let latestNotificationEvaluationSource = '';
   const {
     CAPI_ALERT_ORIGIN,
     COMMUNITY_BLOCKLIST_SOURCE_SCOPE,
@@ -209,12 +212,32 @@ function updateSyncStatus(updates: Partial<SyncStatus>): void {
   Object.assign(syncStatus, updates);
 }
 
-async function runNotificationEvaluation(source: string): Promise<void> {
-  try {
-    await notificationService.evaluateRules();
-  } catch (error: any) {
-    console.error(`Notification evaluation failed during ${source}:`, error.message);
+// Rules are read before notifications are recorded, so overlapping evaluations could send the
+// same notification twice. A request during an evaluation runs once more after it, however many
+// arrive, and the caller's promise covers that run too.
+function runNotificationEvaluation(source: string): Promise<void> {
+  latestNotificationEvaluationSource = source;
+  if (notificationEvaluation) {
+    notificationEvaluationRerunRequested = true;
+    return notificationEvaluation;
   }
+
+  notificationEvaluation = (async () => {
+    try {
+      do {
+        notificationEvaluationRerunRequested = false;
+        const currentSource = latestNotificationEvaluationSource;
+        try {
+          await notificationService.evaluateRules();
+        } catch (error: any) {
+          console.error(`Notification evaluation failed during ${currentSource}:`, error.message);
+        }
+      } while (notificationEvaluationRerunRequested);
+    } finally {
+      notificationEvaluation = null;
+    }
+  })();
+  return notificationEvaluation;
 }
 
 function getLegacyAlertSyncQueries(): AlertSyncQuery[] {

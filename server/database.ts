@@ -950,8 +950,10 @@ export class CrowdsecDatabase {
       INSERT OR REPLACE INTO cve_cache (id, published_at, fetched_at)
       VALUES ($id, $published_at, $fetched_at)
     `);
+    // alert_id is UNINDEXED, so matching on it reads the whole index for every deleted alert.
+    // Every insert stores the alert ID as the rowid.
     this.deleteAlertSearchIndexStatement = this.searchIndexAvailable
-      ? this.db.prepare('DELETE FROM alerts_fts WHERE alert_id = ?')
+      ? this.db.prepare('DELETE FROM alerts_fts WHERE rowid = ?')
       : null;
     this.insertAlertSearchIndexStatement = this.searchIndexAvailable
       ? this.db.prepare('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)')
@@ -1188,7 +1190,7 @@ export class CrowdsecDatabase {
     const alertIds = Array.from(new Set(scope.alertIds.map(String)));
     const decisionIds = Array.from(new Set(scope.decisionIds.map(String)));
     const rebuild = this.db.transaction(() => {
-      runChunkedIdMutation(this.db, 'DELETE FROM alerts_fts WHERE alert_id IN', alertIds);
+      runChunkedIdMutation(this.db, 'DELETE FROM alerts_fts WHERE rowid IN', alertIds);
       this.deleteDecisionSearchIndexes(decisionIds);
 
       for (let offset = 0; offset < alertIds.length; offset += 900) {
@@ -2850,7 +2852,7 @@ export class CrowdsecDatabase {
   private deleteAlertSearchIndexes(ids: string[]): void {
     if (this.searchIndexUpdatesDeferred) return;
     if (!this.searchIndexAvailable || ids.length === 0) return;
-    runChunkedIdMutation(this.db, 'DELETE FROM alerts_fts WHERE alert_id IN', ids);
+    runChunkedIdMutation(this.db, 'DELETE FROM alerts_fts WHERE rowid IN', ids);
   }
 
   private deleteDecisionSearchIndex(id: string | number): void {

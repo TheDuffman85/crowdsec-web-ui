@@ -322,8 +322,95 @@ describe('Alerts page grouped sessions', () => {
     expect(api.bulkDeleteAlerts).not.toHaveBeenCalled();
   });
 
+  function pageOfAlerts(ids: number[], page: number, totalPages: number, total: number) {
+    return {
+      data: ids.map((id) => ({ ...session().latest, id })),
+      pagination: { page, page_size: 200, total, total_pages: totalPages, unfiltered_total: total },
+      selectable_ids: [],
+    };
+  }
+
+  function mockSessionAlerts(total: number) {
+    const totalPages = Math.ceil(total / 200);
+    vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page) => pageOfAlerts(
+      Array.from({ length: Math.min(200, total - (page - 1) * 200) }, (_, index) => (page - 1) * 200 + index + 1),
+      page,
+      totalPages,
+      total,
+    ));
+  }
+
+  async function confirmSessionDelete() {
+    const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: 'Delete Session' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    return dialog;
+  }
+
+  test('splits a large session delete into several requests', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    mockSessionAlerts(4100);
+    renderAlerts('/alerts?group=ip');
+
+    await confirmSessionDelete();
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const chunks = vi.mocked(api.bulkDeleteAlerts).mock.calls.map(([ids]) => ids as string[]);
+    expect(chunks.map((ids) => ids.length)).toEqual([2000, 2000, 100]);
+    expect(new Set(chunks.flat()).size).toBe(4100);
+  });
+
+  test('reports the unsent alerts when a later delete request fails', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    mockSessionAlerts(4100);
+    vi.mocked(api.bulkDeleteAlerts)
+      .mockResolvedValueOnce({ requested_alerts: 2000, requested_decisions: 0, deleted_alerts: 2000, deleted_decisions: 0, failed: [] })
+      .mockRejectedValueOnce(new Error('Network down'));
+    renderAlerts('/alerts?group=ip');
+
+    await confirmSessionDelete();
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.bulkDeleteAlerts).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(/2000.*2100/)).toBeInTheDocument();
+  });
+
+  test('keeps the dialog open when the first delete request fails', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    mockSessionAlerts(4100);
+    vi.mocked(api.bulkDeleteAlerts).mockRejectedValueOnce({});
+    renderAlerts('/alerts?group=ip');
+
+    const dialog = await confirmSessionDelete();
+
+    await within(dialog).findByText('Failed to delete session. Please try again.');
+    expect(api.bulkDeleteAlerts).toHaveBeenCalledTimes(1);
+  });
+
+  test('refreshes without a delete request when a session is already gone', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    vi.mocked(api.fetchAlertsPaginated).mockResolvedValueOnce(pageOfAlerts([], 1, 0, 0));
+    renderAlerts('/alerts?group=ip');
+    const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+    vi.mocked(api.fetchAlertSessionsPaginated).mockClear();
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([]));
+    // A reload within 250ms of the previous one is skipped.
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    await userEvent.click(within(row).getByRole('button', { name: 'Delete Session' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.bulkDeleteAlerts).not.toHaveBeenCalled();
+    expect(api.fetchAlertSessionsPaginated).toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText('38 alert(s) over <1m')).not.toBeInTheDocument());
+  });
+
   test('pins the actions column and tightens the cells only while grouped', async () => {
     vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    mockExpandedAlerts();
     renderAlerts('/alerts?group=ip');
 
     const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;

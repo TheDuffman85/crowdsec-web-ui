@@ -237,6 +237,136 @@ describe('createApp deletion workflows', () => {
     destroyTempDir();
   });
 
+  test('limits queued deletions to four concurrent LAPI requests and keeps decisions before their alert', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const order: string[] = [];
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url, init) => {
+        if (init?.method !== 'DELETE') return undefined;
+        order.push(new URL(url).pathname);
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve(Response.json({ message: 'Deleted' }));
+          }, 2);
+        });
+      },
+    });
+    await lapiClient.login();
+    const requestedAt = new Date(Date.now() - 60_000).toISOString();
+    database.transaction(() => {
+      for (let id = 100; id < 130; id += 1) database.queueAlertDeletion(String(id), [String(id + 1000)], requestedAt);
+    })(undefined);
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [99] }),
+    }));
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(database.getPendingAlertDeletions()).toEqual([]));
+
+    expect(peak).toBe(4);
+    for (let id = 100; id < 130; id += 1) {
+      expect(order.indexOf(`/v1/decisions/${id + 1000}`)).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf(`/v1/alerts/${id}`)).toBeGreaterThan(order.indexOf(`/v1/decisions/${id + 1000}`));
+    }
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('schedules a queue too large to spread into Math.min', async () => {
+    const { controller, database } = createController();
+    const row = {
+      alert_id: '1',
+      decision_ids_json: '[]',
+      requested_at: new Date().toISOString(),
+      decisions_deleted_at: new Date().toISOString(),
+      delete_after: new Date(Date.now() + 60_000).toISOString(),
+      completed_at: null,
+      attempt_count: 0,
+      last_attempt_at: null,
+      last_error: null,
+    };
+    const getPending = vi.spyOn(database, 'getPendingAlertDeletions').mockReturnValue(Array.from({ length: 200_000 }, () => row));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [99] }),
+      }));
+      expect(response.status).toBe(200);
+      await vi.waitFor(() => expect(getPending.mock.calls.length).toBeGreaterThanOrEqual(2));
+      expect(errorSpy.mock.calls.filter((call) => String(call[0]).includes('Pending alert deletion processor failed'))).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+      getPending.mockRestore();
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('removes bulk deleted alerts from the search index', async () => {
+    const { controller, database, lapiClient } = createController();
+    seedAlert(database, sampleAlert({ id: 1, uuid: 'a-1', message: 'firstneedle', decisions: [] }));
+    seedAlert(database, sampleAlert({ id: 2, uuid: 'a-2', message: 'secondneedle', decisions: [] }));
+    seedAlert(database, sampleAlert({ id: 3, uuid: 'a-3', message: 'thirdneedle', decisions: [] }));
+    await lapiClient.login();
+    const indexed = () => (database.db.prepare('SELECT rowid AS id FROM alerts_fts ORDER BY rowid').all() as Array<{ id: number }>).map((row) => row.id);
+    expect(indexed()).toEqual([1, 2, 3]);
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [1, 3] }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(indexed()).toEqual([2]);
+    expect(database.countAlerts()).toBe(1);
+
+    const single = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/2', { method: 'DELETE' }));
+    expect(single.status).toBe(200);
+    expect(indexed()).toEqual([]);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('evaluates notification rules after bulk deleting by instance refs and coalesces overlapping runs', async () => {
+    const { controller, database, lapiClient } = createController();
+    const instanceId = controller.config.instances[0].id;
+    seedAlert(database, sampleAlert());
+    seedAlert(database, sampleAlert({ id: 3, uuid: 'alert-3', decisions: [{ ...sampleAlert().decisions![0], id: 30 }] }));
+    await lapiClient.login();
+    const loadRules = vi.spyOn(database, 'listNotificationRules');
+    const post = (ids: number[]) => controller.fetch(new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refs: ids.map((id) => ({ instance_id: instanceId, id })) }),
+    }));
+
+    expect((await post([1])).status).toBe(200);
+    expect((await post([3])).status).toBe(200);
+
+    await vi.waitFor(() => expect(loadRules.mock.calls.length).toBeGreaterThan(0));
+    expect(loadRules.mock.calls.length).toBeLessThanOrEqual(2);
+
+    loadRules.mockRestore();
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('completes queued deletion when the alert is already missing from LAPI', async () => {
     const { controller, database, lapiClient } = createController({
       fetchResolver: (url, init) => {

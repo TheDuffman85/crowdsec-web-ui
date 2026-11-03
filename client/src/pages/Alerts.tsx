@@ -269,6 +269,35 @@ function combineDeleteResults(results: BulkDeleteResult[]): BulkDeleteResult {
     }), { requested_alerts: 0, requested_decisions: 0, deleted_alerts: 0, deleted_decisions: 0, failed: [] });
 }
 
+// Each request blocks the server while it writes, so a large delete takes turns with other
+// requests. This also stays well below the API body limit, even for instance refs.
+const BULK_DELETE_CHUNK_SIZE = 2000;
+
+async function bulkDeleteAlertsInChunks(refs: InstanceEntityRef[], useInstanceRefs: boolean): Promise<BulkDeleteResult> {
+    const results: BulkDeleteResult[] = [];
+    for (let offset = 0; offset < refs.length; offset += BULK_DELETE_CHUNK_SIZE) {
+        const chunk = refs.slice(offset, offset + BULK_DELETE_CHUNK_SIZE);
+        try {
+            results.push(await bulkDeleteAlerts(useInstanceRefs ? chunk : chunk.map((ref) => ref.id)));
+        } catch (error) {
+            // Nothing has changed yet, so the dialog can report it and stay open.
+            if (offset === 0) throw error;
+            // Earlier chunks are already queued. Report the rest as failed, as for a partial result.
+            const notSent = refs.slice(offset);
+            const message = error instanceof Error ? error.message : 'Delete failed';
+            results.push({
+                requested_alerts: notSent.length,
+                requested_decisions: 0,
+                deleted_alerts: 0,
+                deleted_decisions: 0,
+                failed: notSent.map((ref) => ({ kind: 'alert', id: `${ref.instance_id}:${ref.id}`, error: message })),
+            });
+            break;
+        }
+    }
+    return results.length === 1 ? results[0] : combineDeleteResults(results);
+}
+
 export function Alerts() {
     const { language, t } = useI18n();
     const { formatDateTime, timeZone } = useDateTime();
@@ -1630,10 +1659,11 @@ export function Alerts() {
                 const refs = sessions
                     ? await resolveAlertSessionRefs(sessions)
                     : pendingDeleteAction.kind === "selected" ? pendingDeleteAction.refs : [];
-                const result = await bulkDeleteAlerts(multipleInstances
-                    ? refs
-                    : refs.map((ref) => ref.id));
-                resultMessage = summarizeDeleteResult(result, t);
+                // A session can be gone by now, for example deleted in another tab, which
+                // needs no request: the refresh below removes its row.
+                if (refs.length > 0) {
+                    resultMessage = summarizeDeleteResult(await bulkDeleteAlertsInChunks(refs, multipleInstances), t);
+                }
                 if (selectedAlert && refs.some((ref) => `${ref.instance_id}\u0000${ref.id}` === alertKey(selectedAlert))) {
                     closeAlertDetails();
                 }
