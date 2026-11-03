@@ -87,7 +87,8 @@ interface ExpandedAlertSession {
     failed: boolean;
 }
 
-const ALERT_DETAIL_CARD_CLASS_NAME = "min-w-0 overflow-hidden p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
+const SESSION_STARTED_TIME_MARKER = '\u0000';
+const ALERT_DETAIL_CARD_CLASS_NAME ="min-w-0 overflow-hidden p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
 const ALERT_DETAIL_LABEL_CLASS_NAME = "text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2";
 const ALERT_DETAIL_PRIMARY_CLASS_NAME = "min-w-0 text-lg font-medium text-gray-900 dark:text-gray-100";
 const ALERT_DETAIL_SECONDARY_CLASS_NAME = "min-w-0 text-sm text-gray-500 dark:text-gray-400";
@@ -2141,6 +2142,8 @@ export function Alerts() {
         );
     };
 
+    const [startedBefore, startedAfter = ''] = t('pages.alerts.sessionStarted', { time: SESSION_STARTED_TIME_MARKER }).split(SESSION_STARTED_TIME_MARKER);
+
     const renderAlertSessionRow = (session: AlertSession, index: number) => {
         const expanded = expandedAlertSessions.get(session.key);
         const sessionSource = getAlertSourceValue(session.latest.source) ?? session.latest.id;
@@ -2163,7 +2166,7 @@ export function Alerts() {
                             />
                         </td>
                     )}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                    <td className="w-px px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                         {session.alert_count > 1 && (
                             <div className="flex items-start gap-1">
                                 <button
@@ -2178,15 +2181,18 @@ export function Alerts() {
                                 >
                                     <ChevronRight size={16} aria-hidden="true" className={`transition-transform ${expanded ? 'rotate-90' : 'rtl:rotate-180'}`} />
                                 </button>
-                                <div>
-                                    <div className="font-medium">
+                                <div className="min-w-24">
+                                    <div className="font-medium text-balance">
                                         {t('pages.alerts.sessionAlertCount', {
                                             count: session.alert_count,
                                             duration: formatAlertSessionDuration(session.first_seen, session.last_seen),
                                         })}
                                     </div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                                        {t('pages.alerts.sessionStarted', { time: formatDateTime(session.first_seen) })}
+                                    {/* Translate around a marker so the time renders like the Time column. */}
+                                    <div className="mt-1 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                                        {startedBefore}
+                                        <TimeDisplay timestamp={session.first_seen} className="text-sm" />
+                                        {startedAfter}
                                     </div>
                                 </div>
                             </div>
@@ -2384,7 +2390,7 @@ export function Alerts() {
                                     </th>
                                 )}
                                 {groupedView && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    <th className="w-px whitespace-nowrap px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                                         {t('pages.alerts.session')}
                                     </th>
                                 )}

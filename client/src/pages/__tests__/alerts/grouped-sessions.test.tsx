@@ -124,6 +124,17 @@ describe('Alerts page grouped sessions', () => {
     expect(window.localStorage.getItem('crowdsec-web-ui:alerts-grouped-by-ip')).toBe('true');
   });
 
+  test('shows the session start in the same format as the Time column', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:alerts-grouped-by-ip', 'true');
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+
+    renderAlerts();
+
+    const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+    expect(within(row).getByText('Started')).toBeInTheDocument();
+    expect(within(row).getAllByText(/^[A-Z][a-z]{2} \d{1,2}, 2026$/)).toHaveLength(2);
+  });
+
   test('uses the stored choice when the URL does not ask for a view', async () => {
     window.localStorage.setItem('crowdsec-web-ui:alerts-grouped-by-ip', 'true');
     vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
