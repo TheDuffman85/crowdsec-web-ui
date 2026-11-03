@@ -64,6 +64,15 @@ function sessionsResponse(
   };
 }
 
+// The default mock applies the search to its own rows, which belong to no session.
+function mockExpandedAlerts() {
+  vi.mocked(api.fetchAlertsPaginated).mockResolvedValue({
+    data: [{ ...session().latest, id: 1, source: { ip: '1.2.3.4', value: '1.2.3.4' } }],
+    pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 },
+    selectable_ids: [],
+  });
+}
+
 function LocationProbe() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -175,7 +184,6 @@ describe('Alerts page grouped sessions', () => {
 
     await userEvent.click(screen.getByRole('link', { name: 'Active: 3' }));
 
-    expect(currentParams().has('session')).toBe(false);
     expect(currentParams().get('alert_id')).toBe('900,899');
   });
 
@@ -196,7 +204,7 @@ describe('Alerts page grouped sessions', () => {
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Select session 45.138.12.51' }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'Select session 2.2.2.2' }));
-    expect(currentParams().has('session')).toBe(false);
+    expect(api.fetchAlertsPaginated).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
 
     const dialog = await screen.findByRole('dialog');
@@ -236,7 +244,7 @@ describe('Alerts page grouped sessions', () => {
     renderAlerts('/alerts?group=ip');
 
     const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
-    expect(within(row).getByRole('button', { name: /45\.138\.12\.51/ })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /^Delete.*45\.138\.12\.51/ })).toBeInTheDocument();
     expect(within(row).getByRole('button', { name: 'Delete Session' })).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Delete Alert' })).not.toBeInTheDocument();
   });
@@ -246,9 +254,20 @@ describe('Alerts page grouped sessions', () => {
 
     renderAlerts('/alerts?group=ip');
 
-    const row = (await screen.findByText('1 alert(s) over <1m')).closest('tr')!;
+    const row = (await screen.findByText('45.138.12.51')).closest('tr')!;
     expect(within(row).getByRole('button', { name: 'Delete Alert' })).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Delete Session' })).not.toBeInTheDocument();
+  });
+
+  test('leaves the session cell of a single-alert session empty', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session({ alert_count: 1 })]));
+
+    renderAlerts('/alerts?group=ip');
+
+    const row = (await screen.findByText('45.138.12.51')).closest('tr')!;
+    expect(row.children[1]).toBeEmptyDOMElement();
+    expect(within(row).queryByText(/alert\(s\) over/)).not.toBeInTheDocument();
+    expect(within(row).queryByText(/^Started/)).not.toBeInTheDocument();
   });
 
   test('deletes every alert of a session from its row and keeps other rows selected', async () => {
@@ -267,7 +286,7 @@ describe('Alerts page grouped sessions', () => {
     await userEvent.click(within(rows[0].closest('tr')!).getByRole('button', { name: 'Delete Session' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(currentParams().has('session')).toBe(false);
+    expect(api.fetchAlertsPaginated).not.toHaveBeenCalled();
     expect(dialog).toHaveTextContent('Delete Session?');
     expect(dialog).toHaveTextContent('delete all 38 alert(s) in the session from 45.138.12.51');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
@@ -299,13 +318,14 @@ describe('Alerts page grouped sessions', () => {
     const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
     expect(row.lastElementChild).toHaveClass('lg:sticky', 'lg:end-0');
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveClass('lg:sticky', 'lg:end-0');
-    expect(screen.getByRole('table')).toHaveClass('[&_td]:px-3');
+    expect(screen.getByRole('table')).toHaveClass('[&_td]:px-3', '[&_td]:align-top');
 
     await userEvent.click(screen.getByRole('button', { name: 'Grouped by IP' }));
 
     await screen.findByText('1.2.3.4');
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveClass('lg:sticky', 'lg:end-0');
     expect(screen.getByRole('table')).not.toHaveClass('[&_td]:px-3');
+    expect(screen.getByRole('table')).not.toHaveClass('[&_td]:align-top');
   });
 
   test('stacks each scenario below its kind instead of sharing a line', async () => {
@@ -325,42 +345,192 @@ describe('Alerts page grouped sessions', () => {
   test.each([
     ['IPv4', '45.138.12.51'],
     ['IPv6', '2602:80d:1008::c1'],
-  ])('drills into the raw alerts of a session by %s', async (_label, ip) => {
+  ])('expands the raw alerts of a session by %s without changing the page filters', async (_label, ip) => {
+    mockExpandedAlerts();
     vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session({ ip })]));
     renderAlerts('/alerts?group=ip');
     await screen.findByText('38 alert(s) over <1m');
     const storedFilters = window.localStorage.getItem(QUICK_FILTERS_STORAGE_KEY);
+    const search = screen.getByTestId('location-search').textContent;
     vi.mocked(api.fetchAlertsPaginated).mockClear();
+    vi.mocked(api.fetchAlertSessionsPaginated).mockClear();
 
     await userEvent.click(screen.getByText('38 alert(s) over <1m'));
 
-    await waitFor(() => expect(api.fetchAlertsPaginated).toHaveBeenCalled());
-    const params = currentParams();
-    const query = params.get('q') || '';
-    expect(params.get('group')).toBe('none');
-    expect(params.get('session')).toBe('1');
+    expect(await screen.findByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.getByText('38 alert(s) over <1m')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `Collapse session ${ip}` })).toHaveAttribute('aria-expanded', 'true');
+    expect(api.fetchAlertsPaginated).toHaveBeenCalledTimes(1);
+    const [page, pageSize, filters] = vi.mocked(api.fetchAlertsPaginated).mock.lastCall!;
+    const query = filters?.q || '';
+    expect([page, pageSize]).toEqual([1, 50]);
     expect(query).toMatch(new RegExp(`ip="?${ip}"?( |$)`));
     expect(query).toContain('date>=2026-11-01T13:41:00.000Z');
     expect(query).toContain('date<=2026-11-01T13:41:53.000Z');
     expect(query).toContain('sim=live');
     expect(compileAlertSearch(query, { machineEnabled: true, originEnabled: true }).ok).toBe(true);
-    expect(vi.mocked(api.fetchAlertsPaginated).mock.lastCall?.[2]?.q).toBe(query);
+    expect(screen.getByTestId('location-search').textContent).toBe(search);
     expect(window.localStorage.getItem(QUICK_FILTERS_STORAGE_KEY)).toBe(storedFilters);
+    expect(api.fetchAlertSessionsPaginated).not.toHaveBeenCalled();
   });
 
-  test('returns to the sessions and original filters with the browser back button', async () => {
+  test('collapses an expanded session without another request', async () => {
+    mockExpandedAlerts();
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    renderAlerts('/alerts?group=ip');
+    await userEvent.click(await screen.findByRole('button', { name: 'Expand session 45.138.12.51' }));
+    await screen.findByText('1.2.3.4');
+    vi.mocked(api.fetchAlertsPaginated).mockClear();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Collapse session 45.138.12.51' }));
+
+    expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Expand session 45.138.12.51' })).toHaveAttribute('aria-expanded', 'false');
+    expect(api.fetchAlertsPaginated).not.toHaveBeenCalled();
+  });
+
+  test('keeps existing filters when expanding a session', async () => {
     vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
     renderAlerts(`/alerts?group=ip&q=${encodeURIComponent('kind=waf')}`);
-    await userEvent.click(await screen.findByText('38 alert(s) over <1m'));
-    await waitFor(() => expect(currentParams().get('session')).toBe('1'));
-    await waitFor(() => expect(screen.queryByText('38 alert(s) over <1m')).not.toBeInTheDocument());
+    await screen.findByText('38 alert(s) over <1m');
+    vi.mocked(api.fetchAlertsPaginated).mockClear();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Browser back' }));
+    await userEvent.click(screen.getByText('38 alert(s) over <1m'));
 
-    expect(await screen.findByText('38 alert(s) over <1m')).toBeInTheDocument();
-    expect(currentParams().get('group')).toBe('ip');
+    await waitFor(() => expect(api.fetchAlertsPaginated).toHaveBeenCalled());
+    expect(vi.mocked(api.fetchAlertsPaginated).mock.lastCall?.[2]?.q).toContain('kind=waf');
     expect(currentParams().get('q')).toBe('kind=waf');
-    expect(currentParams().has('session')).toBe(false);
+  });
+
+  test('loads more alerts of a session on request and skips rows that shifted between pages', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    renderAlerts('/alerts?group=ip');
+    await screen.findByText('38 alert(s) over <1m');
+    const alert = (id: number) => ({ ...session().latest, id, source: { ip: `10.0.0.${id}` } });
+    vi.mocked(api.fetchAlertsPaginated).mockClear();
+    vi.mocked(api.fetchAlertsPaginated)
+      .mockResolvedValueOnce({
+        data: [alert(3), alert(2)],
+        pagination: { page: 1, page_size: 50, total: 4, total_pages: 2, unfiltered_total: 4 },
+        selectable_ids: [],
+      })
+      .mockResolvedValueOnce({
+        data: [alert(2), alert(1)],
+        pagination: { page: 2, page_size: 50, total: 4, total_pages: 2, unfiltered_total: 4 },
+        selectable_ids: [],
+      });
+
+    await userEvent.click(screen.getByText('38 alert(s) over <1m'));
+    await userEvent.click(await screen.findByRole('button', { name: 'Show more (2 remaining)' }));
+
+    await screen.findByText('10.0.0.1');
+    expect(screen.getAllByText('10.0.0.2')).toHaveLength(1);
+    expect(vi.mocked(api.fetchAlertsPaginated).mock.lastCall?.slice(0, 2)).toEqual([2, 50]);
+    expect(screen.getByRole('button', { name: 'Show more (1 remaining)' })).toBeInTheDocument();
+  });
+
+  test('opens the details of an expanded alert and deletes only that alert', async () => {
+    mockExpandedAlerts();
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    renderAlerts('/alerts?group=ip');
+    await userEvent.click(await screen.findByText('38 alert(s) over <1m'));
+    const row = (await screen.findByText('1.2.3.4')).closest('tr')!;
+
+    expect(within(row).getByRole('button', { name: 'Delete Alert' })).toBeInTheDocument();
+    expect(within(row).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(row.lastElementChild).toHaveClass('lg:sticky', 'lg:end-0');
+
+    await userEvent.click(within(row).getByText('1.2.3.4'));
+
+    await waitFor(() => expect(api.fetchAlert).toHaveBeenCalledWith(1, undefined));
+    expect(screen.getByText('38 alert(s) over <1m')).toBeInTheDocument();
+  });
+
+  test('reports a failed session load in the table and retries it', async () => {
+    mockExpandedAlerts();
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    renderAlerts('/alerts?group=ip');
+    await screen.findByText('38 alert(s) over <1m');
+    vi.mocked(api.fetchAlertsPaginated).mockRejectedValueOnce(new Error('offline'));
+
+    await userEvent.click(screen.getByText('38 alert(s) over <1m'));
+    expect(await screen.findByText('Failed to load the alerts of this session.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load the alerts of this session.')).not.toBeInTheDocument();
+  });
+
+  describe('refreshing expanded sessions', () => {
+    const other = session({ ip: '2.2.2.2', key: 'other-session' });
+
+    async function renderWithTwoExpandedSessions() {
+      mockExpandedAlerts();
+      vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session(), other]));
+      const { rerender } = renderAlerts('/alerts?group=ip');
+      await userEvent.click(await screen.findByRole('button', { name: 'Expand session 45.138.12.51' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Expand session 2.2.2.2' }));
+      await waitFor(() => expect(screen.getAllByText('1.2.3.4')).toHaveLength(2));
+      vi.mocked(api.fetchAlertsPaginated).mockClear();
+      vi.mocked(api.fetchAlertSessionsPaginated).mockClear();
+      return async () => {
+        setRefreshSignalMock(1);
+        rerender(
+          <MemoryRouter initialEntries={['/alerts?group=ip']}>
+            <Alerts />
+            <LocationProbe />
+          </MemoryRouter>,
+        );
+        await waitFor(() => expect(api.fetchAlertSessionsPaginated).toHaveBeenCalled());
+      };
+    }
+
+    test('sends no alert requests while the sessions are unchanged', async () => {
+      const refresh = await renderWithTwoExpandedSessions();
+
+      await refresh();
+      await act(async () => { await Promise.resolve(); });
+
+      expect(api.fetchAlertsPaginated).not.toHaveBeenCalled();
+      expect(screen.getAllByText('1.2.3.4')).toHaveLength(2);
+    });
+
+    test('reads only the session that changed', async () => {
+      const refresh = await renderWithTwoExpandedSessions();
+      vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([
+        session({ alert_count: 40, last_seen: '2026-11-01T13:45:00.000Z' }),
+        other,
+      ]));
+
+      await refresh();
+
+      await waitFor(() => expect(api.fetchAlertsPaginated).toHaveBeenCalledTimes(1));
+      const filters = vi.mocked(api.fetchAlertsPaginated).mock.lastCall?.[2];
+      expect(filters?.q).toContain('ip=45.138.12.51');
+      expect(filters?.q).toContain('date<=2026-11-01T13:45:00.000Z');
+      expect(screen.getByRole('button', { name: 'Collapse session 2.2.2.2' })).toBeInTheDocument();
+    });
+  });
+
+  test('closes an expanded session once the refreshed list no longer has it', async () => {
+    mockExpandedAlerts();
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    const { rerender } = renderAlerts('/alerts?group=ip');
+    await userEvent.click(await screen.findByText('38 alert(s) over <1m'));
+    await screen.findByText('1.2.3.4');
+
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session({ alert_count: 1, latest: { ...session().latest, source: { ip: '45.138.12.51' } } })]));
+    setRefreshSignalMock(1);
+    rerender(
+      <MemoryRouter initialEntries={['/alerts?group=ip']}>
+        <Alerts />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /(Expand|Collapse) session/ })).not.toBeInTheDocument();
   });
 
   test('hides the refreshing indicator when a view switch replaces a running refresh', async () => {
@@ -384,26 +554,15 @@ describe('Alerts page grouped sessions', () => {
     await waitFor(() => expect(screen.getByText('Refreshing...')).toHaveClass('opacity-0'));
   });
 
-  test('keeps existing filters when drilling into a session', async () => {
-    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
-    renderAlerts(`/alerts?group=ip&q=${encodeURIComponent('kind=waf')}`);
-    await screen.findByText('38 alert(s) over <1m');
-
-    await userEvent.click(screen.getByText('38 alert(s) over <1m'));
-
-    await waitFor(() => expect(currentParams().get('session')).toBe('1'));
-    expect(currentParams().get('q')).toContain('kind=waf');
-  });
-
   test('opens the details of a single-alert session without changing the view', async () => {
     vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session({ alert_count: 1 })]));
     renderAlerts('/alerts?group=ip');
 
-    await userEvent.click(await screen.findByText('1 alert(s) over <1m'));
+    await userEvent.click(await screen.findByText('45.138.12.51'));
 
     await waitFor(() => expect(api.fetchAlert).toHaveBeenCalledWith(900, undefined));
     expect(currentParams().get('group')).toBe('ip');
-    expect(currentParams().has('session')).toBe(false);
+    expect(screen.queryByRole('button', { name: /Expand session/ })).not.toBeInTheDocument();
   });
 
   test('shows an open-ended count and loads the next page while more sessions exist', async () => {

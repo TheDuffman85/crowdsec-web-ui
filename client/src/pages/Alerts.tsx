@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlertsPaginated, fetchAlertSessionsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, checkAllowlist } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
@@ -31,6 +31,7 @@ import {
     saveStoredTableColumnPreferences,
     STICKY_ACTIONS_CELL_CLASS_NAME,
     STICKY_ACTIONS_HEADER_CLASS_NAME,
+    STICKY_ACTIONS_NESTED_CELL_CLASS_NAME,
 } from "../lib/tableColumns";
 import {
     ALERT_QUICK_FILTER_FIELDS,
@@ -63,7 +64,7 @@ import {
     type SearchDateRange,
     type SearchParseError,
 } from "../../../shared/search";
-import { Info, ExternalLink, Shield, ShieldBan, Gavel, Trash2, X, AlertCircle, Columns3, Layers, Loader2 } from "lucide-react";
+import { Info, ExternalLink, Shield, ShieldBan, Gavel, Trash2, X, AlertCircle, ChevronRight, Columns3, Layers, Loader2 } from "lucide-react";
 import type { AlertRecord, AlertSession, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, InstanceSummary, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
@@ -75,6 +76,16 @@ type AlertDeleteAction =
     | { kind: "selected"; refs: InstanceEntityRef[]; sessions?: AlertSession[] }
     | { kind: "session"; session: AlertSession }
     | { kind: "ip"; ip: string };
+
+interface ExpandedAlertSession {
+    // What the rows were read for, so a refresh only reads the sessions that changed.
+    signature: string;
+    alerts: AlertListItem[];
+    page: number;
+    total: number;
+    loading: boolean;
+    failed: boolean;
+}
 
 const ALERT_DETAIL_CARD_CLASS_NAME = "min-w-0 overflow-hidden p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
 const ALERT_DETAIL_LABEL_CLASS_NAME = "text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2";
@@ -224,6 +235,10 @@ function buildDecisionListHref(
     return `/decisions?${params.toString()}`;
 }
 
+function getAlertSessionSignature(session: AlertSession, filters: Record<string, string>): string {
+    return JSON.stringify([filters.q, filters.instance, session.alert_count, session.latest.decision_summary]);
+}
+
 function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t']): string | null {
     if (result.failed.length === 0) {
         return null;
@@ -271,6 +286,7 @@ export function Alerts() {
     ));
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [alertSessions, setAlertSessions] = useState<AlertSession[]>([]);
+    const [expandedAlertSessions, setExpandedAlertSessions] = useState<ReadonlyMap<string, ExpandedAlertSession>>(() => new Map());
     const [groupingPreference, setGroupingPreference] = useState(() => loadStoredAlertGrouping());
     const [lookbackHours, setLookbackHours] = useState(168);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
@@ -357,7 +373,10 @@ export function Alerts() {
     const alertsRef = useRef<AlertListItem[]>([]);
     const alertSessionsRef = useRef<AlertSession[]>([]);
     const previousGroupedViewRef = useRef(groupedView);
-    const alertSessionDrillDownQueryRef = useRef<string | null>(null);
+    const expandedAlertSessionsRef = useRef(expandedAlertSessions);
+    const expandedAlertSessionLoadsRef = useRef(new Map<string, number>());
+    const expandedAlertSessionLoadSequenceRef = useRef(0);
+    const refreshExpandedAlertSessionsRef = useRef<(sessions: AlertSession[]) => Promise<void>>(async () => {});
     const currentPageRef = useRef(1);
     const inFlightLoadKeysRef = useRef(new Map<string, number>());
     const loadRequestSequenceRef = useRef(0);
@@ -579,11 +598,7 @@ export function Alerts() {
         currentSimulationFilter,
     );
 
-    const isAlertSessionDrillDown = searchParams.has("session");
-
     useEffect(() => {
-        // A session drill-down is a temporary view, not a filter to come back to.
-        if (isAlertSessionDrillDown || alertSessionDrillDownQueryRef.current === debouncedSearchDraft.trim()) return;
         if (!compiledSearch.ok || !quickFilterCompatibility.compatible) return;
         const current = persistedQuickFiltersRef.current;
         const next = syncStoredQuickFiltersFromSearch(
@@ -595,7 +610,7 @@ export function Alerts() {
         if (storedQuickFiltersEqual(current, next)) return;
         persistedQuickFiltersRef.current = next;
         saveStoredQuickFilters(next);
-    }, [compiledSearch, debouncedSearchDraft, isAlertSessionDrillDown, quickFilterCompatibility.compatible, quickFilterDateRange]);
+    }, [compiledSearch, quickFilterCompatibility.compatible, quickFilterDateRange]);
 
     const applyFacetSelection = useCallback((field: FacetField, selection: SearchFacetSelection) => {
         updatePersistedQuickFilters((current) => setStoredQuickFilterSelection(
@@ -870,6 +885,7 @@ export function Alerts() {
 
                 alertSessionsRef.current = sessionData;
                 setAlertSessions(sessionData);
+                if (!append) void refreshExpandedAlertSessionsRef.current(sessionData);
                 alertsData = sessionData.map((session) => session.latest);
                 const nextSelectableIds = sessionData.map((session) => session.key);
                 setSelectableAlertIds(nextSelectableIds);
@@ -997,6 +1013,9 @@ export function Alerts() {
         setCurrentPage(1);
         setTotalPages(1);
         setInitialLoading(true);
+        expandedAlertSessionLoadsRef.current.clear();
+        expandedAlertSessionsRef.current = new Map();
+        setExpandedAlertSessions(expandedAlertSessionsRef.current);
     }, [groupedView]);
 
     useEffect(() => {
@@ -1344,13 +1363,12 @@ export function Alerts() {
         saveStoredAlertGrouping(nextGrouped);
         setGroupingPreference(nextGrouped);
         const nextParams = new URLSearchParams(searchParams);
-        nextParams.delete("session");
         nextParams.set("group", nextGrouped ? "ip" : "none");
         setSearchParams(nextParams);
     };
 
     const buildAlertSessionQuery = (session: AlertSession): string | null => {
-        const currentSearch = compileAlertSearch(searchParams.get('q') ?? '', searchValidationFeatures, searchDateOptions);
+        const currentSearch = compileAlertSearch(appliedQuery, searchValidationFeatures, searchDateOptions);
         if (!currentSearch.ok) return null;
 
         let nextSearchAst = currentSearch.ast;
@@ -1373,31 +1391,116 @@ export function Alerts() {
         return serializeSearchNode(nextSearchAst);
     };
 
-    const openAlertSession = (session: AlertSession) => {
+    const buildAlertSessionFilters = (session: AlertSession): Record<string, string> | null => {
+        const query = buildAlertSessionQuery(session);
+        if (query === null) return null;
+        const { dateStart: _dateStart, dateEnd: _dateEnd, ...filters } = buildServerFilters('all');
+        return { ...filters, q: query };
+    };
+
+    const updateExpandedAlertSessions = (update: (sessions: Map<string, ExpandedAlertSession>) => void) => {
+        const next = new Map(expandedAlertSessionsRef.current);
+        update(next);
+        expandedAlertSessionsRef.current = next;
+        setExpandedAlertSessions(next);
+    };
+
+    const loadExpandedAlertSession = async (session: AlertSession, mode: 'first' | 'more' | 'refresh') => {
+        const entry = expandedAlertSessionsRef.current.get(session.key);
+        const filters = buildAlertSessionFilters(session);
+        if (!entry || !filters) return;
+
+        const loadId = ++expandedAlertSessionLoadSequenceRef.current;
+        expandedAlertSessionLoadsRef.current.set(session.key, loadId);
+        const isCurrentLoad = () => expandedAlertSessionLoadsRef.current.get(session.key) === loadId;
+        if (mode !== 'refresh') {
+            updateExpandedAlertSessions((sessions) => {
+                sessions.set(session.key, { ...entry, loading: true, failed: false });
+            });
+        }
+
+        try {
+            const page = mode === 'more' ? entry.page + 1 : 1;
+            const pageSize = mode === 'refresh' ? Math.min(MAX_ALERT_REFRESH_SIZE, entry.page * PAGE_SIZE) : PAGE_SIZE;
+            const result = await fetchAlertsPaginated(page, pageSize, filters);
+            if (!isCurrentLoad()) return;
+
+            updateExpandedAlertSessions((sessions) => {
+                const current = sessions.get(session.key);
+                if (!current) return;
+                const fetchedKeys = new Set(result.data.map(alertKey));
+                const olderAlerts = current.alerts.filter((alert) => !fetchedKeys.has(alertKey(alert)));
+                sessions.set(session.key, {
+                    // A "more" load keeps the signature, so a pending change is still read by the next refresh.
+                    signature: mode === 'more' ? current.signature : getAlertSessionSignature(session, filters),
+                    alerts: mode === 'more'
+                        ? [...olderAlerts, ...result.data]
+                        : [...result.data, ...olderAlerts].slice(0, Math.min(result.pagination.total, current.page * PAGE_SIZE)),
+                    page: mode === 'more' ? page : current.page,
+                    total: result.pagination.total,
+                    loading: false,
+                    failed: false,
+                });
+            });
+        } catch (error) {
+            console.error("Failed to load session alerts", error);
+            if (!isCurrentLoad()) return;
+            updateExpandedAlertSessions((sessions) => {
+                const current = sessions.get(session.key);
+                if (!current) return;
+                // A failed refresh keeps the rows on screen and tries again on the next one.
+                sessions.set(session.key, { ...current, loading: false, failed: mode === 'refresh' ? current.failed : true });
+            });
+        }
+    };
+
+    // Reads only the sessions that changed, one at a time, so that a refresh with many
+    // sessions open costs no requests while they are idle and never sends a burst.
+    const refreshExpandedAlertSessions = async (sessions: AlertSession[]) => {
+        if (expandedAlertSessionsRef.current.size === 0) return;
+
+        const sessionsByKey = new Map(sessions.map((session) => [session.key, session]));
+        updateExpandedAlertSessions((expanded) => {
+            for (const key of expanded.keys()) {
+                const session = sessionsByKey.get(key);
+                if (session && session.alert_count > 1) continue;
+                expanded.delete(key);
+                expandedAlertSessionLoadsRef.current.delete(key);
+            }
+        });
+
+        for (const key of expandedAlertSessionsRef.current.keys()) {
+            const session = sessionsByKey.get(key);
+            const entry = expandedAlertSessionsRef.current.get(key);
+            if (!session || !entry || entry.loading) continue;
+            const filters = buildAlertSessionFilters(session);
+            if (!filters || entry.signature === getAlertSessionSignature(session, filters)) continue;
+            await loadExpandedAlertSession(session, 'refresh');
+        }
+    };
+
+    useEffect(() => {
+        refreshExpandedAlertSessionsRef.current = refreshExpandedAlertSessions;
+    });
+
+    const toggleAlertSession = (session: AlertSession) => {
         if (session.alert_count === 1) {
             void handleAlertClick(session.latest);
             return;
         }
 
-        const nextQuery = buildAlertSessionQuery(session);
-        if (nextQuery === null) return;
+        if (expandedAlertSessionsRef.current.has(session.key)) {
+            expandedAlertSessionLoadsRef.current.delete(session.key);
+            updateExpandedAlertSessions((sessions) => {
+                sessions.delete(session.key);
+            });
+            return;
+        }
 
-        const nextParams = new URLSearchParams(searchParams);
-        nextParams.delete('dateStart');
-        nextParams.delete('dateEnd');
-        nextParams.delete('simulation');
-        nextParams.set('q', nextQuery);
-        nextParams.set('group', 'none');
-        nextParams.set('session', '1');
-
-        alertSessionDrillDownQueryRef.current = nextQuery;
-        cancelSearchDebounce();
-        searchDraftRef.current = nextQuery;
-        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
-        skipSearchParamSyncRef.current = nextQuery;
-        setSearchDraft(nextQuery);
-        setDebouncedSearchDraft(nextQuery);
-        setSearchParams(nextParams);
+        updateExpandedAlertSessions((sessions) => {
+            sessions.set(session.key, { signature: '', alerts: [], page: 1, total: session.alert_count, loading: false, failed: false });
+        });
+        void loadExpandedAlertSession(session, 'first');
     };
 
     const applySavedFilter = useCallback((query: string) => {
@@ -1477,7 +1580,7 @@ export function Alerts() {
     };
 
     // The session list only carries each session's newest alert, so the rest are read
-    // with the same search that "View alerts" opens.
+    // with the same search that expanding the session uses.
     const resolveAlertSessionRefs = async (sessions: AlertSession[]): Promise<InstanceEntityRef[]> => {
         const refs: InstanceEntityRef[] = [];
         for (const session of sessions) {
@@ -1486,13 +1589,12 @@ export function Alerts() {
                 continue;
             }
 
-            const query = buildAlertSessionQuery(session);
-            if (query === null) throw new Error('Invalid search');
-            const { dateStart: _dateStart, dateEnd: _dateEnd, ...filters } = buildServerFilters('all');
+            const filters = buildAlertSessionFilters(session);
+            if (filters === null) throw new Error('Invalid search');
             let page = 1;
             let totalPages: number;
             do {
-                const result = await fetchAlertsPaginated(page, MAX_ALERT_REFRESH_SIZE, { ...filters, q: query });
+                const result = await fetchAlertsPaginated(page, MAX_ALERT_REFRESH_SIZE, filters);
                 refs.push(...result.data.map(alertRef));
                 totalPages = result.pagination.total_pages;
                 page += 1;
@@ -1848,12 +1950,12 @@ export function Alerts() {
         }
     };
 
-    const renderAlertActionsCell = (alert: AlertListItem, session?: AlertSession) => {
+    const renderAlertActionsCell = (alert: AlertListItem, session?: AlertSession, cellClassName = STICKY_ACTIONS_CELL_CLASS_NAME) => {
         const sourceValue = getAlertSourceValue(alert.source);
         const deleteLabel = session ? t('pages.alerts.deleteSession') : t('pages.alerts.deleteAlert');
 
         return (
-            <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-medium ${STICKY_ACTIONS_CELL_CLASS_NAME}`}>
+            <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-medium ${cellClassName}`}>
                 <div className="flex items-center justify-end gap-2">
                     {getAlertDecisionIp(alert) && (
                         <button
@@ -1989,39 +2091,115 @@ export function Alerts() {
         }
     };
 
-    const renderAlertSessionRow = (session: AlertSession, index: number) => (
+    const renderExpandedAlertRow = (alert: AlertListItem) => (
         <tr
-            key={session.key}
-            ref={index === alertSessions.length - 1 ? lastAlertElementRef : null}
-            onClick={() => openAlertSession(session)}
-            className="group hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+            key={alertKey(alert)}
+            onClick={() => handleAlertClick(alert)}
+            className="group bg-gray-50 dark:bg-gray-900/20 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
         >
-            {canManageEnforcement && (
-                <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
-                    <input
-                        type="checkbox"
-                        aria-label={t('pages.alerts.selectSession', { ip: getAlertSourceValue(session.latest.source) ?? session.latest.id })}
-                        checked={selectedAlertIds.includes(session.key)}
-                        onChange={() => toggleAlertSelection(session.key)}
-                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                    />
-                </td>
-            )}
-            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                <div className="font-medium">
-                    {t('pages.alerts.sessionAlertCount', {
-                        count: session.alert_count,
-                        duration: formatAlertSessionDuration(session.first_seen, session.last_seen),
-                    })}
-                </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
-                    {t('pages.alerts.sessionStarted', { time: formatDateTime(session.first_seen) })}
-                </div>
-            </td>
-            {visibleAlertColumns.map((columnId) => renderAlertSessionCell(session, columnId))}
-            {canManageEnforcement && renderAlertActionsCell(session.latest, session.alert_count > 1 ? session : undefined)}
+            {canManageEnforcement && <td className="border-s-2 border-primary-300 dark:border-primary-700" />}
+            <td className={canManageEnforcement ? undefined : "border-s-2 border-primary-300 dark:border-primary-700"} />
+            {visibleAlertColumns.map((columnId) => renderAlertCell(alert, columnId))}
+            {canManageEnforcement && renderAlertActionsCell(alert, undefined, STICKY_ACTIONS_NESTED_CELL_CLASS_NAME)}
         </tr>
     );
+
+    const renderExpandedAlertSessionFooter = (session: AlertSession, expanded: ExpandedAlertSession) => {
+        if (expanded.loading) {
+            return <TableLoadingRow colSpan={alertTableColSpan} label={t('pages.alerts.loadingMore')} />;
+        }
+        if (expanded.failed) {
+            return (
+                <tr>
+                    <td colSpan={alertTableColSpan} className="bg-gray-50 dark:bg-gray-900/20 py-3 text-start text-sm text-red-600 dark:text-red-400">
+                        <span role="alert">{t('pages.alerts.sessionAlertsFailed')}</span>
+                        {' '}
+                        <button
+                            type="button"
+                            onClick={() => void loadExpandedAlertSession(session, expanded.alerts.length > 0 ? 'more' : 'first')}
+                            className="font-medium underline hover:text-red-800 dark:hover:text-red-200"
+                        >
+                            {t('pages.alerts.sessionAlertsRetry')}
+                        </button>
+                    </td>
+                </tr>
+            );
+        }
+        if (expanded.alerts.length >= expanded.total) return null;
+        return (
+            <tr>
+                <td colSpan={alertTableColSpan} className="bg-gray-50 dark:bg-gray-900/20 py-3 text-start text-sm">
+                    <button
+                        type="button"
+                        onClick={() => void loadExpandedAlertSession(session, 'more')}
+                        className="font-medium text-primary-600 hover:text-primary-900 dark:text-primary-400 dark:hover:text-primary-300"
+                    >
+                        {t('pages.alerts.sessionShowMore', { count: expanded.total - expanded.alerts.length })}
+                    </button>
+                </td>
+            </tr>
+        );
+    };
+
+    const renderAlertSessionRow = (session: AlertSession, index: number) => {
+        const expanded = expandedAlertSessions.get(session.key);
+        const sessionSource = getAlertSourceValue(session.latest.source) ?? session.latest.id;
+
+        return (
+            <Fragment key={session.key}>
+                <tr
+                    ref={index === alertSessions.length - 1 ? lastAlertElementRef : null}
+                    onClick={() => toggleAlertSession(session)}
+                    className="group hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+                >
+                    {canManageEnforcement && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                            <input
+                                type="checkbox"
+                                aria-label={t('pages.alerts.selectSession', { ip: sessionSource })}
+                                checked={selectedAlertIds.includes(session.key)}
+                                onChange={() => toggleAlertSelection(session.key)}
+                                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            />
+                        </td>
+                    )}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        {session.alert_count > 1 && (
+                            <div className="flex items-start gap-1">
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleAlertSession(session);
+                                    }}
+                                    aria-expanded={Boolean(expanded)}
+                                    aria-label={t(expanded ? 'pages.alerts.collapseSession' : 'pages.alerts.expandSession', { ip: sessionSource })}
+                                    className="flex-shrink-0 rounded p-0.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                                >
+                                    <ChevronRight size={16} aria-hidden="true" className={`transition-transform ${expanded ? 'rotate-90' : 'rtl:rotate-180'}`} />
+                                </button>
+                                <div>
+                                    <div className="font-medium">
+                                        {t('pages.alerts.sessionAlertCount', {
+                                            count: session.alert_count,
+                                            duration: formatAlertSessionDuration(session.first_seen, session.last_seen),
+                                        })}
+                                    </div>
+                                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                                        {t('pages.alerts.sessionStarted', { time: formatDateTime(session.first_seen) })}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </td>
+                    {visibleAlertColumns.map((columnId) => renderAlertSessionCell(session, columnId))}
+                    {canManageEnforcement && renderAlertActionsCell(session.latest, session.alert_count > 1 ? session : undefined)}
+                </tr>
+                {expanded?.alerts.map(renderExpandedAlertRow)}
+                {expanded && renderExpandedAlertSessionFooter(session, expanded)}
+            </Fragment>
+        );
+    };
 
     const alertTableRowCount = groupedView ? alertSessions.length : visibleAlerts.length;
 
@@ -2188,8 +2366,8 @@ export function Alerts() {
                 aria-busy={tableBusy}
             >
                 <HorizontalScrollArea>
-                    {/* The grouped view adds the Session column, so it tightens every cell to make room. */}
-                    <table className={`min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200 ${groupedView ? '[&_td]:px-3 [&_th]:px-3' : ''}`}>
+                    {/* The grouped view adds the Session column, so it tightens every cell to make room. Its rows are tall, so their cells start at the top. */}
+                    <table className={`min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200 ${groupedView ? '[&_td]:px-3 [&_td]:align-top [&_th]:px-3' : ''}`}>
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
                                 {canManageEnforcement && (
