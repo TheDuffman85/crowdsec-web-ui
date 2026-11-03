@@ -230,14 +230,96 @@ describe('Alerts page grouped sessions', () => {
     expect(vi.mocked(api.fetchAlertsPaginated).mock.lastCall?.[2]?.q).toContain('kind=waf');
   });
 
-  test('offers deleting by IP but not the single-alert delete on a multi-alert session', async () => {
+  test('offers deleting by IP and the whole session on a multi-alert session', async () => {
     vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
 
     renderAlerts('/alerts?group=ip');
 
     const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
     expect(within(row).getByRole('button', { name: /45\.138\.12\.51/ })).toBeInTheDocument();
-    expect(within(row).queryByRole('button', { name: 'Delete alert' })).not.toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Delete Session' })).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Delete Alert' })).not.toBeInTheDocument();
+  });
+
+  test('keeps the single-alert delete on a single-alert session', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session({ alert_count: 1 })]));
+
+    renderAlerts('/alerts?group=ip');
+
+    const row = (await screen.findByText('1 alert(s) over <1m')).closest('tr')!;
+    expect(within(row).getByRole('button', { name: 'Delete Alert' })).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Delete Session' })).not.toBeInTheDocument();
+  });
+
+  test('deletes every alert of a session from its row and keeps other rows selected', async () => {
+    const other = session({ ip: '2.2.2.2', key: 'other-session' });
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session(), other]));
+    vi.mocked(api.fetchAlertsPaginated).mockResolvedValueOnce({
+      data: [{ ...session().latest, id: 900 }, { ...session().latest, id: 899 }],
+      pagination: { page: 1, page_size: 200, total: 2, total_pages: 1, unfiltered_total: 2 },
+      selectable_ids: [],
+    });
+    renderAlerts('/alerts?group=ip');
+    const rows = await screen.findAllByText('38 alert(s) over <1m');
+    vi.mocked(api.fetchAlertsPaginated).mockClear();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select session 2.2.2.2' }));
+
+    await userEvent.click(within(rows[0].closest('tr')!).getByRole('button', { name: 'Delete Session' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(currentParams().has('session')).toBe(false);
+    expect(dialog).toHaveTextContent('Delete Session?');
+    expect(dialog).toHaveTextContent('delete all 38 alert(s) in the session from 45.138.12.51');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(api.bulkDeleteAlerts).toHaveBeenCalledWith(['900', '899']));
+    expect(vi.mocked(api.fetchAlertsPaginated).mock.lastCall?.[2]?.q).toContain('ip=45.138.12.51');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('checkbox', { name: 'Select session 2.2.2.2' })).toBeChecked();
+  });
+
+  test('reports a failed session delete in the dialog', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    vi.mocked(api.fetchAlertsPaginated).mockRejectedValueOnce({});
+    renderAlerts('/alerts?group=ip');
+    const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+
+    await userEvent.click(within(row).getByRole('button', { name: 'Delete Session' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await within(dialog).findByText('Failed to delete session. Please try again.');
+    expect(api.bulkDeleteAlerts).not.toHaveBeenCalled();
+  });
+
+  test('pins the actions column and tightens the cells only while grouped', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+    renderAlerts('/alerts?group=ip');
+
+    const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+    expect(row.lastElementChild).toHaveClass('lg:sticky', 'lg:end-0');
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveClass('lg:sticky', 'lg:end-0');
+    expect(screen.getByRole('table')).toHaveClass('[&_td]:px-3');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Grouped by IP' }));
+
+    await screen.findByText('1.2.3.4');
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveClass('lg:sticky', 'lg:end-0');
+    expect(screen.getByRole('table')).not.toHaveClass('[&_td]:px-3');
+  });
+
+  test('stacks each scenario below its kind instead of sharing a line', async () => {
+    vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([session()]));
+
+    renderAlerts('/alerts?group=ip');
+
+    const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+    const kind = within(row).getByText('waf');
+    const scenario = within(row).getByText('17x').parentElement!;
+    expect(kind.tagName).toBe('DIV');
+    expect(kind.parentElement).toBe(scenario.parentElement);
+    expect(kind).not.toContainElement(scenario);
+    expect(kind.parentElement).not.toHaveClass('flex');
   });
 
   test.each([

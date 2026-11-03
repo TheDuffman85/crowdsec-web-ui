@@ -32,7 +32,7 @@ describe('formatAlertSessionDuration', () => {
 });
 
 describe('alert session locale coverage', () => {
-  const keys = Object.keys(en).filter((key) => /^pages\.alerts\.(groupByIp|session)/.test(key));
+  const keys = Object.keys(en).filter((key) => /^pages\.alerts\.(groupByIp|session|deleteSession)/.test(key));
 
   test('defines the English keys', () => {
     expect(keys.length).toBeGreaterThan(0);

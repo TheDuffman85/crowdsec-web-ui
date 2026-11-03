@@ -17,6 +17,7 @@ import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { TargetDisplay } from "../components/TargetDisplay";
+import { HorizontalScrollArea } from "../components/ui/HorizontalScrollArea";
 import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
@@ -24,6 +25,9 @@ import {
     loadStoredTableColumnOrders,
     loadStoredTableColumnPreferences,
     saveStoredTableColumnPreferences,
+    STICKY_ACTIONS_CELL_CLASS_NAME,
+    STICKY_ACTIONS_EXPIRED_CELL_CLASS_NAME,
+    STICKY_ACTIONS_HEADER_CLASS_NAME,
 } from "../lib/tableColumns";
 import {
     DECISION_QUICK_FILTER_FIELDS,
@@ -1390,7 +1394,7 @@ export function Decisions() {
                 className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700"
                 aria-busy={tableBusy}
             >
-                <div className="overflow-x-auto">
+                <HorizontalScrollArea>
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
@@ -1420,7 +1424,7 @@ export function Decisions() {
                                     );
                                 })}
                                 {canManageEnforcement && (
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('tableColumns.actions')}</th>
+                                    <th className={`px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider ${STICKY_ACTIONS_HEADER_CLASS_NAME}`}>{t('tableColumns.actions')}</th>
                                 )}
                             </tr>
                         </thead>
@@ -1435,8 +1439,8 @@ export function Decisions() {
                                     const decisionDuration = expirationState.label;
                                     const isExpired = expirationState.isExpired;
                                     const rowClasses = isExpired
-                                        ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
-                                        : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
+                                        ? "group hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
+                                        : "group hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
 
                                     const isLastElement = index === visibleDecisions.length - 1;
                                     const rowKey = decisionKey(decision);
@@ -1593,7 +1597,7 @@ export function Decisions() {
                                                 }
                                             })}
                                             {canManageEnforcement && (
-                                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-medium ${isExpired ? STICKY_ACTIONS_EXPIRED_CELL_CLASS_NAME : STICKY_ACTIONS_CELL_CLASS_NAME}`}>
                                                     <div className="flex items-center justify-end gap-2">
                                                         {decision.value && (
                                                             <button
@@ -1632,7 +1636,7 @@ export function Decisions() {
                             )}
                         </tbody>
                     </table>
-                </div>
+                </HorizontalScrollArea>
             </div>
 
             {/* Delete Confirmation Modal */}
