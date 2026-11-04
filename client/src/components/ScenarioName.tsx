@@ -55,11 +55,6 @@ export function ScenarioName({
                 >
                     {shortName}
                 </span>
-                {simulated && (
-                    <Badge variant="warning" className="flex-shrink-0">
-                        {t('pages.dashboard.simulation')}
-                    </Badge>
-                )}
                 {showLink && hubUrl && (
                     <a
                         href={hubUrl}
@@ -73,6 +68,11 @@ export function ScenarioName({
                     </a>
                 )}
             </div>
+            {simulated && (
+                <Badge variant="warning" className="mt-1">
+                    {t('pages.dashboard.simulation')}
+                </Badge>
+            )}
             {showReason && reason && reason !== name && (
                 <span className={`${size === "lg" ? "text-sm" : "text-xs"} text-gray-500 dark:text-gray-400 truncate max-w-full mt-0.5`} title={reason}>
                     {reason}
