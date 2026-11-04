@@ -9,18 +9,36 @@ interface HiddenContent {
 
 const FADE_CLASS_NAME = 'pointer-events-none absolute inset-y-0 z-20 w-8 from-gray-900/10 to-transparent transition-opacity duration-150 dark:from-black/30';
 
-// Fades the edges that have more content past them, because the scrollbar of a long table
-// is usually far below the visible rows. Offsets are absolute since scrollLeft is negative
-// in right-to-left layouts.
+// The scrollbar of a long table would sit far below the visible rows, so the native one is
+// replaced by a mirrored scrollbar that sticks to the bottom of the page's scroll container
+// and rests below the table once its end is reached. Sticking needs every ancestor up to that
+// container to leave overflow visible or clipped: overflow-hidden would capture it.
+// The edges with more content past them fade as well. Offsets are absolute since scrollLeft
+// is negative in right-to-left layouts.
 export function HorizontalScrollArea({ children }: PropsWithChildren) {
     const scrollerRef = useRef<HTMLDivElement>(null);
+    const scrollbarRef = useRef<HTMLDivElement>(null);
+    const scrollbarContentRef = useRef<HTMLDivElement>(null);
     const [hidden, setHidden] = useState<HiddenContent>({ start: false, end: false, endInset: 0 });
 
     useEffect(() => {
         const scroller = scrollerRef.current;
-        if (!scroller) return undefined;
+        const scrollbar = scrollbarRef.current;
+        const scrollbarContent = scrollbarContentRef.current;
+        if (!scroller || !scrollbar || !scrollbarContent) return undefined;
+
+        const syncScrollbar = () => {
+            if (scrollbar.scrollLeft !== scroller.scrollLeft) scrollbar.scrollLeft = scroller.scrollLeft;
+        };
+        const syncScroller = () => {
+            if (scroller.scrollLeft !== scrollbar.scrollLeft) scroller.scrollLeft = scrollbar.scrollLeft;
+        };
 
         const update = () => {
+            const contentWidth = `${scroller.scrollWidth}px`;
+            if (scrollbarContent.style.width !== contentWidth) scrollbarContent.style.width = contentWidth;
+            syncScrollbar();
+
             const offset = Math.abs(scroller.scrollLeft);
             const pinnedColumn = scroller.querySelector('thead th:last-child');
             const next: HiddenContent = {
@@ -39,19 +57,21 @@ export function HorizontalScrollArea({ children }: PropsWithChildren) {
 
         update();
         scroller.addEventListener('scroll', update, { passive: true });
+        scrollbar.addEventListener('scroll', syncScroller, { passive: true });
         const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
         observer?.observe(scroller);
         if (scroller.firstElementChild) observer?.observe(scroller.firstElementChild);
 
         return () => {
             scroller.removeEventListener('scroll', update);
+            scrollbar.removeEventListener('scroll', syncScroller);
             observer?.disconnect();
         };
     }, []);
 
     return (
         <div className="relative">
-            <div ref={scrollerRef} className="overflow-x-auto">
+            <div ref={scrollerRef} className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {children}
             </div>
             <div
@@ -65,6 +85,16 @@ export function HorizontalScrollArea({ children }: PropsWithChildren) {
                 style={{ insetInlineEnd: hidden.endInset }}
                 className={`${FADE_CLASS_NAME} bg-gradient-to-l rtl:bg-gradient-to-r ${hidden.end ? 'opacity-100' : 'opacity-0'}`}
             />
+            {/* The minimum height leaves overlay scrollbars, which take up no space, room to show. */}
+            <div
+                ref={scrollbarRef}
+                aria-hidden="true"
+                tabIndex={-1}
+                data-testid="scroll-scrollbar"
+                className={`sticky bottom-0 z-20 min-h-3 overflow-x-auto overflow-y-hidden ${hidden.start || hidden.end ? '' : 'hidden'}`}
+            >
+                <div ref={scrollbarContentRef} className="h-px" />
+            </div>
         </div>
     );
 }

@@ -650,6 +650,7 @@
   "pages.alerts.sessionAlertCount": "{duration} で {count} 件のアラート",
   "pages.alerts.sessionAlertsFailed": "このセッションのアラートを読み込めませんでした。",
   "pages.alerts.sessionAlertsRetry": "再試行",
+  "pages.alerts.sessionFewerScenarios": "表示を減らす",
   "pages.alerts.sessionMoreScenarios": "他 {count} 件",
   "pages.alerts.sessionShowMore": "さらに表示（残り {count} 件）",
   "pages.alerts.sessionStarted": "開始: {time}",

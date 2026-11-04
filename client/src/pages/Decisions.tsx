@@ -1391,7 +1391,7 @@ export function Decisions() {
 
 
             <div
-                className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700"
+                className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-clip border border-gray-200 dark:border-gray-700"
                 aria-busy={tableBusy}
             >
                 <HorizontalScrollArea>

@@ -16,6 +16,7 @@ import { TableColumnsModal } from "../components/TableColumnsModal";
 import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
+import { AlertSessionScenarioGroup } from "../components/AlertSessionScenarioGroup";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { TargetDisplay } from "../components/TargetDisplay";
 import { EventCard } from "../components/EventCard";
@@ -2047,22 +2048,11 @@ export function Alerts() {
                     <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[320px]">
                         <div className="space-y-2">
                             {session.scenario_groups.map((group) => (
-                                <div key={group.kind ?? ''} className="space-y-1">
-                                    {group.kind && (
-                                        <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{group.kind}</div>
-                                    )}
-                                    {group.scenarios.map((entry) => (
-                                        <div key={entry.scenario} className="flex min-w-0 items-center gap-1" title={entry.scenario}>
-                                            <Badge variant="secondary" className="flex-shrink-0">{entry.count}x</Badge>
-                                            <ScenarioName name={entry.scenario} simulated={simulationsEnabled && isSimulatedAlert(session.latest)} />
-                                        </div>
-                                    ))}
-                                    {group.scenario_count > group.scenarios.length && (
-                                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                                            {t('pages.alerts.sessionMoreScenarios', { count: group.scenario_count - group.scenarios.length })}
-                                        </div>
-                                    )}
-                                </div>
+                                <AlertSessionScenarioGroup
+                                    key={group.kind ?? ''}
+                                    group={group}
+                                    simulated={simulationsEnabled && isSimulatedAlert(session.latest)}
+                                />
                             ))}
                         </div>
                     </td>
@@ -2398,7 +2388,7 @@ export function Alerts() {
             </div>
 
             <div
-                className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700"
+                className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-clip border border-gray-200 dark:border-gray-700"
                 aria-busy={tableBusy}
             >
                 <HorizontalScrollArea>

@@ -169,6 +169,65 @@ describe('Alerts page grouped sessions', () => {
     expect(screen.getByTestId('alerts-summary')).toHaveTextContent('Showing 1 sessions from 38 alerts');
   });
 
+  describe('expanding the scenarios of a kind', () => {
+    const scenarios = ['git-config', 'env-access', 'laravel', 'wordpress', 'drupal'].map((name, index) => ({
+      scenario: `crowdsecurity/vpatch-${name}`,
+      count: 5 - index,
+    }));
+
+    function sessionWithScenarios(scenarioCount: number) {
+      return session({
+        scenario_groups: [{ kind: 'waf', scenario_count: scenarioCount, alert_count: 15, scenarios }],
+      });
+    }
+
+    test('shows the remaining scenarios without another request or opening the session', async () => {
+      vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([sessionWithScenarios(5)]));
+      renderAlerts('/alerts?group=ip');
+      const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+      vi.mocked(api.fetchAlertsPaginated).mockClear();
+      vi.mocked(api.fetchAlertSessionsPaginated).mockClear();
+      expect(within(row).queryByText('1x')).not.toBeInTheDocument();
+
+      await userEvent.click(within(row).getByRole('button', { name: '+2 more' }));
+
+      expect(within(row).getByText('1x')).toBeInTheDocument();
+      expect(within(row).queryByText('+2 more')).not.toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: 'Expand session 45.138.12.51' })).toHaveAttribute('aria-expanded', 'false');
+      expect(api.fetchAlertsPaginated).not.toHaveBeenCalled();
+      expect(api.fetchAlertSessionsPaginated).not.toHaveBeenCalled();
+
+      await userEvent.click(within(row).getByRole('button', { name: 'Show fewer' }));
+
+      expect(within(row).queryByText('1x')).not.toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: '+2 more' })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    test('keeps counting the scenarios the server left out once open', async () => {
+      vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([sessionWithScenarios(8)]));
+      renderAlerts('/alerts?group=ip');
+      const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+
+      await userEvent.click(within(row).getByRole('button', { name: '+5 more' }));
+
+      expect(within(row).getByText('1x')).toBeInTheDocument();
+      expect(within(row).getByText('+3 more')).toBeInTheDocument();
+      expect(within(row).queryByRole('button', { name: '+3 more' })).not.toBeInTheDocument();
+    });
+
+    test('offers no toggle when every scenario already fits', async () => {
+      vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([
+        session({ scenario_groups: [{ kind: 'waf', scenario_count: 3, alert_count: 12, scenarios: scenarios.slice(0, 3) }] }),
+      ]));
+      renderAlerts('/alerts?group=ip');
+      const row = (await screen.findByText('38 alert(s) over <1m')).closest('tr')!;
+
+      expect(within(row).getByText('5x')).toBeInTheDocument();
+      expect(within(row).queryByRole('button', { name: /more$/ })).not.toBeInTheDocument();
+    });
+  });
+
   test('marks decision totals that only cover part of a large session', async () => {
     vi.mocked(api.fetchAlertSessionsPaginated).mockResolvedValue(sessionsResponse([
       session({ alert_count: 5000, decision_summary_partial: true }),

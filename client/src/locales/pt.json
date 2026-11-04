@@ -650,6 +650,7 @@
   "pages.alerts.sessionAlertCount": "{count} alerta(s) em {duration}",
   "pages.alerts.sessionAlertsFailed": "Falha ao carregar os alertas desta sessão.",
   "pages.alerts.sessionAlertsRetry": "Tentar novamente",
+  "pages.alerts.sessionFewerScenarios": "Mostrar menos",
   "pages.alerts.sessionMoreScenarios": "+{count} mais",
   "pages.alerts.sessionShowMore": "Mostrar mais ({count} restantes)",
   "pages.alerts.sessionStarted": "Iniciada {time}",
