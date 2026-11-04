@@ -5,6 +5,7 @@ import {
   ALERT_SESSION_GAP_MS,
   ALERT_SESSION_SCAN_BATCH_SIZE,
   AlertSessionWalker,
+  MAX_SESSION_SCENARIOS_PER_KIND,
   type AlertSessionScanRow,
 } from '../../app/alert-sessions';
 import { CrowdsecDatabase } from '../../database';
@@ -157,16 +158,19 @@ describe('AlertSessionWalker', () => {
   });
 
   test('limits scenario and target lists while reporting distinct totals', () => {
-    const rows = Array.from({ length: 6 }, (_, index) => scanRow(10 - index, index, {
+    const total = MAX_SESSION_SCENARIOS_PER_KIND + 5;
+    const rows = Array.from({ length: total }, (_, index) => ({
+      ...scanRow(1_000 - index, 0),
+      created_at: new Date(BASE_TIME - index * 1_000).toISOString(),
       scenario: `crowdsecurity/scenario-${index}`,
       target: `target-${index}`,
     }));
     const [session] = walk(rows);
 
-    expect(session.scenarioCount).toBe(6);
-    expect(session.scenarioGroups[0].scenario_count).toBe(6);
-    expect(session.scenarioGroups[0].scenarios).toHaveLength(3);
-    expect(session.targetCount).toBe(6);
+    expect(session.scenarioCount).toBe(total);
+    expect(session.scenarioGroups[0].scenario_count).toBe(total);
+    expect(session.scenarioGroups[0].scenarios).toHaveLength(MAX_SESSION_SCENARIOS_PER_KIND);
+    expect(session.targetCount).toBe(total);
     expect(session.targets).toHaveLength(3);
   });
 });

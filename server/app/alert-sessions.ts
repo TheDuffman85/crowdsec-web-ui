@@ -6,7 +6,7 @@ export const ALERT_SESSION_SCAN_BATCH_SIZE = 2_000;
 // Sessions only keep the alert IDs needed for their decision counts. A larger
 // session reports those counts as partial instead of holding every ID in memory.
 const MAX_SESSION_ALERT_IDS = 2_000;
-const MAX_SESSION_SCENARIOS_PER_KIND = 3;
+export const MAX_SESSION_SCENARIOS_PER_KIND = 25;
 const MAX_SESSION_TARGETS = 3;
 const NO_SCENARIO_KIND = '';
 

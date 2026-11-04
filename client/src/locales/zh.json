@@ -650,6 +650,7 @@
   "pages.alerts.sessionAlertCount": "{duration} 内 {count} 条告警",
   "pages.alerts.sessionAlertsFailed": "无法加载此会话的告警。",
   "pages.alerts.sessionAlertsRetry": "重试",
+  "pages.alerts.sessionFewerScenarios": "收起",
   "pages.alerts.sessionMoreScenarios": "另外 {count} 个",
   "pages.alerts.sessionShowMore": "显示更多（剩余 {count} 条）",
   "pages.alerts.sessionStarted": "开始于 {time}",

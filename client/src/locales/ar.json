@@ -650,6 +650,7 @@
   "pages.alerts.sessionAlertCount": "{count} تنبيه خلال {duration}",
   "pages.alerts.sessionAlertsFailed": "تعذر تحميل تنبيهات هذه الجلسة.",
   "pages.alerts.sessionAlertsRetry": "إعادة المحاولة",
+  "pages.alerts.sessionFewerScenarios": "عرض أقل",
   "pages.alerts.sessionMoreScenarios": "+{count} أخرى",
   "pages.alerts.sessionShowMore": "إظهار المزيد (المتبقي: {count})",
   "pages.alerts.sessionStarted": "بدأت {time}",

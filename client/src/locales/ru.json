@@ -650,6 +650,7 @@
   "pages.alerts.sessionAlertCount": "Оповещений: {count} за {duration}",
   "pages.alerts.sessionAlertsFailed": "Не удалось загрузить оповещения этой сессии.",
   "pages.alerts.sessionAlertsRetry": "Повторить",
+  "pages.alerts.sessionFewerScenarios": "Показать меньше",
   "pages.alerts.sessionMoreScenarios": "ещё {count}",
   "pages.alerts.sessionShowMore": "Показать ещё (осталось: {count})",
   "pages.alerts.sessionStarted": "Начало: {time}",

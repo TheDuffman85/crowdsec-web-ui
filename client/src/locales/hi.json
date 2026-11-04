@@ -650,6 +650,7 @@
   "pages.alerts.sessionAlertCount": "{duration} में {count} अलर्ट",
   "pages.alerts.sessionAlertsFailed": "इस सत्र के अलर्ट लोड नहीं हो सके।",
   "pages.alerts.sessionAlertsRetry": "फिर प्रयास करें",
+  "pages.alerts.sessionFewerScenarios": "कम दिखाएँ",
   "pages.alerts.sessionMoreScenarios": "+{count} और",
   "pages.alerts.sessionShowMore": "और दिखाएँ ({count} शेष)",
   "pages.alerts.sessionStarted": "{time} को शुरू",

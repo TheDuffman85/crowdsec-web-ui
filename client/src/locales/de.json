@@ -650,6 +650,7 @@
   "pages.alerts.sessionAlertCount": "{count} Alarm(e) in {duration}",
   "pages.alerts.sessionAlertsFailed": "Die Alarme dieser Sitzung konnten nicht geladen werden.",
   "pages.alerts.sessionAlertsRetry": "Erneut versuchen",
+  "pages.alerts.sessionFewerScenarios": "Weniger anzeigen",
   "pages.alerts.sessionMoreScenarios": "+{count} weitere",
   "pages.alerts.sessionShowMore": "Mehr anzeigen ({count} verbleibend)",
   "pages.alerts.sessionStarted": "Begonnen {time}",

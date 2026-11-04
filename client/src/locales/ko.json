@@ -652,6 +652,7 @@
   "pages.alerts.sessionAlertCount": "{duration} 동안 경보 {count}개",
   "pages.alerts.sessionAlertsFailed": "이 세션의 경보를 불러오지 못했습니다.",
   "pages.alerts.sessionAlertsRetry": "다시 시도",
+  "pages.alerts.sessionFewerScenarios": "간단히 보기",
   "pages.alerts.sessionMoreScenarios": "외 {count}개",
   "pages.alerts.sessionShowMore": "더 보기 ({count}개 남음)",
   "pages.alerts.sessionStarted": "시작: {time}",
