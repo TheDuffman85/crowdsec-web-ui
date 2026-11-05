@@ -27,26 +27,40 @@ export function HorizontalScrollArea({ children }: PropsWithChildren) {
         const scrollbarContent = scrollbarContentRef.current;
         if (!scroller || !scrollbar || !scrollbarContent) return undefined;
 
+        // A write to one side fires a scroll event on it a frame later, by when a touch scroll has
+        // moved on. Following that echo would pull the scroll back to an old position and break up
+        // the gesture, so each side ignores the position that was set on it by the other.
+        let positionSetOnScroller: number | null = null;
+        let positionSetOnScrollbar: number | null = null;
+
         const syncScrollbar = () => {
-            if (scrollbar.scrollLeft !== scroller.scrollLeft) scrollbar.scrollLeft = scroller.scrollLeft;
+            const position = scroller.scrollLeft;
+            if (position === positionSetOnScroller) return;
+            positionSetOnScroller = null;
+            if (scrollbar.scrollLeft !== position) {
+                scrollbar.scrollLeft = position;
+                positionSetOnScrollbar = scrollbar.scrollLeft;
+            }
         };
         const syncScroller = () => {
-            if (scroller.scrollLeft !== scrollbar.scrollLeft) scroller.scrollLeft = scrollbar.scrollLeft;
+            const position = scrollbar.scrollLeft;
+            if (position === positionSetOnScrollbar) return;
+            positionSetOnScrollbar = null;
+            if (scroller.scrollLeft !== position) {
+                scroller.scrollLeft = position;
+                positionSetOnScroller = scroller.scrollLeft;
+            }
         };
 
-        const update = () => {
-            const contentWidth = `${scroller.scrollWidth}px`;
-            if (scrollbarContent.style.width !== contentWidth) scrollbarContent.style.width = contentWidth;
-            syncScrollbar();
+        let maxOffset = 0;
+        let endInset = 0;
 
+        const updateHidden = () => {
             const offset = Math.abs(scroller.scrollLeft);
-            const pinnedColumn = scroller.querySelector('thead th:last-child');
             const next: HiddenContent = {
                 start: offset > 1,
-                end: scroller.scrollWidth - scroller.clientWidth - offset > 1,
-                endInset: pinnedColumn && getComputedStyle(pinnedColumn).position === 'sticky'
-                    ? pinnedColumn.getBoundingClientRect().width
-                    : 0,
+                end: maxOffset - offset > 1,
+                endInset,
             };
             setHidden((current) => (
                 current.start === next.start && current.end === next.end && current.endInset === next.endInset
@@ -55,15 +69,33 @@ export function HorizontalScrollArea({ children }: PropsWithChildren) {
             ));
         };
 
-        update();
-        scroller.addEventListener('scroll', update, { passive: true });
+        const onScroll = () => {
+            syncScrollbar();
+            updateHidden();
+        };
+
+        // The sizes only change with a resize, so scrolling does not have to read them.
+        const updateSizes = () => {
+            const contentWidth = `${scroller.scrollWidth}px`;
+            if (scrollbarContent.style.width !== contentWidth) scrollbarContent.style.width = contentWidth;
+            maxOffset = scroller.scrollWidth - scroller.clientWidth;
+
+            const pinnedColumn = scroller.querySelector('thead th:last-child');
+            endInset = pinnedColumn && getComputedStyle(pinnedColumn).position === 'sticky'
+                ? pinnedColumn.getBoundingClientRect().width
+                : 0;
+            onScroll();
+        };
+
+        updateSizes();
+        scroller.addEventListener('scroll', onScroll, { passive: true });
         scrollbar.addEventListener('scroll', syncScroller, { passive: true });
-        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateSizes);
         observer?.observe(scroller);
         if (scroller.firstElementChild) observer?.observe(scroller.firstElementChild);
 
         return () => {
-            scroller.removeEventListener('scroll', update);
+            scroller.removeEventListener('scroll', onScroll);
             scrollbar.removeEventListener('scroll', syncScroller);
             observer?.disconnect();
         };
@@ -71,7 +103,7 @@ export function HorizontalScrollArea({ children }: PropsWithChildren) {
 
     return (
         <div className="relative">
-            <div ref={scrollerRef} className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div ref={scrollerRef} data-horizontal-scroller className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {children}
             </div>
             <div

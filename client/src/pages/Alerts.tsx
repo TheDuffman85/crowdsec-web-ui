@@ -23,6 +23,8 @@ import { EventCard } from "../components/EventCard";
 import { ContextSummary } from "../components/ContextSummary";
 import { Collapsible } from "../components/ui/Collapsible";
 import { HorizontalScrollArea } from "../components/ui/HorizontalScrollArea";
+import { ResizableColumnHeader, TableColumnGroup } from "../components/ui/ResizableColumnHeader";
+import { useTableColumnWidths, type TableLayoutColumn } from "../lib/useTableColumnWidths";
 import { getDisplayMetadata, isAppSecEvent } from "../lib/alertMetadata";
 import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
@@ -500,6 +502,14 @@ export function Alerts() {
     );
     const visibleAlertColumnCount = visibleAlertColumns.length;
     const alertTableColSpan = visibleAlertColumnCount + (canManageEnforcement ? 2 : 0) + (groupedView ? 1 : 0);
+    const alertTableRef = useRef<HTMLTableElement>(null);
+    // The grouped view tightens the cell padding, which the select and actions widths account for.
+    const alertColumnWidths = useTableColumnWidths('alerts', alertTableRef, [
+        ...(canManageEnforcement ? [{ id: 'select', fixedWidth: groupedView ? 40 : 64 }] : []),
+        ...(groupedView ? [{ id: 'session', defaultWidth: 240 }] : []),
+        ...visibleAlertColumns.map((id): TableLayoutColumn => ({ id })),
+        ...(canManageEnforcement ? [{ id: 'actions', fixedWidth: groupedView ? 136 : 160 }] : []),
+    ]);
     const isAlertColumnVisible = useCallback((columnId: TableColumnId) => (
         visibleAlertColumns.includes(columnId)
     ), [visibleAlertColumns]);
@@ -2393,7 +2403,12 @@ export function Alerts() {
             >
                 <HorizontalScrollArea>
                     {/* The grouped view adds the Session column, so it tightens every cell to make room. Its rows are tall, so their cells start at the top. */}
-                    <table className={`min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200 ${groupedView ? '[&_td]:px-3 [&_td]:align-top [&_th]:px-3' : ''}`}>
+                    <table
+                        ref={alertTableRef}
+                        {...alertColumnWidths.tableProps}
+                        className={`min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200 ${groupedView ? '[&_td]:px-3 [&_td]:align-top [&_th]:px-3' : ''}`}
+                    >
+                        <TableColumnGroup columnWidths={alertColumnWidths} />
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
                                 {canManageEnforcement && (
@@ -2410,9 +2425,12 @@ export function Alerts() {
                                     </th>
                                 )}
                                 {groupedView && (
-                                    <th className="w-px whitespace-nowrap px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                        {t('pages.alerts.session')}
-                                    </th>
+                                    <ResizableColumnHeader
+                                        columnId="session"
+                                        label={t('pages.alerts.session')}
+                                        columnWidths={alertColumnWidths}
+                                        className="w-px whitespace-nowrap px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
+                                    />
                                 )}
                                 {visibleAlertColumns.map((columnId) => {
                                     const column = alertColumnDefinitionById.get(columnId);
@@ -2421,9 +2439,13 @@ export function Alerts() {
                                     }
 
                                     return (
-                                        <th key={columnId} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                            {t(`tableColumns.${column.id}`, { defaultValue: column.label })}
-                                        </th>
+                                        <ResizableColumnHeader
+                                            key={columnId}
+                                            columnId={columnId}
+                                            label={t(`tableColumns.${column.id}`, { defaultValue: column.label })}
+                                            columnWidths={alertColumnWidths}
+                                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
+                                        />
                                     );
                                 })}
                                 {canManageEnforcement && (
@@ -2892,6 +2914,8 @@ export function Alerts() {
                 table="alerts"
                 columnPreferences={tableColumnPreferences.alerts}
                 onClose={() => setShowColumnsModal(false)}
+                hasCustomWidths={alertColumnWidths.hasCustomWidths}
+                onResetWidths={alertColumnWidths.resetWidths}
                 onSave={saveAlertColumns}
             />
         </div >

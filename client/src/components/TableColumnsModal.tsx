@@ -16,7 +16,9 @@ interface TableColumnsModalProps {
     isOpen: boolean;
     table: TableColumnPreferenceTable;
     columnPreferences: TableColumnId[];
+    hasCustomWidths: boolean;
     onClose: () => void;
+    onResetWidths: () => void;
     onSave: (visiblePreferences: TableColumnId[]) => void;
 }
 
@@ -24,7 +26,9 @@ export function TableColumnsModal({
     isOpen,
     table,
     columnPreferences,
+    hasCustomWidths,
     onClose,
+    onResetWidths,
     onSave,
 }: TableColumnsModalProps) {
     const { t } = useI18n();
@@ -34,7 +38,9 @@ export function TableColumnsModal({
             <TableColumnsModalContent
                 table={table}
                 columnPreferences={columnPreferences}
+                hasCustomWidths={hasCustomWidths}
                 onClose={onClose}
+                onResetWidths={onResetWidths}
                 onSave={onSave}
             />
         </Modal>
@@ -44,7 +50,9 @@ export function TableColumnsModal({
 function TableColumnsModalContent({
     table,
     columnPreferences,
+    hasCustomWidths,
     onClose,
+    onResetWidths,
     onSave,
 }: Omit<TableColumnsModalProps, 'isOpen'>) {
     const { t } = useI18n();
@@ -52,6 +60,7 @@ function TableColumnsModalContent({
     const [draftColumnOrder, setDraftColumnOrder] = useState<TableColumnId[]>(() => (
         loadStoredTableColumnOrders(table, columnPreferences)
     ));
+    const [widthsReset, setWidthsReset] = useState(false);
     const listRef = useRef<HTMLDivElement | null>(null);
     const sortableRef = useRef<Sortable | null>(null);
     const definitions = TABLE_COLUMN_DEFINITIONS[table];
@@ -106,6 +115,7 @@ function TableColumnsModalContent({
     const resetColumns = () => {
         setDraftColumns([...DEFAULT_TABLE_COLUMN_PREFERENCES[table]]);
         setDraftColumnOrder(getDefaultTableColumnOrder(table));
+        setWidthsReset(true);
     };
 
     const getColumnLabel = (columnId: TableColumnId, fallback: string) =>
@@ -155,6 +165,21 @@ function TableColumnsModalContent({
                     );
                 })}
             </div>
+            <div className="flex items-center justify-between gap-3 rounded-md bg-gray-50 px-3 py-2 dark:bg-gray-900/50">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {t('components.tableColumns.resizeHint')}
+                </p>
+                {hasCustomWidths && (
+                    <button
+                        type="button"
+                        onClick={() => setWidthsReset(true)}
+                        disabled={widthsReset}
+                        className="shrink-0 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                        {t('components.tableColumns.resetWidths')}
+                    </button>
+                )}
+            </div>
             <div className="flex items-center justify-between gap-3">
                 <button
                     type="button"
@@ -176,6 +201,7 @@ function TableColumnsModalContent({
                         type="button"
                         onClick={() => {
                             saveStoredTableColumnOrders(table, draftColumnOrder);
+                            if (widthsReset) onResetWidths();
                             onSave(visiblePreferences);
                         }}
                         className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700"

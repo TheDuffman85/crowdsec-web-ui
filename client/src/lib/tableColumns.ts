@@ -12,6 +12,11 @@ export const STICKY_ACTIONS_CELL_CLASS_NAME = `${STICKY_ACTIONS_CLASS_NAME} bg-w
 export const STICKY_ACTIONS_EXPIRED_CELL_CLASS_NAME = `${STICKY_ACTIONS_CLASS_NAME} bg-gray-50 dark:bg-[color-mix(in_srgb,var(--color-gray-900)_20%,var(--color-gray-800))]`;
 export const STICKY_ACTIONS_NESTED_CELL_CLASS_NAME = STICKY_ACTIONS_EXPIRED_CELL_CLASS_NAME;
 
+export type TableColumnWidths = Record<string, number>;
+
+export const MIN_TABLE_COLUMN_WIDTH = 72;
+export const MAX_TABLE_COLUMN_WIDTH = 960;
+
 export function loadStoredTableColumnPreferences(): TableColumnPreferences {
     if (typeof window === 'undefined') {
         return cloneDefaultTableColumnPreferences();
@@ -79,6 +84,49 @@ export function orderVisibleTableColumns(columnOrder: TableColumnId[], visibleCo
     return columnOrder.filter((columnId) => visibleColumnIds.has(columnId));
 }
 
+export function clampTableColumnWidth(width: number): number {
+    return Math.round(Math.min(MAX_TABLE_COLUMN_WIDTH, Math.max(MIN_TABLE_COLUMN_WIDTH, width)));
+}
+
+export function loadStoredTableColumnWidths(table: TableColumnPreferenceTable): TableColumnWidths {
+    if (typeof window === 'undefined') {
+        return {};
+    }
+
+    try {
+        const parsedValue = JSON.parse(window.localStorage.getItem(getColumnWidthsStorageKey(table)) ?? 'null') as unknown;
+        if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) {
+            return {};
+        }
+
+        const widths: TableColumnWidths = {};
+        for (const [columnId, width] of Object.entries(parsedValue)) {
+            if (typeof width === 'number' && Number.isFinite(width)) {
+                widths[columnId] = clampTableColumnWidth(width);
+            }
+        }
+        return widths;
+    } catch {
+        return {};
+    }
+}
+
+export function saveStoredTableColumnWidths(table: TableColumnPreferenceTable, widths: TableColumnWidths): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        if (Object.keys(widths).length === 0) {
+            window.localStorage.removeItem(getColumnWidthsStorageKey(table));
+        } else {
+            window.localStorage.setItem(getColumnWidthsStorageKey(table), JSON.stringify(widths));
+        }
+    } catch {
+        // Column widths are browser-local convenience state; ignore storage failures.
+    }
+}
+
 function cloneDefaultTableColumnPreferences(): TableColumnPreferences {
     return {
         alerts: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts],
@@ -138,6 +186,10 @@ function normalizeTableColumnIds(table: TableColumnPreferenceTable, value: unkno
 
 function getColumnOrderStorageKey(table: TableColumnPreferenceTable): string {
     return `crowdsec-web-ui:${table}:table-column-order`;
+}
+
+function getColumnWidthsStorageKey(table: TableColumnPreferenceTable): string {
+    return `crowdsec-web-ui:${table}:table-column-widths`;
 }
 
 function readStoredColumnOrders(table: TableColumnPreferenceTable): TableColumnId[] | null {

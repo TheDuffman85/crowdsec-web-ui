@@ -195,6 +195,56 @@ describe('Alerts page presentation and columns', () => {
       .toEqual(['id', 'instance', 'time', 'scenario', 'kind', 'country', 'region', 'city', 'as', 'source', 'target', 'machine', 'origin', 'decisions']);
   });
 
+  test('resets custom column widths from the columns modal when saved', async () => {
+    const storageKey = 'crowdsec-web-ui:alerts:table-column-widths';
+    const storedWidths = JSON.stringify({ time: 150, scenario: 300 });
+    window.localStorage.setItem(storageKey, storedWidths);
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    const table = screen.getAllByRole('table')[0] as HTMLTableElement;
+    expect(table).toHaveAttribute('data-column-widths', 'fixed');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reset widths' }));
+    expect(screen.getByRole('button', { name: 'Reset widths' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(window.localStorage.getItem(storageKey)).toBe(storedWidths);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reset widths' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
+    expect(table).not.toHaveAttribute('data-column-widths');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
+    expect(screen.queryByRole('button', { name: 'Reset widths' })).not.toBeInTheDocument();
+  });
+
+  test('reset defaults in the columns modal also resets custom column widths', async () => {
+    const storageKey = 'crowdsec-web-ui:alerts:table-column-widths';
+    window.localStorage.setItem(storageKey, JSON.stringify({ scenario: 300 }));
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reset defaults' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
+  });
+
   test('shows the primary target, distinct target count, and target detail card', async () => {
     vi.mocked(api.fetchAlertsPaginated).mockImplementationOnce(async (page, pageSize) => toPaginatedAlerts([{
       id: 91,
