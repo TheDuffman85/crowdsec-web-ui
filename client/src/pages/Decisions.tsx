@@ -18,6 +18,8 @@ import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { TargetDisplay } from "../components/TargetDisplay";
 import { HorizontalScrollArea } from "../components/ui/HorizontalScrollArea";
+import { ResizableColumnHeader, TableColumnGroup } from "../components/ui/ResizableColumnHeader";
+import { useTableColumnWidths, type TableLayoutColumn } from "../lib/useTableColumnWidths";
 import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
@@ -323,6 +325,12 @@ export function Decisions() {
     );
     const visibleDecisionColumnCount = visibleDecisionColumns.length;
     const decisionTableColSpan = visibleDecisionColumnCount + (canManageEnforcement ? 2 : 0);
+    const decisionTableRef = useRef<HTMLTableElement>(null);
+    const decisionColumnWidths = useTableColumnWidths('decisions', decisionTableRef, [
+        ...(canManageEnforcement ? [{ id: 'select', fixedWidth: 64 }] : []),
+        ...visibleDecisionColumns.map((id): TableLayoutColumn => ({ id })),
+        ...(canManageEnforcement ? [{ id: 'actions', fixedWidth: 128 }] : []),
+    ]);
     const cancelSearchDebounce = useCallback(() => {
         if (searchDebounceTimeoutRef.current !== null) {
             window.clearTimeout(searchDebounceTimeoutRef.current);
@@ -1395,7 +1403,12 @@ export function Decisions() {
                 aria-busy={tableBusy}
             >
                 <HorizontalScrollArea>
-                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                    <table
+                        ref={decisionTableRef}
+                        {...decisionColumnWidths.tableProps}
+                        className="min-w-full divide-y divide-gray-200 dark:divide-gray-700"
+                    >
+                        <TableColumnGroup columnWidths={decisionColumnWidths} />
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
                                 {canManageEnforcement && (
@@ -1418,9 +1431,13 @@ export function Decisions() {
                                     }
 
                                     return (
-                                        <th key={columnId} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                            {t(`tableColumns.${column.id}`, { defaultValue: column.label })}
-                                        </th>
+                                        <ResizableColumnHeader
+                                            key={columnId}
+                                            columnId={columnId}
+                                            label={t(`tableColumns.${column.id}`, { defaultValue: column.label })}
+                                            columnWidths={decisionColumnWidths}
+                                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
+                                        />
                                     );
                                 })}
                                 {canManageEnforcement && (
@@ -1718,6 +1735,8 @@ export function Decisions() {
                 table="decisions"
                 columnPreferences={tableColumnPreferences.decisions}
                 onClose={() => setShowColumnsModal(false)}
+                hasCustomWidths={decisionColumnWidths.hasCustomWidths}
+                onResetWidths={decisionColumnWidths.resetWidths}
                 onSave={saveDecisionColumns}
             />
         </div >

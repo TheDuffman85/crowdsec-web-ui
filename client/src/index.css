@@ -53,6 +53,38 @@ path:focus {
   outline: none !important;
 }
 
+/* Once a column was resized, a fixed layout takes the widths from the <col> elements alone. */
+table[data-column-widths='fixed'] {
+  table-layout: fixed;
+}
+
+table[data-column-widths='fixed'] > * > tr > * {
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+table[data-column-widths='fixed'] > thead > tr > th {
+  white-space: nowrap;
+}
+
+/* Set on the first row below the viewport while a column is dragged. */
+tr[data-hide-from-here],
+tr[data-hide-from-here] ~ tr {
+  display: none;
+}
+
+/* Only set for the duration of a measurement, to find the width that fits the content. */
+table[data-column-widths='measuring'] {
+  table-layout: auto;
+  width: max-content;
+  min-width: 0;
+}
+
+table[data-column-widths='measuring'] > * > tr > * {
+  max-width: none;
+}
+
 .sortable-ghost {
   @apply opacity-40;
 }
