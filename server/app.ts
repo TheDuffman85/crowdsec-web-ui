@@ -301,6 +301,11 @@ interface ReconcileWindowState {
 }
 
 const API_BODY_LIMIT_BYTES = 1024 * 1024;
+// Applies the saved theme before first paint, so a dark-mode refresh doesn't
+// flash the light background while the app bundle loads. Mirrors
+// readStoredMode() in client/src/lib/theme.ts: a missing or unknown value means
+// "system". Runs as an inline script under the page's CSP nonce.
+export const THEME_BOOTSTRAP_SCRIPT = "(function(){try{var m=localStorage.getItem('theme');var d=m==='dark'||(m!=='light'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);}catch(e){}})();";
 const delay = (ms: number): Promise<void> => new Promise((resolve) => {
   if (ms === 0) setImmediate(resolve);
   else setTimeout(resolve, ms);
@@ -1535,8 +1540,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const cspNonce = String((context as HonoContext).get('cspNonce') || '');
       const branding = getPublicBranding(database, config.basePath);
       const configScript = `<script nonce="${cspNonce}">window.__BASE_PATH__="${safePath}";window.__BRANDING__=${serializeBrandingForScript(branding)};</script>`;
+      const themeScript = `<script nonce="${cspNonce}">${THEME_BOOTSTRAP_SCRIPT}</script>`;
       html = applyBrandingToIndexHtml(html, branding);
-      html = html.replace('</head>', () => `${configScript}\n</head>`);
+      html = html.replace('</head>', () => `${configScript}\n${themeScript}\n</head>`);
 
       if (config.basePath) {
         html = html.replace(/href="\.\//g, `href="${config.basePath}/`);

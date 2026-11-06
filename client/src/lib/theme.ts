@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 
 export type ThemeMode = 'light' | 'system' | 'dark';
 
+// THEME_BOOTSTRAP_SCRIPT in server/app.ts applies the saved theme before first
+// paint using the same key and rules. Keep the two in sync.
 const STORAGE_KEY = 'theme';
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 

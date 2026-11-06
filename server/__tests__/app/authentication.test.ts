@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { generate } from 'otplib';
 import { resolveOidcClaims, resolveOidcRole } from '../../app-auth';
+import { THEME_BOOTSTRAP_SCRIPT } from '../../app';
 import {
   createAuthSessionCookie,
   createController,
@@ -51,6 +52,10 @@ test('security middleware applies CSP, private API caching, origin checks, and b
   expect(csp).toContain("default-src 'self'");
   expect(csp).toContain("frame-ancestors 'none'");
   expect(pageHtml).toContain(`<script nonce="${nonce}">window.__BASE_PATH__="/crowdsec";window.__BRANDING__={"appName":"CrowdSec Web UI","defaultAppName":"CrowdSec Web UI","logoUrl":null,"logoDarkUrl":null,"theme":{"light":{"accent":null,"neutral":null},"dark":{"accent":null,"neutral":null}}};</script>`);
+  // The theme is applied in <head>, under the same nonce, before the body paints.
+  const themeScript = `<script nonce="${nonce}">${THEME_BOOTSTRAP_SCRIPT}</script>`;
+  expect(pageHtml).toContain(themeScript);
+  expect(pageHtml.indexOf(themeScript)).toBeLessThan(pageHtml.indexOf('</head>'));
   expect(page.headers.get('strict-transport-security')).toBeNull();
 
   const apiResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
