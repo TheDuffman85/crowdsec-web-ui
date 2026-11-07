@@ -451,6 +451,7 @@ export interface DashboardStatsResponse {
   filteredTotals: DashboardStatsTotals;
   globalTotal: number;
   topTargets: DashboardStatListItem[];
+  topMachines: DashboardStatListItem[];
   topCountries: DashboardStatListItem[];
   allCountries: DashboardWorldMapDatum[];
   attackLocations: DashboardAttackLocationDatum[];
