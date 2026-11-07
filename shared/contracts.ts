@@ -621,7 +621,7 @@ export interface UpsertNotificationRuleRequest {
   config: NotificationRuleConfig;
 }
 
-export type ManagedConfigSetting = 'refresh_interval' | 'manual_refresh_enabled' | 'allowlists_sidebar_visible' | 'metrics_sidebar_visible';
+export type ManagedConfigSetting = 'refresh_interval' | 'manual_refresh_enabled' | 'allowlists_sidebar_visible' | 'metrics_sidebar_visible' | 'statistics_sidebar_visible';
 
 /** Where the application config sets a value that Settings cannot change. */
 export interface ManagedSettingSource {
@@ -632,6 +632,7 @@ export interface ManagedSettingSource {
 }
 
 export interface ConfigResponse {
+  statistics?: import('./statistics').StatisticsConfiguration;
   lookback_period: string;
   lookback_hours: number;
   lookback_days: number;
@@ -655,6 +656,7 @@ export interface ConfigResponse {
   metrics_enabled?: boolean;
   metrics_sidebar_visible?: boolean;
   allowlists_sidebar_visible?: boolean;
+  statistics_sidebar_visible?: boolean;
   manual_decision_scenario_settings?: ManualDecisionScenarioSettings;
   deployment_mode?: 'load-test';
   load_test_profile?: string;
@@ -670,6 +672,10 @@ export interface UpdateMetricsSidebarPreferenceRequest {
 }
 
 export interface UpdateAllowlistsSidebarPreferenceRequest {
+  visible: boolean;
+}
+
+export interface UpdateStatisticsSidebarPreferenceRequest {
   visible: boolean;
 }
 
@@ -963,6 +969,21 @@ export interface MultiInstanceOperationResponse {
   results: InstanceOperationResult[];
   succeeded: number;
   failed: number;
+}
+
+/** Most values one bulk add accepts; matches the longest list a statistics finding can show. */
+export const BULK_ADD_DECISIONS_MAX = 500;
+
+/** Adds one decision per value with the same settings, in one LAPI request per instance. */
+export interface BulkAddDecisionRequest extends Omit<AddDecisionRequest, 'ip'> {
+  values: string[];
+}
+
+export interface BulkAddDecisionResponse extends MultiInstanceOperationResponse {
+  /** Values sent to LAPI. */
+  added: string[];
+  /** Values skipped because they are allowlisted; resend them with `bypass_allowlist` to add them anyway. */
+  allowlisted: Array<{ value: string; allowlisted: AllowlistMatch[] }>;
 }
 
 export type DeleteResourceKind = 'alert' | 'decision';

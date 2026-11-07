@@ -165,7 +165,8 @@ export function addDashboardAlert(
 ): void {
   addDashboardAlertBuckets(accumulator, alert, filters, bucketKey);
 
-  if (alert.country && alert.country !== 'Unknown') {
+  // Country codes are stored uppercased, so CrowdSec's "Unknown" arrives as UNKNOWN.
+  if (alert.country && alert.country.toUpperCase() !== 'UNKNOWN') {
     const current = accumulator.countries.get(alert.country) || { count: 0, liveCount: 0, simulatedCount: 0 };
     current.count += 1;
     if (alert.simulated) {

@@ -29,7 +29,8 @@ test.each(['wake', 'restart', 'stop'] as const)('keeps one scheduler owner when 
   };
   const { controller, database, lapiClient } = createController({
     queryWorker, syncWorker,
-    env: { CROWDSEC_REFRESH_INTERVAL: '30s', CROWDSEC_IDLE_THRESHOLD: '1m', CROWDSEC_HEARTBEAT_INTERVAL: 'manual' },
+    // Statistics collection keeps its own timer; these checks count the sync scheduler only.
+    env: { CROWDSEC_REFRESH_INTERVAL: '30s', CROWDSEC_IDLE_THRESHOLD: '1m', CROWDSEC_HEARTBEAT_INTERVAL: 'manual', CONFIG_STATISTICS_ENABLED: 'false' },
     initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
   });
   try {

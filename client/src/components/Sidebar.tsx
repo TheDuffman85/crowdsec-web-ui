@@ -1,5 +1,5 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, ListChecks, Bell, X, Sun, Moon, Monitor, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown, Boxes } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, ListChecks, Bell, X, Sun, Moon, Monitor, ArrowUpCircle, BarChart3, ChartLine, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown, Boxes } from "lucide-react";
 import { Badge } from "./ui/Badge";
 import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
@@ -28,6 +28,7 @@ const THEME_OPTIONS = [
 ] as const;
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
 const ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT = 'allowlists-sidebar-preference-changed';
+const STATISTICS_SIDEBAR_PREFERENCE_EVENT = 'statistics-sidebar-preference-changed';
 const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
 // Custom names wrap instead of being cut off; long ones use a smaller font.
 const LONG_APP_NAME_LENGTH = 24;
@@ -91,6 +92,7 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
     const [showMetricsNav, setShowMetricsNav] = useState(false);
     const [showAllowlistsNav, setShowAllowlistsNav] = useState(true);
+    const [showStatisticsNav, setShowStatisticsNav] = useState(true);
     const [loadTestProfile, setLoadTestProfile] = useState<string | null>(null);
     const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [refreshMenuOpen, setRefreshMenuOpen] = useState(false);
@@ -109,7 +111,7 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
         if (location.pathname === path) {
             return `${location.pathname}${location.search}${location.hash}`;
         }
-        if (!['/', '/alerts', '/decisions', '/allowlists', '/metrics'].includes(path)) return path;
+        if (!['/', '/alerts', '/decisions', '/allowlists', '/metrics', '/statistics'].includes(path)) return path;
 
         const params = new URLSearchParams();
         if (instances.length > 1) {
@@ -168,6 +170,7 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
         { to: "/alerts", label: "components.sidebar.nav.alerts", icon: ShieldAlert },
         { to: "/decisions", label: "components.sidebar.nav.decisions", icon: Gavel },
         ...(showAllowlistsNav ? [{ to: "/allowlists", label: "components.sidebar.nav.allowlists", icon: ListChecks }] : []),
+        ...(showStatisticsNav ? [{ to: "/statistics", label: "pages.statistics.title", icon: ChartLine }] : []),
         ...(showMetricsNav ? [{ to: "/metrics", label: "components.sidebar.nav.metrics", icon: BarChart3 }] : []),
         { to: "/notifications", label: "components.sidebar.nav.notifications", icon: Bell },
         { to: "/settings", label: "components.sidebar.nav.settings", icon: SettingsIcon },
@@ -214,6 +217,7 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
                 if (!cancelled) {
                     setShowMetricsNav(config.metrics_sidebar_visible !== false);
                     setShowAllowlistsNav(config.allowlists_sidebar_visible !== false);
+                    setShowStatisticsNav(config.statistics_sidebar_visible !== false);
                     setManualRefreshEnabled(config.manual_refresh_enabled === true);
                     if (config.manual_refresh_enabled !== true) {
                         setRefreshMenuOpen(false);
@@ -234,12 +238,14 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
         void loadSidebarConfig();
         window.addEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
         window.addEventListener(ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
+        window.addEventListener(STATISTICS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
         window.addEventListener(MANUAL_REFRESH_SETTING_EVENT, loadSidebarConfig);
 
         return () => {
             cancelled = true;
             window.removeEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
             window.removeEventListener(ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
+            window.removeEventListener(STATISTICS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
             window.removeEventListener(MANUAL_REFRESH_SETTING_EVENT, loadSidebarConfig);
         };
     }, []);

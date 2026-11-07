@@ -441,9 +441,22 @@ export class LapiClient {
     reason = MANUAL_DECISION_MESSAGE_PREFIX,
     scenario = DEFAULT_MANUAL_DECISION_SCENARIO,
   ): Promise<unknown> {
+    return this.addDecisions([ip], type, duration, reason, scenario);
+  }
+
+  /** Sends one manual alert per value, like `cscli decisions add`, in a single request. */
+  async addDecisions(
+    values: string[],
+    type: string,
+    duration: string,
+    reason = MANUAL_DECISION_MESSAGE_PREFIX,
+    scenario = DEFAULT_MANUAL_DECISION_SCENARIO,
+  ): Promise<unknown> {
     const now = new Date().toISOString();
-    const payload = [
-      {
+    const payload = values.map((ip) => {
+      // Like `cscli decisions add --range`, a CIDR value is sent with the range scope.
+      const scope = ip.includes('/') ? 'range' : 'ip';
+      return {
         scenario,
         campaign_name: scenario,
         message: `${MANUAL_DECISION_MESSAGE_PREFIX}: ${reason}`,
@@ -457,8 +470,9 @@ export class LapiClient {
         scenario_hash: '',
         scenario_version: '',
         source: {
-          scope: 'ip',
+          scope,
           value: ip,
+          ...(scope === 'range' ? { range: ip } : {}),
         },
         decisions: [
           {
@@ -467,11 +481,11 @@ export class LapiClient {
             value: ip,
             origin: 'cscli',
             scenario,
-            scope: 'ip',
+            scope,
           },
         ],
-      },
-    ];
+      };
+    });
 
     const response = await this.fetchLapi('/v1/alerts', {
       method: 'POST',

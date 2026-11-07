@@ -251,6 +251,7 @@ describe('CrowdsecDatabase notifications and runtime', () => {
     const dockerfile = readFileSync(path.resolve(process.cwd(), 'Dockerfile'), 'utf8');
     const entrypoint = readFileSync(path.resolve(process.cwd(), 'docker-loadtest-entrypoint.sh'), 'utf8');
     const loadTestServer = readFileSync(path.resolve(process.cwd(), 'scripts/load-test-server.ts'), 'utf8');
+    const loadTestConfig = readFileSync(path.resolve(process.cwd(), 'scripts/load-test-config.ts'), 'utf8');
 
     expect(dockerfile).toContain('FROM runner AS loadtest');
     expect(dockerfile).toContain('ENV LOADTEST_DB_DIR="/tmp/crowdsec-web-ui-load-test"');
@@ -258,7 +259,8 @@ describe('CrowdsecDatabase notifications and runtime', () => {
     expect(entrypoint).not.toContain('export DB_DIR=');
     expect(entrypoint).not.toContain('${DB_DIR:-');
     expect(entrypoint).not.toContain('chown -R node:node /app/data');
-    expect(loadTestServer).toContain('CONFIG_STORAGE_DATA_DIR: dbDir');
+    expect(loadTestServer).toContain('createLoadTestRuntimeConfig(process.env, dbDir');
+    expect(loadTestConfig).toContain('CONFIG_STORAGE_DATA_DIR: dbDir');
   });
 
   function runLoadTestEntrypoint(env: Record<string, string>) {
@@ -314,5 +316,13 @@ describe('CrowdsecDatabase notifications and runtime', () => {
     expect(environment).toContain('LOADTEST_MULTI_INSTANCE=true');
     expect(environment).toContain('LOADTEST_ALLOWLIST_SIZES=50000,25000,10000,5000,1000');
     expect(environment).toContain('LOADTEST_SEED=1337');
+  });
+
+  test('load-test Docker entrypoint accepts the multi-instance statistics profile', () => {
+    const { environment } = runLoadTestEntrypoint({ LOADTEST_PROFILE: 'statistics-multi' });
+    expect(environment).toContain('LOADTEST_PROFILE=statistics-multi');
+    expect(environment).toContain('LOADTEST_MULTI_INSTANCE=true');
+    expect(environment).toContain('LOADTEST_STATISTICS=true');
+    expect(environment).toContain('LOADTEST_STATISTICS_DAILY_ALERTS=200');
   });
 });

@@ -12,6 +12,7 @@ import { getBasePath } from "./lib/basePath";
 import { normalizeLanguagePreference, useI18n } from "./lib/i18n";
 import { normalizeFontPreference, useFont } from "./lib/font";
 
+const Statistics = lazy(async () => ({ default: (await import('./pages/Statistics')).Statistics }));
 const Dashboard = lazy(async () => ({ default: (await import('./pages/Dashboard')).Dashboard }));
 const Alerts = lazy(async () => ({ default: (await import('./pages/Alerts')).Alerts }));
 const Decisions = lazy(async () => ({ default: (await import('./pages/Decisions')).Decisions }));
@@ -73,6 +74,7 @@ function ProtectedAppShell() {
               </Suspense>
             )}
           />
+          <Route path="statistics" element={<Suspense fallback={<RouteFallback />}><Statistics /></Suspense>} />
           <Route
             path="alerts"
             element={(

@@ -276,6 +276,21 @@ describe('LapiClient', () => {
     await expect(client.fetchAlerts()).resolves.toEqual([{ id: 1 }]);
     await expect(client.getAlertById(42)).resolves.toEqual({ id: 42 });
     await expect(client.addDecision('1.2.3.4', 'ban', '4h', 'manual')).resolves.toEqual({ ok: true });
+    await expect(client.addDecision('198.51.100.0/24', 'ban', '24h', 'manual')).resolves.toEqual({ ok: true });
+    const [single, range] = calls.filter((call) => call.url.endsWith('/v1/alerts') && call.method === 'POST').map((call) => (call.body as any[])[0]);
+    expect(single.source).toEqual({ scope: 'ip', value: '1.2.3.4' });
+    expect(single.decisions[0]).toMatchObject({ scope: 'ip', value: '1.2.3.4' });
+    // Like `cscli decisions add --range`, ranges are not sent as single IPs.
+    expect(range.source).toEqual({ scope: 'range', value: '198.51.100.0/24', range: '198.51.100.0/24' });
+    expect(range.decisions[0]).toMatchObject({ scope: 'range', value: '198.51.100.0/24', duration: '24h' });
+    // A bulk add sends one alert per value in a single request.
+    await expect(client.addDecisions(['1.2.3.5', '198.51.101.0/24'], 'ban', '4h', 'bulk')).resolves.toEqual({ ok: true });
+    const bulk = calls.filter((call) => call.url.endsWith('/v1/alerts') && call.method === 'POST').at(-1)!.body as any[];
+    expect(bulk.map((alert) => alert.source)).toEqual([
+      { scope: 'ip', value: '1.2.3.5' },
+      { scope: 'range', value: '198.51.101.0/24', range: '198.51.101.0/24' },
+    ]);
+    expect(bulk.map((alert) => alert.decisions[0].value)).toEqual(['1.2.3.5', '198.51.101.0/24']);
     await expect(client.deleteDecision(10)).resolves.toEqual({ ok: true });
     await expect(client.deleteAlert(42)).resolves.toEqual({ id: 42 });
 

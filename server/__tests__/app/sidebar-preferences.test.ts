@@ -32,6 +32,7 @@ afterEach(() => {
 describe.each([
   ['allowlists', 'ui.allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE'],
   ['metrics', 'ui.metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE'],
+  ['statistics', 'ui.statisticsSidebarVisible', 'CONFIG_UI_STATISTICS_SIDEBAR_VISIBLE'],
 ] as const)('%s sidebar visibility', (sidebar, configPath, envName) => {
   const key = `${sidebar}_sidebar_visible`;
 

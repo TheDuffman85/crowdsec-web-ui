@@ -12,6 +12,9 @@ import {
   normalizeLoadTestBlocklistDecisionCounts,
   withoutLoadTestListAlertAddress,
 } from './load-test-shape';
+import { DEFAULT_STATISTICS_SETTINGS } from '../shared/statistics';
+import { removeStatisticsDatabase, seedStatisticsArchive, statisticsAlertShape, type StatisticsAlertShape } from './load-test-statistics';
+import { createLoadTestRuntimeConfig, LOAD_TEST_MULTI_INSTANCE_IDS } from './load-test-config';
 
 const DEFAULT_ALERTS = 300_000;
 const DEFAULT_DECISIONS = 300_000;
@@ -42,6 +45,10 @@ interface LoadTestConfig {
   alertBurstSize: number;
   alertIpSeed: number;
   lookbackMs: number;
+  /** Shapes alerts for the Statistics page and builds archive history before the cache window. */
+  statistics: boolean;
+  statisticsHistoryDays: number;
+  statisticsDailyAlerts: number;
   sqliteWalEnabled: boolean;
   sqliteIncrementalVacuumEnabled: boolean;
   sqliteJournalSizeLimitBytes: number;
@@ -68,6 +75,8 @@ interface AlertTemplate {
   isBlocklist: boolean;
   blocklistDecisionCount: number;
   isExpiredDecisionAlert: boolean;
+  /** Statistics profile only. */
+  statisticsShape?: StatisticsAlertShape;
 }
 
 interface DecisionTemplate {
@@ -211,6 +220,9 @@ function readConfig(): LoadTestConfig {
     // Instances keep this seed, so one attacker can reach several of them.
     alertIpSeed: parseIntegerEnv('LOADTEST_SEED', DEFAULT_SEED),
     lookbackMs: parseLookbackToMs(process.env.CONFIG_CROWDSEC_SYNC_LOOKBACK || '30d'),
+    statistics: parseBooleanEnv(process.env.LOADTEST_STATISTICS, false),
+    statisticsHistoryDays: Math.min(3650, parseIntegerEnv('LOADTEST_STATISTICS_HISTORY_DAYS', DEFAULT_STATISTICS_SETTINGS.retentionDays)),
+    statisticsDailyAlerts: parseIntegerEnv('LOADTEST_STATISTICS_DAILY_ALERTS', 0),
     sqliteWalEnabled: parseBooleanEnv(process.env.CONFIG_STORAGE_WAL_ENABLED, true),
     sqliteIncrementalVacuumEnabled: parseBooleanEnv(
       process.env.CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED,
@@ -294,6 +306,35 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
     && config.expiredAlerts > 0
     && id >= expiredAlertStart
     && id <= decisionBearingAlertEnd;
+  const statisticsShape = config.statistics && !isBlocklist
+    ? statisticsAlertShape(id, Date.parse(createdAt), nowMs, config.seed, config.alertIpSeed)
+    : undefined;
+  if (statisticsShape) {
+    const country = countries.find((entry) => entry[0] === statisticsShape.country) || countryTuple;
+    return {
+      id,
+      createdAt,
+      scenario: statisticsShape.scenario,
+      reason: statisticsShape.reason,
+      ip: statisticsShape.ip,
+      country: statisticsShape.country,
+      city: country[3],
+      region: country[4],
+      asName: statisticsShape.asName,
+      asNumber: statisticsShape.asNumber,
+      target: statisticsShape.target,
+      machine: statisticsShape.machine,
+      origin: 'crowdsec',
+      latitude: country[1] + (fraction(id, config.seed, 41) - 0.5) * 4,
+      longitude: country[2] + (fraction(id, config.seed, 43) - 0.5) * 4,
+      simulated: statisticsShape.simulated,
+      eventsCount: statisticsShape.eventsCount,
+      isBlocklist,
+      blocklistDecisionCount,
+      isExpiredDecisionAlert,
+      statisticsShape,
+    };
+  }
   return {
     id,
     createdAt,
@@ -306,7 +347,9 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
     asName: asTuple[0],
     asNumber: asTuple[1],
     target: isBlocklist ? 'blocklist' : scenarioTuple[2],
-    machine: pick(machines, id, config.seed, 31),
+    // Blocklist imports are not raised by an agent; in the statistics profile
+    // a machine here would keep a deliberately quiet machine active.
+    machine: isBlocklist && config.statistics ? '' : pick(machines, id, config.seed, 31),
     // List origins drop the source address, so in bursts they would only add one-alert rows.
     origin: isBlocklist
       ? (id % 2 === 0 ? 'CAPI' : 'lists')
@@ -351,7 +394,7 @@ function buildDecisionTemplate(
       : duplicate
         ? duplicateIpFor(id, config.seed)
         : alert.ip,
-    type: fraction(id, config.seed, 73) < 0.08 ? 'captcha' : 'ban',
+    type: alert.statisticsShape?.decisionType ?? (fraction(id, config.seed, 73) < 0.08 ? 'captcha' : 'ban'),
     origin: alert.origin,
     scenario: alert.scenario,
     machine: alert.machine,
@@ -392,6 +435,8 @@ function buildEvents(alert: AlertTemplate) {
 
 function buildEmbeddedDecisions(alert: AlertTemplate, config: LoadTestConfig, nowMs: number) {
   if (config.decisions === 0 || config.alerts === 0) return [];
+  // CrowdSec issues no decision for in-band AppSec blocks or unprofiled scenarios.
+  if (alert.statisticsShape && !alert.statisticsShape.bans) return [];
   const decisions = [];
   for (const decisionId of getLoadTestDecisionIdsForAlertLayout(alert.id, {
     alertCount: config.alerts,
@@ -445,6 +490,8 @@ function removeExistingDatabase(dbDir: string): void {
       rmSync(path.join(dbDir, `${file}${suffix}`), { force: true });
     }
   }
+  // A previous run's archive would not match the new synthetic cache.
+  removeStatisticsDatabase(dbDir);
 }
 
 function logProgress(label: string, current: number, total: number): void {
@@ -562,6 +609,44 @@ for (const instanceSeed of instanceSeeds) {
   }
   console.log(`${instanceSeed.name} source seeding completed in ${formatElapsed(Date.now() - alertSeedStartedAt)}.`);
   console.log(`${instanceSeed.name} embedded decisions: ${embeddedDecisionCount.toLocaleString('en-US')}/${seedConfig.decisions.toLocaleString('en-US')}`);
+}
+if (config.statistics) {
+  const lookbackDays = config.lookbackMs / 86_400_000;
+  // Cached alerts span 95% of the lookback; the archive continues at their daily rate.
+  const cacheStartMs = nowMs - config.lookbackMs * 0.95;
+  const regularAlerts = (seedConfig: LoadTestConfig) => Math.max(0, seedConfig.alerts - seedConfig.blocklistDecisionCounts.length);
+  const primaryAlerts = regularAlerts(config);
+  // A configured rate applies to the primary instance; the others keep their share of the cache volume.
+  const dailyAlertsFor = (seedConfig: LoadTestConfig) => config.statisticsDailyAlerts
+    ? Math.round(config.statisticsDailyAlerts * (primaryAlerts > 0 ? regularAlerts(seedConfig) / primaryAlerts : 1))
+    : Math.round(regularAlerts(seedConfig) / (lookbackDays * 0.95));
+  const retentionDays = Math.max(DEFAULT_STATISTICS_SETTINGS.retentionDays, config.statisticsHistoryDays);
+  // Saved like a Settings change, so the controls stay editable and CONFIG_STATISTICS_* still override.
+  database.setMeta('statistics_settings', JSON.stringify({ enabled: true, retentionDays, jobInterval: '5m', jobTimeBudget: '60s' }));
+  // The archive must use the server's instance IDs, or its coverage and cells
+  // would belong to instances the page never queries.
+  const instanceIds: readonly string[] = multiInstance
+    ? LOAD_TEST_MULTI_INSTANCE_IDS
+    : [createLoadTestRuntimeConfig(process.env, config.dbDir).instances[0].id];
+  const archiveDays = Math.max(0, config.statisticsHistoryDays - lookbackDays * 0.95);
+  const estimatedAlerts = Math.round(instanceSeeds.reduce((sum, instanceSeed) => sum + dailyAlertsFor(instanceSeed.config), 0) * archiveDays);
+  console.log(`Statistics archive: ${config.statisticsHistoryDays} days of history for ${instanceSeeds.length} instance(s) at about ${instanceSeeds.map((instanceSeed) => dailyAlertsFor(instanceSeed.config).toLocaleString('en-US')).join(' / ')} alerts per day before the cache window`);
+  // Measured: about 10,000 archived alerts per second and 1.5 KB per alert.
+  const estimatedMegabytes = estimatedAlerts * 1.5 / 1024;
+  const estimatedSize = estimatedMegabytes >= 1024 ? `${(estimatedMegabytes / 1024).toFixed(1)} GB` : `${Math.ceil(estimatedMegabytes)} MB`;
+  console.log(`Statistics archive: about ${estimatedAlerts.toLocaleString('en-US')} alerts, ${estimatedSize}, ${Math.ceil(estimatedAlerts / 10_000)} s`);
+  if (estimatedAlerts > 1_000_000) {
+    console.log(`Warning: the ${Math.round(lookbackDays)}-day cache window gives ${dailyAlertsFor(config).toLocaleString('en-US')} alerts per day. Set CONFIG_CROWDSEC_SYNC_LOOKBACK=30d or LOADTEST_STATISTICS_DAILY_ALERTS to seed a smaller archive.`);
+  }
+  instanceSeeds.forEach((instanceSeed, index) => {
+    const archiveStartedAt = Date.now();
+    const archive = seedStatisticsArchive({
+      dbDir: config.dbDir, instanceId: instanceIds[index], seed: instanceSeed.config.seed, sourceSeed: instanceSeed.config.alertIpSeed, nowMs,
+      historyDays: config.statisticsHistoryDays, cacheStartMs, dailyAlerts: dailyAlertsFor(instanceSeed.config), retentionDays,
+      log: (message) => console.log(`${instanceSeed.name} ${message}`),
+    });
+    console.log(`${instanceSeed.name} statistics archive: ${archive.alerts.toLocaleString('en-US')} alerts and ${archive.decisions.toLocaleString('en-US')} decisions in ${formatElapsed(Date.now() - archiveStartedAt)}.`);
+  });
 }
 database.close();
 

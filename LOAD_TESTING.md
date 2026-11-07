@@ -40,6 +40,8 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 ./run.sh loadtest metrics-fleet
 ./run.sh loadtest alert-sessions
 ./run.sh loadtest alert-sessions-multi
+./run.sh loadtest statistics
+./run.sh loadtest statistics-multi
 ```
 
 | Profile | Initial workload | Main use |
@@ -53,6 +55,8 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 | `metrics-fleet` | 10,000 alerts, 10,000 decisions; one central LAPI metrics endpoint with 40 remediation components, 45 log processors, and per-agent parser, AppSec, whitelist, and scenario metrics | Metrics page lists beyond their collapsed size, filtering, Show all, and totals |
 | `alert-sessions` | 300,000 alerts and decisions: 20-alert bursts from 5,000 repeat IPs, plus a 60,000-alert burst from one IP in the newest 20 minutes | Grouped Alerts paging, including the longest session read |
 | `alert-sessions-multi` | Primary 25k/25k, Secondary 15k/15k, Edge 10k/10k alerts/decisions: 20-alert bursts from 500 IPs shared by all instances, plus a 3,000-alert burst from one IP on each instance | Hands-on testing of grouped Alerts per instance and in the Combined view |
+| `statistics` | 40,000 shaped alerts and up to 40,000 decisions (including a 10,000-decision blocklist) in the cache, plus about 90,000 archived alerts covering the rest of 90 days; long-term statistics enabled | Statistics page queries, findings, finding details, and capture of the cache window |
+| `statistics-multi` | Primary 6k, Secondary 4k, Edge 2k shaped alerts (each including a small blocklist) in the cache, plus about 33,000 archived alerts at 200, 133, and 67 alerts per day covering the rest of 90 days; long-term statistics enabled | Statistics page per instance and in the Combined view, with attackers shared across instances |
 
 ### Profile details
 
@@ -64,6 +68,10 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 - `metrics-fleet` adds a `Central LAPI` metrics endpoint to the single instance. Bouncers mix stream, live, and mixed modes; machines are 70% online, 20% stale, and 10% without a heartbeat timestamp. Heartbeats are computed on each scrape, so statuses stay current. Each machine also adds a parser source, two parser nodes, and parser timing; every third machine adds an AppSec listener and every fourth a whitelist, and the fleet adds 30 scenarios.
 - `LOADTEST_METRICS_BOUNCERS` and `LOADTEST_METRICS_MACHINES` work with every profile; in multi-instance profiles the fleet is added to every metrics endpoint.
 - `alert-sessions-multi` gives one attacker a separate session on every instance it reaches. The burst exceeds the 2,000 alert IDs a session keeps, so its decision counts are partial. Small blocklists add rows without an address, and each minute adds 10 alerts per instance from five of the shared IPs, so those sessions grow while the test runs.
+- `statistics` seeds `statistics.db` with the history before the cache window through the real consolidation code, at the cache's daily rate, and records it as covered so comparisons and new-IP counts work for every preset up to 30 days (Last 90 days has no complete preceding period with the default 90-day retention). The cache window is then captured by the normal background job (every 5 minutes with a 60-second budget, saved as editable settings), so the page shows "Importing cached history" for the first minutes. Seeding takes about 8 seconds and the archive about 130 MB.
+- `statistics` alerts follow patterns each finding should report: `dev-bastion` stops reporting 12 days before the seed, `proxy-02` receives about 30% of attacks in the last week, `crowdsecurity/http-generic-bf` and `crowdsecurity/vpatch-CVE-2025-29927` appear only in the last 5 days, AppSec virtual patches and `custom/http-admin-probing` never receive a decision, 35% of alerts come from 2,400 Google LLC addresses in 60 `/24` ranges, a skewed pool of 15,000 repeat attackers returns after bans and reaches several machines, and 5% of sources are IPv6 hosts in 20 `/64` ranges. Refreshes add one alert per minute with the same patterns, close to the seeded daily rate.
+- `statistics-multi` applies the `statistics` patterns to all three instances. Instances share one attacker pool, so most IPs attack two or three of them, and each instance has its own quiet `dev-bastion` and busy `proxy-02`. The archive rate is fixed by `LOADTEST_STATISTICS_DAILY_ALERTS=200` for Primary, and Secondary and Edge get their share of the cache volume, so a short `CONFIG_CROWDSEC_SYNC_LOOKBACK` from `.env` does not inflate the archive (with `7d` the cache is denser than the archive). Refreshes add one alert and one decision per instance every 5 minutes. Seeding takes about 4 seconds and the archive about 50 MB.
+- Scale the statistics workload with `LOADTEST_ALERTS` (cache volume and daily rate), `LOADTEST_STATISTICS_HISTORY_DAYS` (archive length), and `LOADTEST_STATISTICS_DAILY_ALERTS` (archive rate; `0` follows the cache; in multi-instance profiles the rate of Primary, with the others scaled by their alert counts). The archive needs roughly 1.5 KB per alert. A shorter `CONFIG_CROWDSEC_SYNC_LOOKBACK` (for example from `.env`) packs the cached alerts into fewer days and raises the archive rate with them: with `7d`, seeding builds about 500,000 archived alerts (about 730 MB, 1 minute). The seed log prints the estimate first.
 - Set `LOADTEST_FAILING_LAPI=true` to make Edge fail for partial-availability and partial-write tests.
 - `LOADTEST_ALLOWLIST_SIZES` generates deterministic centralized allowlists, held in memory by every fake LAPI. Entries are 70% IPv4 addresses, 15% IPv4 `/28` ranges, and 15% IPv6 addresses or `/80` ranges; 60% have a description and 20% expire within 90 days, while the rest use CrowdSec's zero-time expiration. Every third allowlist is Console-managed.
 - The first allowlist starts with `45.1.0.0/16` to `45.8.0.0/16`, which cover part of the synthetic alert sources, so alert details show the Allowlisted badge and Add Decision asks for a bypass for those addresses.
@@ -146,6 +154,9 @@ LOADTEST_ALERTS=1000 LOADTEST_DECISIONS=1000 ./run.sh loadtest
 | `LOADTEST_ALLOWLIST_SIZES` | Empty | Comma-separated entry counts, one allowlist per value; works with every profile. |
 | `LOADTEST_METRICS_BOUNCERS` | `0` | Synthetic remediation components added to the metrics scrape. |
 | `LOADTEST_METRICS_MACHINES` | `0` | Synthetic log processors added to the metrics scrape. |
+| `LOADTEST_STATISTICS` | `false` | Shapes alerts for the Statistics page, seeds the archive before the cache window, and enables collection. Single-instance profiles only. |
+| `LOADTEST_STATISTICS_HISTORY_DAYS` | `90` | Days of statistics history, including the cache window; retention is at least the 90-day default. |
+| `LOADTEST_STATISTICS_DAILY_ALERTS` | `0` | Archived alerts per day; `0` uses the cache's daily rate. In multi-instance profiles it sets Primary's rate and scales the others by their alert counts. |
 
 ### Application configuration
 
@@ -180,11 +191,11 @@ services:
       LOADTEST_PROFILE: blocklists-mixed
 ```
 
-`LOADTEST_PROFILE` accepts `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, `multi-instance-medium`, `allowlists`, `metrics-fleet`, `alert-sessions`, or `alert-sessions-multi`. Individual `LOADTEST_*` and `CONFIG_*` variables override profile defaults. CrowdSec connection settings are ignored.
+`LOADTEST_PROFILE` accepts `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, `multi-instance-medium`, `allowlists`, `metrics-fleet`, `alert-sessions`, `alert-sessions-multi`, `statistics`, or `statistics-multi`. Individual `LOADTEST_*` and `CONFIG_*` variables override profile defaults. CrowdSec connection settings are ignored.
 
 ### Database Safety
 
 - Local mode defaults to `/tmp/crowdsec-web-ui-load-test`.
 - The container ignores `CONFIG_STORAGE_DATA_DIR` and uses `LOADTEST_DB_DIR`, also defaulting to `/tmp/crowdsec-web-ui-load-test` inside the container.
-- The synthetic database is recreated on every container start.
+- The synthetic database, including `statistics.db`, is recreated on every container start.
 - The `/app/data` application database is never used for synthetic seeding, even when that directory is mounted.

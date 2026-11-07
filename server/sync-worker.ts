@@ -1,3 +1,4 @@
+import { configureStatisticsCapture, readStatisticsBatch, acknowledgeStatisticsBatch } from './statistics-capture';
 import { CrowdsecDatabase, type CachedAllowlist } from './database';
 import { installTimestampedConsole } from './logging';
 import type { WorkerReadyMessage } from './worker-lifecycle';
@@ -46,6 +47,9 @@ process.on('message', (message: WorkerRequest) => {
 });
 
 function execute(request: WorkerRequest['request']): unknown {
+  if (request.type === 'statistics-configure') { configureStatisticsCapture(database.db, Boolean(request.enabled)); return; }
+  if (request.type === 'statistics-batch') return readStatisticsBatch(database.db, Boolean(request.backfill));
+  if (request.type === 'statistics-ack') return acknowledgeStatisticsBatch(database.db, request.ids as number[], String(request.cutoff));
   if (request.type === 'set-meta') {
     database.setMeta(String(request.key), String(request.value));
     return undefined;

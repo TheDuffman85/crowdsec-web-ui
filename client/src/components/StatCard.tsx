@@ -85,10 +85,10 @@ export function StatCard<TItem extends StatListItem>({
                                     aria-disabled={selectionDisabledReason ? 'true' : undefined}
                                     title={selectionDisabledReason}
                                     className={`flex items-center justify-between p-2 rounded-lg transition-colors border ${
-                                        selectionDisabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
+                                        !onSelect ? '' : selectionDisabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
                                     } ${isSelected
                                         ? 'bg-primary-50 dark:bg-primary-900/40 border-primary-200 dark:border-primary-800'
-                                        : `border-transparent ${selectionDisabledReason ? '' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`
+                                        : `border-transparent ${!onSelect || selectionDisabledReason ? '' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`
                                         }`}
                                 >
                                     <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">

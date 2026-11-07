@@ -1,3 +1,4 @@
+import { initStatisticsCaptureSchema } from './statistics-capture';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
@@ -49,10 +50,13 @@ export const OIDC_END_SESSION_LEGACY_DEFAULT_KEY = 'auth_oidc_end_session_legacy
 export const ALLOWLIST_SYNC_META_PREFIX = 'allowlist_sync:';
 
 const STATE_SETTING_KEYS = new Set([
+  'statistics_settings',
+  'statistics_existing_install_default_disabled',
   'notification_secret_key',
   'language',
   'metrics_sidebar_visible',
   'allowlists_sidebar_visible',
+  'statistics_sidebar_visible',
   'manual_decision_scenarios',
   'refresh_interval_ms',
   'manual_refresh_enabled',
@@ -487,6 +491,7 @@ export class CrowdsecDatabase {
     this.db = opened.database;
     this.wasFresh = opened.wasFresh;
     this.searchIndexAvailable = initCacheSchema(this.db);
+    initStatisticsCaptureSchema(this.db);
     if (this.statePath) {
       attachStateDatabase(this.db, this.statePath);
       restoreAlertDeletionTombstones(this.db);
@@ -1030,8 +1035,9 @@ export class CrowdsecDatabase {
     const dashboardTrackingEnabled = this.getMeta('dashboard_change_tracking_enabled')?.value !== 'false';
     if (dashboardTrackingEnabled) this.setMeta('dashboard_change_tracking_enabled', 'false');
     try {
-      this.db.exec('DELETE FROM alerts');
       this.db.exec('DELETE FROM decisions');
+      this.db.exec('DELETE FROM alerts');
+      this.db.exec("DELETE FROM meta WHERE key IN ('statistics_backfill_alerts', 'statistics_backfill_decisions')");
       this.db.exec('DELETE FROM allowlists');
       this.db.exec('DELETE FROM allowlist_items');
       this.db.exec(`DELETE FROM meta WHERE key LIKE '${ALLOWLIST_SYNC_META_PREFIX}%'`);
@@ -2172,6 +2178,11 @@ export class CrowdsecDatabase {
 
   isAuthMigrationDefaultDisabled(): boolean {
     return this.getMeta('auth_existing_install_default_disabled')?.value === 'true';
+  }
+
+  /** Statistics collection is on by default only for installations created with it. */
+  isStatisticsMigrationDefaultDisabled(): boolean {
+    return this.getMeta('statistics_existing_install_default_disabled')?.value === 'true';
   }
 
   countAuthUsers(): number {
@@ -3403,6 +3414,9 @@ function createStateSchema(db: Database, schema: string, fresh: boolean): void {
   }
   // Only new installations enable authentication by default; migrated ones keep their previous state.
   db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('auth_existing_install_default_disabled', ?)`)
+    .run(fresh ? 'false' : 'true');
+  // Long-term statistics are opt-in for installations that existed before them.
+  db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('statistics_existing_install_default_disabled', ?)`)
     .run(fresh ? 'false' : 'true');
   // Existing installations are resolved on startup, once the effective OIDC configuration is known.
   db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('${OIDC_END_SESSION_LEGACY_DEFAULT_KEY}', ?)`)

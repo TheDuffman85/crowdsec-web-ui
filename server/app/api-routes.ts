@@ -4,6 +4,8 @@ import type {
   AlertRecord,
   AllowlistedDecisionResponse,
   AllowlistMatch,
+  BulkAddDecisionRequest,
+  BulkAddDecisionResponse,
   BulkDeleteResult,
   BulkDeleteRequest,
   CleanupByIpRequest,
@@ -19,10 +21,11 @@ import type {
   UpdateManualRefreshSettingRequest,
   UpdateMetricsSidebarPreferenceRequest,
   UpdateAllowlistsSidebarPreferenceRequest,
+  UpdateStatisticsSidebarPreferenceRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../../shared/contracts';
-import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from '../../shared/contracts';
+import { BULK_ADD_DECISIONS_MAX, DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from '../../shared/contracts';
 import type { AuditOutcome } from '../audit-log';
 import { resolveManagedSettingSource, type RuntimeConfig } from '../config';
 import type { CrowdsecDatabase } from '../database';
@@ -33,6 +36,8 @@ import type { PrometheusSample } from '../metrics';
 import type { DashboardStatsFilters } from './types';
 
 type HonoContext = any;
+/** Live LAPI allowlist checks in flight at once during a bulk add. */
+const BULK_ALLOWLIST_CHECK_CONCURRENCY = 8;
 type AnyError = Error & {
   code?: string;
   response?: { data?: unknown; status: number };
@@ -46,6 +51,7 @@ export interface ApiRouteState {
   manualRefreshEnabled: boolean;
   metricsSidebarVisible: boolean;
   allowlistsSidebarVisible: boolean;
+  statisticsSidebarVisible: boolean;
   manualDecisionScenarios: string[];
   cacheRefreshCompletedAt: string | null;
   cache: { isInitialized: boolean; isComplete: boolean; lastUpdate: string | null };
@@ -165,6 +171,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     saveManualDecisionScenarios,
     saveMetricsSidebarVisible,
     saveAllowlistsSidebarVisible,
+    saveStatisticsSidebarVisible,
     savePersistedConfig,
     startRefreshScheduler,
     syncStatus,
@@ -687,6 +694,9 @@ const managedConfigSettings: Partial<Record<ManagedConfigSetting, ManagedSetting
   ...(config.allowlistsSidebarVisibleManaged
     ? { allowlists_sidebar_visible: resolveManagedSettingSource(config.configEnvironmentOverrides, 'ui.allowlistsSidebarVisible') }
     : {}),
+  ...(config.statisticsSidebarVisibleManaged
+    ? { statistics_sidebar_visible: resolveManagedSettingSource(config.configEnvironmentOverrides, 'ui.statisticsSidebarVisible') }
+    : {}),
   ...(config.refreshIntervalManaged
     ? { refresh_interval: resolveManagedSettingSource(config.configEnvironmentOverrides, 'crowdsec.sync.refreshInterval') }
     : {}),
@@ -701,12 +711,12 @@ const preferenceUserId = (context: HonoContext): number | null => {
   const userId = dashboardAuth.getSession(context)?.userId;
   return userId && userId > 0 ? userId : null;
 };
-const SIDEBAR_PREFERENCE_KEYS = ['metrics_sidebar_visible', 'allowlists_sidebar_visible'] as const;
+const SIDEBAR_PREFERENCE_KEYS = ['metrics_sidebar_visible', 'allowlists_sidebar_visible', 'statistics_sidebar_visible'] as const;
 // The configuration locks a sidebar for everyone; otherwise a user's choice wins over the instance-wide value.
 const resolveSidebarVisibility = (context: HonoContext) => {
   const userId = preferenceUserId(context);
   const preferences = userId ? database.getUserPreferences(userId) : {};
-  const [metricsKey, allowlistsKey] = SIDEBAR_PREFERENCE_KEYS;
+  const [metricsKey, allowlistsKey, statisticsKey] = SIDEBAR_PREFERENCE_KEYS;
   return {
     metrics_sidebar_visible: !config.metricsSidebarVisibleManaged && preferences[metricsKey] !== undefined
       ? preferences[metricsKey] === 'true'
@@ -714,6 +724,9 @@ const resolveSidebarVisibility = (context: HonoContext) => {
     allowlists_sidebar_visible: !config.allowlistsSidebarVisibleManaged && preferences[allowlistsKey] !== undefined
       ? preferences[allowlistsKey] === 'true'
       : state.allowlistsSidebarVisible,
+    statistics_sidebar_visible: !config.statisticsSidebarVisibleManaged && preferences[statisticsKey] !== undefined
+      ? preferences[statisticsKey] === 'true'
+      : state.statisticsSidebarVisible,
   };
 };
 const FONT_PREFERENCE_PATTERN = /^[a-z0-9-]{1,64}$/;
@@ -726,6 +739,7 @@ const managedByConfigResponse = (context: HonoContext, setting: string) => conte
 app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
   const hours = lookbackHours(config.lookbackPeriod);
   const payload: ConfigResponse = {
+    statistics: dependencies.statistics.configuration(),
     lookback_period: config.lookbackPeriod,
     lookback_hours: hours,
     lookback_days: Math.max(1, Math.round(hours / 24)),
@@ -924,6 +938,31 @@ app.put(`${config.basePath}/api/config/allowlists-sidebar`, ensureAuth, async (c
   } catch (error: any) {
     console.error('Error updating allowlists sidebar preference:', error.message);
     return context.json({ error: 'Failed to update allowlists sidebar preference' }, 500);
+  }
+});
+
+app.put(`${config.basePath}/api/config/statistics-sidebar`, ensureAuth, async (context) => {
+  const userId = preferenceUserId(context);
+  // Display preferences remain editable in read-only mode, including without dashboard authentication.
+  if (config.statisticsSidebarVisibleManaged) return managedByConfigResponse(context, 'Statistics sidebar visibility');
+
+  try {
+    const body = await context.req.json<UpdateStatisticsSidebarPreferenceRequest>();
+    if (typeof body.visible !== 'boolean') {
+      return context.json({ error: 'visible must be a boolean' }, 400);
+    }
+
+    if (userId) {
+      await syncWorker.runExclusive(() => database.setUserPreference(userId, 'statistics_sidebar_visible', String(body.visible)));
+    } else {
+      await syncWorker.runExclusive(() => saveStatisticsSidebarVisible(database, body.visible));
+      state.statisticsSidebarVisible = body.visible;
+    }
+
+    return context.json({ success: true, statistics_sidebar_visible: body.visible });
+  } catch (error: any) {
+    console.error('Error updating statistics sidebar preference:', error.message);
+    return context.json({ error: 'Failed to update statistics sidebar preference' }, 500);
   }
 });
 
@@ -1523,6 +1562,23 @@ app.get(`${config.basePath}/api/dashboard/stats`, ensureAuth, ensurePublishedRev
   }
 });
 
+/** Validates the settings shared by single and bulk decision adds. */
+function parseDecisionSettings(body: Omit<AddDecisionRequest, 'ip'>): { error: string } | { duration: string; reason: string; type: string; scenario: string } {
+  const duration = body.duration || '4h';
+  const reason = body.reason || 'manual';
+  const type = body.type || 'ban';
+  const scenario = typeof body.scenario === 'string' && body.scenario.trim()
+    ? body.scenario.trim()
+    : DEFAULT_MANUAL_DECISION_SCENARIO;
+  const validTypes = ['ban', 'captcha'];
+  if (!validTypes.includes(type)) return { error: `Invalid type. Must be one of: ${validTypes.join(', ')}` };
+  if (!/^\d+[smhd]$/.test(duration)) return { error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' };
+  if ((body.scenario != null && typeof body.scenario !== 'string') || !isValidDecisionScenario(scenario)) {
+    return { error: `Invalid scenario format. Use e.g. "${DEFAULT_MANUAL_DECISION_SCENARIO}"` };
+  }
+  return { duration, reason, type, scenario };
+}
+
 app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
   const readOnlyResponse = ensureCanManageEnforcement(context);
   if (readOnlyResponse) return readOnlyResponse;
@@ -1530,12 +1586,6 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
   const doRequest = async () => {
     const body = await context.req.json<AddDecisionRequest>();
     const ip = body.ip;
-    const duration = body.duration || '4h';
-    const reason = body.reason || 'manual';
-    const type = body.type || 'ban';
-    const scenario = typeof body.scenario === 'string' && body.scenario.trim()
-      ? body.scenario.trim()
-      : DEFAULT_MANUAL_DECISION_SCENARIO;
 
     if (!ip) {
       return context.json({ error: 'IP address is required' }, 400);
@@ -1545,18 +1595,9 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       return context.json({ error: 'Invalid IP address format' }, 400);
     }
 
-    const validTypes = ['ban', 'captcha'];
-    if (!validTypes.includes(type)) {
-      return context.json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` }, 400);
-    }
-
-    if (!/^\d+[smhd]$/.test(duration)) {
-      return context.json({ error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' }, 400);
-    }
-
-    if ((body.scenario != null && typeof body.scenario !== 'string') || !isValidDecisionScenario(scenario)) {
-      return context.json({ error: `Invalid scenario format. Use e.g. "${DEFAULT_MANUAL_DECISION_SCENARIO}"` }, 400);
-    }
+    const settings = parseDecisionSettings(body);
+    if ('error' in settings) return context.json({ error: settings.error }, 400);
+    const { duration, reason, type, scenario } = settings;
 
     const targets = resolveOperationInstances(body.scope, body.instance_id);
     if ('error' in targets) return context.json({ error: targets.error }, 400);
@@ -1629,6 +1670,107 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
     return await doRequest();
   } catch (error) {
     return handleApiError(error as AnyError, context, 'adding decision', doRequest);
+  }
+});
+
+app.post(`${config.basePath}/api/decisions/bulk-add`, ensureAuth, async (context) => {
+  const readOnlyResponse = ensureCanManageEnforcement(context);
+  if (readOnlyResponse) return readOnlyResponse;
+
+  const doRequest = async () => {
+    const body = await context.req.json<BulkAddDecisionRequest>();
+    if (!Array.isArray(body.values) || body.values.length === 0) {
+      return context.json({ error: 'At least one value is required' }, 400);
+    }
+    const values = [...new Set(body.values.map((value) => (typeof value === 'string' ? value.trim() : '')))];
+    if (values.length > BULK_ADD_DECISIONS_MAX) {
+      return context.json({ error: `At most ${BULK_ADD_DECISIONS_MAX} values can be added at once` }, 400);
+    }
+    const invalid = values.find((value) => !value || !isValidIpOrRange(value));
+    if (invalid !== undefined) return context.json({ error: `Invalid IP address format: ${invalid}` }, 400);
+    const settings = parseDecisionSettings(body);
+    if ('error' in settings) return context.json({ error: settings.error }, 400);
+    const { duration, reason, type, scenario } = settings;
+
+    const targets = resolveOperationInstances(body.scope, body.instance_id);
+    if ('error' in targets) return context.json({ error: targets.error }, 400);
+    const bypassAllowlist = body.bypass_allowlist === true;
+    // Allowlisted values are skipped rather than failing the whole request,
+    // and reported so they can be resent with an explicit bypass.
+    const allowlisted: BulkAddDecisionResponse['allowlisted'] = [];
+    if (!bypassAllowlist) {
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(BULK_ALLOWLIST_CHECK_CONCURRENCY, values.length) }, async () => {
+        while (next < values.length) {
+          const value = values[next++];
+          const check = await allowlistService.checkValue(targets, value);
+          const matches: AllowlistMatch[] = check.results.flatMap((result) => {
+            if (result.status === 'unavailable') console.warn(`[decisions] Allowlist check for ${value} failed on ${result.instance_name}: ${result.error}`);
+            return result.allowlisted
+              ? [{ instance_id: result.instance_id, instance_name: result.instance_name, ...(result.reason ? { reason: result.reason } : {}) }]
+              : [];
+          });
+          if (matches.length > 0) allowlisted.push({ value, allowlisted: matches });
+        }
+      }));
+    }
+    const skipped = new Set(allowlisted.map((entry) => entry.value));
+    const added = values.filter((value) => !skipped.has(value));
+    allowlisted.sort((a, b) => values.indexOf(a.value) - values.indexOf(b.value));
+    if (added.length === 0) {
+      const response: BulkAddDecisionResponse = { added, allowlisted, results: [], succeeded: 0, failed: 0 };
+      return context.json(response);
+    }
+
+    const targetOutcomes = new Map<string, AuditOutcome>();
+    const results = await Promise.all(targets.map(async (instance: RuntimeConfig['instances'][number]) => {
+      const client = lapiClients.get(instance.id)!;
+      let upstreamAdded = false;
+      try {
+        const result = await client.addDecisions(added, type, duration, reason.slice(0, 256), scenario);
+        upstreamAdded = true;
+        if (instance.id === primaryInstance.id) await updateCacheDelta({ publishUnchanged: true });
+        else await syncInstanceDelta(instance.id);
+        targetOutcomes.set(instance.id, 'success');
+        return { instance_id: instance.id, instance_name: instance.name, success: true, result };
+      } catch (error: any) {
+        targetOutcomes.set(instance.id, upstreamAdded ? 'partial' : 'failure');
+        return { instance_id: instance.id, instance_name: instance.name, success: false, error: error?.message || String(error) };
+      }
+    }));
+    const succeeded = results.filter((result) => result.success).length;
+    for (const result of results) {
+      if (result.success) console.log(`[decisions] Added ${added.length} ${type} decisions (${duration}, ${scenario}). Instance: ${result.instance_name}.`);
+    }
+    const instanceResultEntries = results.map((result) => ({
+      instance_id: result.instance_id,
+      instance: result.instance_name,
+      outcome: targetOutcomes.get(result.instance_id) || 'failure',
+    }));
+    const instanceResults = capAuditEntries(instanceResultEntries);
+    const auditValues = capAuditEntries(added);
+    auditLog.record(context, {
+      action: 'decision.add',
+      values: auditValues.entries,
+      type,
+      scenario,
+      duration,
+      reason: reason.slice(0, 256),
+      ...(bypassAllowlist ? { bypass_allowlist: true } : {}),
+      instances: results.map((result) => result.instance_name),
+      instance_results: instanceResults.entries,
+      ...(instanceResults.truncated || auditValues.truncated ? { truncated: true } : {}),
+      outcome: auditTargetOutcome(instanceResultEntries.map((result) => result.outcome)),
+    });
+    if (succeeded > 0) void runNotificationEvaluation('manual decision add');
+    const response: BulkAddDecisionResponse = { added, allowlisted, results, succeeded, failed: results.length - succeeded };
+    return context.json(response, succeeded === results.length ? 200 : succeeded > 0 ? 207 : 502);
+  };
+
+  try {
+    return await doRequest();
+  } catch (error) {
+    return handleApiError(error as AnyError, context, 'adding decisions', doRequest);
   }
 });
 
