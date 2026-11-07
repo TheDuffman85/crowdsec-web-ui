@@ -64,7 +64,8 @@ type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
 type PercentageBasis = 'filtered' | 'global';
 type TopSourceMode = 'as' | 'ip';
-type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target';
+type TopTargetMode = 'target' | 'machine';
+type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target' | 'machine';
 type DashboardStatListItem = DashboardStatsResponse['topCountries'][number];
 
 const DASHBOARD_QUICK_FILTER_FIELDS: FacetField[] = [
@@ -91,6 +92,7 @@ const DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS: FacetField[] = [
 const DASHBOARD_SEARCH_FEATURES = { machineEnabled: true, originEnabled: true };
 const PERCENTAGE_BASES: PercentageBasis[] = ['filtered', 'global'];
 const TOP_SOURCE_MODES: TopSourceMode[] = ['as', 'ip'];
+const TOP_TARGET_MODES: TopTargetMode[] = ['target', 'machine'];
 
 const DASHBOARD_ALL_QUICK_FILTER_FIELDS = new Set<FacetField>([
     ...DASHBOARD_QUICK_FILTER_FIELDS,
@@ -135,6 +137,7 @@ const EMPTY_DASHBOARD_STATS: DashboardStatsResponse = {
     filteredTotals: EMPTY_TOTALS,
     globalTotal: 0,
     topTargets: [],
+    topMachines: [],
     topCountries: [],
     allCountries: [],
     attackLocations: [],
@@ -180,6 +183,10 @@ function parseStoredPercentageBasis(value: string | null): PercentageBasis {
 
 function parseStoredTopSourceMode(value: string | null): TopSourceMode {
     return value === 'ip' ? 'ip' : 'as';
+}
+
+function parseStoredTopTargetMode(value: string | null): TopTargetMode {
+    return value === 'machine' ? 'machine' : 'target';
 }
 
 function parseLegacyStoredFilters(value: string | null): DashboardFilters {
@@ -675,6 +682,7 @@ export function Dashboard() {
     // Percentage Basis: 'filtered' or 'global'
     const [percentageBasis, setPercentageBasis] = useState<PercentageBasis>(() => parseStoredPercentageBasis(localStorage.getItem('dashboard_percentage_basis')));
     const [topSourceMode, setTopSourceMode] = useState<TopSourceMode>(() => parseStoredTopSourceMode(localStorage.getItem('dashboard_top_source_mode')));
+    const [topTargetMode, setTopTargetMode] = useState<TopTargetMode>(() => parseStoredTopTargetMode(localStorage.getItem('dashboard_top_target_mode')));
     const [dashboardSearchDraft, setDashboardSearchDraft] = useState(() => (
         initialStoredFilters.quickFiltersCompatible
             ? combineDashboardSearchQuery(
@@ -756,6 +764,12 @@ export function Dashboard() {
             quickFiltersAppliedCompatible,
         ],
     );
+    // Machine selections travel to the server in `q` only, so they are not part
+    // of DashboardFilters; the card still needs the single selected value.
+    const selectedMachine = useMemo(
+        () => getSingleIncludedSelection(effectiveQuickFilters, 'machine'),
+        [effectiveQuickFilters],
+    );
     const dashboardAlertFacetAst = useMemo(
         () => buildStoredSearchAst(effectiveQuickFilters, ALERT_QUICK_FILTER_FIELDS, false),
         [effectiveQuickFilters],
@@ -793,6 +807,10 @@ export function Dashboard() {
     useEffect(() => {
         localStorage.setItem('dashboard_top_source_mode', topSourceMode);
     }, [topSourceMode]);
+
+    useEffect(() => {
+        localStorage.setItem('dashboard_top_target_mode', topTargetMode);
+    }, [topTargetMode]);
 
     const finishFilterApplication = useCallback(() => {
         filterApplyingRef.current = false;
@@ -1153,6 +1171,11 @@ export function Dashboard() {
                 filters.target,
                 (target) => ({ label: target, count: 0 }),
             ),
+            topMachines: withSelectedZeroItem(
+                scopeStaleStatItemsToSelected(dashboardData.topMachines ?? [], selectedMachine, isDashboardStatsStaleForFilters),
+                selectedMachine,
+                (machine) => ({ label: machine, value: machine, count: 0 }),
+            ),
             topCountries: withSelectedZeroItem(
                 scopeStaleStatItemsToSelected(dashboardData.topCountries, filters.country, isDashboardStatsStaleForFilters),
                 filters.country,
@@ -1190,7 +1213,7 @@ export function Dashboard() {
             unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory, formatDate, formatTime),
             unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory, formatDate, formatTime),
         };
-    }, [dashboardData, filters.as, filters.country, filters.ip, filters.scenario, filters.target, formatDate, formatTime, isDashboardStatsStaleForFilters]);
+    }, [dashboardData, filters.as, filters.country, filters.ip, filters.scenario, filters.target, formatDate, formatTime, isDashboardStatsStaleForFilters, selectedMachine]);
     
 
     // Handle Filters
@@ -1437,6 +1460,12 @@ export function Dashboard() {
     const selectedAsValues = getStoredQuickFilterSelection(persistedQuickFilters, 'as').included;
     const selectedIpValues = getStoredQuickFilterSelection(persistedQuickFilters, 'ip').included;
     const selectedTargetValues = getStoredQuickFilterSelection(persistedQuickFilters, 'target').included;
+    const selectedMachineValues = getStoredQuickFilterSelection(persistedQuickFilters, 'machine').included;
+    // A machine may be selected by ID (Quick Filters) or by alias (typed query or
+    // URL); highlight the row in both cases.
+    const selectedMachineRowValues = statistics.topMachines
+        .filter((item) => selectedMachineValues.includes(item.value ?? item.label) || selectedMachineValues.includes(item.label))
+        .map((item) => item.value ?? item.label);
     const dashboardFacetFilters = buildDashboardStatsFilters();
     const dashboardRefreshing = backgroundRefreshing || dashboardStatsPending || filterApplying;
 
@@ -1755,14 +1784,34 @@ export function Dashboard() {
                             />
                         )}
                     />
-                    <StatCard
-                        title={t('pages.dashboard.topTargets')}
-                        items={statistics.topTargets}
-                        onSelect={(item) => toggleFilter('target', item.label)}
-                        selectedValue={filters.target}
-                        selectedValues={selectedTargetValues}
+                    <StatCard<DashboardStatListItem>
+                        title={t(topTargetMode === 'machine' ? 'pages.dashboard.topMachines' : 'pages.dashboard.topTargets')}
+                        items={topTargetMode === 'machine' ? statistics.topMachines : statistics.topTargets}
+                        onSelect={(item) => {
+                            if (topTargetMode === 'target') {
+                                toggleFilter('target', item.label);
+                                return;
+                            }
+                            // Rows carry the machine ID as `value`; an existing selection may
+                            // still name the alias (typed query or URL). Toggle whichever form
+                            // is selected so a click clears it instead of adding a duplicate.
+                            const machineId = item.value ?? item.label;
+                            const selected = selectedMachineValues.find((value) => value === machineId || value === item.label);
+                            toggleFilter('machine', selected ?? machineId);
+                        }}
+                        selectedValue={topTargetMode === 'machine' ? selectedMachine : filters.target}
+                        selectedValues={topTargetMode === 'machine' ? selectedMachineRowValues : selectedTargetValues}
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                         selectionDisabledReason={quickFilterDisabledReason}
+                        headerAction={(
+                            <StatCardToggle
+                                label={t('pages.dashboard.groupBy')}
+                                options={TOP_TARGET_MODES}
+                                value={topTargetMode}
+                                onChange={setTopTargetMode}
+                                getOptionLabel={(mode) => t(mode === 'machine' ? 'pages.dashboard.machines' : 'pages.dashboard.targets')}
+                            />
+                        )}
                     />
                 </div>
             </div>

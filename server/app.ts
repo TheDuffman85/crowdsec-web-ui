@@ -127,6 +127,7 @@ import {
 } from './app/request-parsing';
 import {
   addDashboardAlert,
+  addDashboardAlertBuckets,
   addDashboardDecision,
   addDashboardDecisionCountry,
   compareDashboardDecisionRank,
@@ -135,6 +136,7 @@ import {
   dashboardBuckets,
   dashboardCountryList,
   dashboardIpList,
+  dashboardMachineList,
   dashboardWorldMapData,
   getDashboardBucketKey,
   getDashboardBucketKeys,
@@ -946,6 +948,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     attackLocationResolver,
     addDashboardAttackLocation,
     addDashboardAlert,
+    addDashboardAlertBuckets,
     addDashboardDecision,
     addDashboardDecisionCountry,
     addIpCondition,
@@ -966,6 +969,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     dashboardBuckets,
     dashboardCountryList,
     dashboardIpList,
+    dashboardMachineList,
     dashboardWorldMapData,
     database,
     decisionFieldCondition,

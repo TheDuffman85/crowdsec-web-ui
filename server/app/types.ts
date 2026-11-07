@@ -143,6 +143,8 @@ export interface DashboardStatsAccumulator {
   asNames: Map<string, number>;
   ips: Map<string, { count: number; countryCode?: string }>;
   targets: Map<string, number>;
+  /** Keyed by normalized machine ID; `label` is the latest resolved name. */
+  machines: Map<string, { count: number; label: string }>;
   liveAlertBuckets: Map<string, number>;
   simulatedAlertBuckets: Map<string, number>;
 }

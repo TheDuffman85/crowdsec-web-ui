@@ -314,6 +314,59 @@ describe('createApp dashboard API', () => {
     destroyTempDir();
   });
 
+  test('ranks attacked machines by resolved name and narrows them with an exact machine filter', async () => {
+    const machineAlert = (id: number, ip: string, machine: Pick<AlertRecord, 'machine_id' | 'machine_alias'>) => sampleAlert({
+      id,
+      uuid: `dashboard-machine-${id}`,
+      ...machine,
+      source: { ip, value: ip, cn: 'DE' },
+      decisions: (sampleAlert().decisions || []).map((decision) => ({ ...decision, id: id * 10, value: ip })),
+    });
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    seedAlert(database, machineAlert(801, '192.0.2.1', { machine_id: 'web-01-id', machine_alias: 'web-01' }));
+    seedAlert(database, machineAlert(802, '192.0.2.2', { machine_id: 'web-01-id', machine_alias: 'web-01' }));
+    seedAlert(database, machineAlert(803, '192.0.2.3', { machine_id: 'mail-gw' }));
+    seedAlert(database, machineAlert(804, '192.0.2.4', { machine_id: 'N/A' }));
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      const payload = await response.json() as DashboardStatsResponse;
+      expect(payload.topMachines).toEqual([
+        { label: 'web-01', value: 'web-01-id', count: 2 },
+        { label: 'mail-gw', value: 'mail-gw', count: 1 },
+      ]);
+      expect(payload.series.alertsHistory.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(4);
+      expect(payload.series.unfilteredAlertsHistory.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(4);
+
+      // Card rows must use the same value as the Quick Filter machine facet,
+      // otherwise a stored selection and its row cannot be matched.
+      const facetResponse = await controller.fetch(new Request(
+        'http://localhost/crowdsec/api/alerts/facets?field=machine',
+      ));
+      const facetValues = (await facetResponse.json() as { values: Array<{ value: string }> }).values
+        .map((facet) => facet.value);
+      expect(facetValues).toEqual(expect.arrayContaining(payload.topMachines.map((item) => item.value)));
+
+      for (const machine of ['web-01-id', 'web-01']) {
+        const params = new URLSearchParams({ q: `machine=${machine}`, decision_q: `machine=${machine}` });
+        const filteredResponse = await controller.fetch(new Request(
+          `http://localhost/crowdsec/api/dashboard/stats?${params.toString()}`,
+        ));
+        const filteredPayload = await filteredResponse.json() as DashboardStatsResponse;
+        expect(filteredPayload.filteredTotals.alerts).toBe(2);
+        expect(filteredPayload.topMachines).toEqual([{ label: 'web-01', value: 'web-01-id', count: 2 }]);
+        expect(filteredPayload.series.alertsHistory.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(2);
+        expect(filteredPayload.series.unfilteredAlertsHistory.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(2);
+      }
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('keeps an exact target selection consistent between dashboard stats and alert drilldown', async () => {
     const alerts = [
       sampleAlert({

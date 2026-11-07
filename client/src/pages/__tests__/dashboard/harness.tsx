@@ -71,6 +71,7 @@ function buildDashboardStatsResponse(filters?: Record<string, string>) {
     },
     globalTotal: allAlertCount,
     topTargets: liveAlertCount ? [{ label: 'ssh', count: liveAlertCount }] : [],
+    topMachines: liveAlertCount ? [{ label: 'web-01', value: 'web-01-id', count: liveAlertCount }] : [],
     topCountries: liveAlertCount ? [{ label: 'Germany', value: 'DE', countryCode: 'DE', count: liveAlertCount }] : [],
     allCountries: [
       {
