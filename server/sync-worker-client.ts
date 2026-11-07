@@ -1,3 +1,4 @@
+import type { StatisticsOutboxRow } from './statistics-capture';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseWorker as Worker } from './database-worker';
 import { isWorkerReadyMessage, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
@@ -49,6 +50,9 @@ export interface DatabaseTransactionOptions {
 }
 
 type SyncWorkerRequest =
+  | { type: 'statistics-configure'; enabled: boolean }
+  | { type: 'statistics-batch'; backfill: boolean }
+  | { type: 'statistics-ack'; ids: number[]; cutoff: string }
   | { type: 'set-meta'; key: string; value: string }
   | { type: 'persist-alerts'; mutations: SyncAlertMutation[] }
   | { type: 'compare-alert-decisions'; comparisons: AlertDecisionComparison[] }
@@ -107,6 +111,18 @@ export class DatabaseSyncWorker {
     this.incrementalVacuumEnabled = options.incrementalVacuumEnabled ?? true;
     this.journalSizeLimitBytes = options.journalSizeLimitBytes ?? 128 * 1024 * 1024;
     this.timeoutMs = options.timeoutMs ?? 10 * 60_000;
+  }
+
+  configureStatistics(enabled: boolean): Promise<void> {
+    return this.execute({ type: 'statistics-configure', enabled });
+  }
+
+  statisticsBatch(backfill: boolean): Promise<{ rows: StatisticsOutboxRow[]; backlog: number; backfillPending: boolean; coverageFrom: Record<string, string> }> {
+    return this.execute({ type: 'statistics-batch', backfill });
+  }
+
+  acknowledgeStatistics(ids: number[], cutoff: string): Promise<boolean> {
+    return this.execute({ type: 'statistics-ack', ids, cutoff });
   }
 
   persistAlerts(mutations: SyncAlertMutation[]): Promise<{ changed: boolean }> {

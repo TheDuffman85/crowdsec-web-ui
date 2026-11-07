@@ -19,6 +19,7 @@ import type {
   UpdateManualRefreshSettingRequest,
   UpdateMetricsSidebarPreferenceRequest,
   UpdateAllowlistsSidebarPreferenceRequest,
+  UpdateStatisticsSidebarPreferenceRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../../shared/contracts';
@@ -46,6 +47,7 @@ export interface ApiRouteState {
   manualRefreshEnabled: boolean;
   metricsSidebarVisible: boolean;
   allowlistsSidebarVisible: boolean;
+  statisticsSidebarVisible: boolean;
   manualDecisionScenarios: string[];
   cacheRefreshCompletedAt: string | null;
   cache: { isInitialized: boolean; isComplete: boolean; lastUpdate: string | null };
@@ -165,6 +167,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     saveManualDecisionScenarios,
     saveMetricsSidebarVisible,
     saveAllowlistsSidebarVisible,
+    saveStatisticsSidebarVisible,
     savePersistedConfig,
     startRefreshScheduler,
     syncStatus,
@@ -687,6 +690,9 @@ const managedConfigSettings: Partial<Record<ManagedConfigSetting, ManagedSetting
   ...(config.allowlistsSidebarVisibleManaged
     ? { allowlists_sidebar_visible: resolveManagedSettingSource(config.configEnvironmentOverrides, 'ui.allowlistsSidebarVisible') }
     : {}),
+  ...(config.statisticsSidebarVisibleManaged
+    ? { statistics_sidebar_visible: resolveManagedSettingSource(config.configEnvironmentOverrides, 'ui.statisticsSidebarVisible') }
+    : {}),
   ...(config.refreshIntervalManaged
     ? { refresh_interval: resolveManagedSettingSource(config.configEnvironmentOverrides, 'crowdsec.sync.refreshInterval') }
     : {}),
@@ -701,12 +707,12 @@ const preferenceUserId = (context: HonoContext): number | null => {
   const userId = dashboardAuth.getSession(context)?.userId;
   return userId && userId > 0 ? userId : null;
 };
-const SIDEBAR_PREFERENCE_KEYS = ['metrics_sidebar_visible', 'allowlists_sidebar_visible'] as const;
+const SIDEBAR_PREFERENCE_KEYS = ['metrics_sidebar_visible', 'allowlists_sidebar_visible', 'statistics_sidebar_visible'] as const;
 // The configuration locks a sidebar for everyone; otherwise a user's choice wins over the instance-wide value.
 const resolveSidebarVisibility = (context: HonoContext) => {
   const userId = preferenceUserId(context);
   const preferences = userId ? database.getUserPreferences(userId) : {};
-  const [metricsKey, allowlistsKey] = SIDEBAR_PREFERENCE_KEYS;
+  const [metricsKey, allowlistsKey, statisticsKey] = SIDEBAR_PREFERENCE_KEYS;
   return {
     metrics_sidebar_visible: !config.metricsSidebarVisibleManaged && preferences[metricsKey] !== undefined
       ? preferences[metricsKey] === 'true'
@@ -714,6 +720,9 @@ const resolveSidebarVisibility = (context: HonoContext) => {
     allowlists_sidebar_visible: !config.allowlistsSidebarVisibleManaged && preferences[allowlistsKey] !== undefined
       ? preferences[allowlistsKey] === 'true'
       : state.allowlistsSidebarVisible,
+    statistics_sidebar_visible: !config.statisticsSidebarVisibleManaged && preferences[statisticsKey] !== undefined
+      ? preferences[statisticsKey] === 'true'
+      : state.statisticsSidebarVisible,
   };
 };
 const FONT_PREFERENCE_PATTERN = /^[a-z0-9-]{1,64}$/;
@@ -726,6 +735,7 @@ const managedByConfigResponse = (context: HonoContext, setting: string) => conte
 app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
   const hours = lookbackHours(config.lookbackPeriod);
   const payload: ConfigResponse = {
+    statistics: dependencies.statistics.configuration(),
     lookback_period: config.lookbackPeriod,
     lookback_hours: hours,
     lookback_days: Math.max(1, Math.round(hours / 24)),
@@ -924,6 +934,31 @@ app.put(`${config.basePath}/api/config/allowlists-sidebar`, ensureAuth, async (c
   } catch (error: any) {
     console.error('Error updating allowlists sidebar preference:', error.message);
     return context.json({ error: 'Failed to update allowlists sidebar preference' }, 500);
+  }
+});
+
+app.put(`${config.basePath}/api/config/statistics-sidebar`, ensureAuth, async (context) => {
+  const userId = preferenceUserId(context);
+  // Display preferences remain editable in read-only mode, including without dashboard authentication.
+  if (config.statisticsSidebarVisibleManaged) return managedByConfigResponse(context, 'Statistics sidebar visibility');
+
+  try {
+    const body = await context.req.json<UpdateStatisticsSidebarPreferenceRequest>();
+    if (typeof body.visible !== 'boolean') {
+      return context.json({ error: 'visible must be a boolean' }, 400);
+    }
+
+    if (userId) {
+      await syncWorker.runExclusive(() => database.setUserPreference(userId, 'statistics_sidebar_visible', String(body.visible)));
+    } else {
+      await syncWorker.runExclusive(() => saveStatisticsSidebarVisible(database, body.visible));
+      state.statisticsSidebarVisible = body.visible;
+    }
+
+    return context.json({ success: true, statistics_sidebar_visible: body.visible });
+  } catch (error: any) {
+    console.error('Error updating statistics sidebar preference:', error.message);
+    return context.json({ error: 'Failed to update statistics sidebar preference' }, 500);
   }
 });
 

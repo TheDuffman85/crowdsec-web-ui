@@ -20,11 +20,17 @@
 #   basePath: ""
 #   hostname: crowdsec.example.com # Name announced to remote services, such as the SMTP EHLO name; defaults to localhost.
 
+# statistics:
+#   enabled: false # Opt in to durable historical attack and decision summaries.
+#   retentionDays: 365 # 1–3650 UTC calendar days, including today.
+#   jobInterval: 1h # 5m–24h; reads never trigger collection.
+#   jobTimeBudget: 30s # 1s–60s per consolidation run; maintenance runs independently.
+
 # storage:
 #   dataDir: /app/data # state.db with users, notification rules, and settings; back this up.
 #   cacheDir: /app/data # cache.db, rebuilt from LAPI when lost; defaults to dataDir.
 #   geonamesDir: /app/geonames
-#   walEnabled: true # cache.db only; set to false for filesystems that do not support SQLite WAL.
+#   walEnabled: true # cache.db and statistics.db; set to false for filesystems that do not support SQLite WAL.
 #   incrementalVacuumEnabled: true # Enables bounded idle maintenance for compatible cache databases.
 #   journalSizeLimit: 128MiB # Retained cache WAL size after checkpoints; use unlimited to disable trimming.
 #   queryTimeout: 30s # Raise for very large databases or slow storage.
@@ -37,6 +43,8 @@
 #   readOnly: false
 #   # Show the Allowlists sidebar link. Omit to manage it from Settings.
 #   allowlistsSidebarVisible: true
+#   # Show the Statistics sidebar link. Omit to manage it from Settings.
+#   statisticsSidebarVisible: true
 #   # Show the Metrics sidebar link. Omit to manage it from Settings.
 #   metricsSidebarVisible: true
 

@@ -87,6 +87,7 @@ export type {
   UpsertNotificationRuleRequest,
   UpdateMetricsSidebarPreferenceRequest,
   UpdateAllowlistsSidebarPreferenceRequest,
+  UpdateStatisticsSidebarPreferenceRequest,
   UpdateManualRefreshSettingRequest,
   UpdateManualDecisionScenariosRequest,
   ManualDecisionScenarioSettings,

@@ -1,3 +1,4 @@
+import { StatisticsSettings } from '../components/StatisticsSettings';
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import i18next from "i18next";
 import QRCode from "qrcode";
@@ -10,7 +11,7 @@ import { Badge } from "../components/ui/Badge";
 import { TabPanel, Tabs, type TabItem } from "../components/ui/Tabs";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
-import { fetchConfig, updateAllowlistsSidebarPreference, updateFontPreference, updateLanguagePreference, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
+import { fetchConfig, updateAllowlistsSidebarPreference, updateStatisticsSidebarPreference, updateFontPreference, updateLanguagePreference, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
 import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario, type ManagedSettingSource } from "../../../shared/contracts";
 import { apiUrl, withBasePath } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
@@ -64,6 +65,7 @@ const REFRESH_OPTIONS = [
 
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
 const ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT = 'allowlists-sidebar-preference-changed';
+const STATISTICS_SIDEBAR_PREFERENCE_EVENT = 'statistics-sidebar-preference-changed';
 const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
 
 interface PasskeySummary {
@@ -159,6 +161,7 @@ export function Settings() {
     const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
     const [allowlistsSidebarVisible, setAllowlistsSidebarVisible] = useState(true);
+    const [statisticsSidebarVisible, setStatisticsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [isSavingPreferences, setIsSavingPreferences] = useState(false);
     const [customScenarios, setCustomScenarios] = useState<string[]>([]);
@@ -214,6 +217,7 @@ export function Settings() {
                     setManualRefreshEnabled(nextConfig.manual_refresh_enabled === true);
                     setMetricsSidebarVisible(nextConfig.metrics_sidebar_visible !== false);
                     setAllowlistsSidebarVisible(nextConfig.allowlists_sidebar_visible !== false);
+                    setStatisticsSidebarVisible(nextConfig.statistics_sidebar_visible !== false);
                     setCustomScenarios(nextConfig.manual_decision_scenario_settings?.custom ?? []);
                 }
             })
@@ -315,6 +319,7 @@ export function Settings() {
     const savedMetricsSidebarVisible = config?.metrics_sidebar_visible !== false;
     const hasMetricsSidebarChange = metricsSidebarVisible !== savedMetricsSidebarVisible;
     const hasAllowlistsSidebarChange = allowlistsSidebarVisible !== (config?.allowlists_sidebar_visible !== false);
+    const hasStatisticsSidebarChange = statisticsSidebarVisible !== (config?.statistics_sidebar_visible !== false);
     const canManageAuthSettings = canManageSettings;
     const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
     const passwordLoginManaged = authSettings?.passwordLoginManaged === true;
@@ -322,6 +327,7 @@ export function Settings() {
     const manualRefreshSource = config?.managed_settings?.manual_refresh_enabled;
     const allowlistsSidebarSource = config?.managed_settings?.allowlists_sidebar_visible;
     const metricsSidebarSource = config?.managed_settings?.metrics_sidebar_visible;
+    const statisticsSidebarSource = config?.managed_settings?.statistics_sidebar_visible;
     const isOidcManaged = (setting: OidcSetting) => Boolean(authSettings?.managedSettings?.[setting]);
     const refreshOptions: { value: number; label: string }[] = REFRESH_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }));
     if (!refreshOptions.some((option) => option.value === refreshInterval)) {
@@ -448,6 +454,14 @@ export function Settings() {
                     allowlists_sidebar_visible: payload.allowlists_sidebar_visible,
                 } : current);
                 window.dispatchEvent(new Event(ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT));
+            }
+            if (!statisticsSidebarSource && hasStatisticsSidebarChange) {
+                const payload = await updateStatisticsSidebarPreference({ visible: statisticsSidebarVisible });
+                setConfig((current) => current ? {
+                    ...current,
+                    statistics_sidebar_visible: payload.statistics_sidebar_visible,
+                } : current);
+                window.dispatchEvent(new Event(STATISTICS_SIDEBAR_PREFERENCE_EVENT));
             }
             showToast(getSettingsSavedMessage(), "success");
         } catch (error) {
@@ -981,6 +995,28 @@ export function Settings() {
                                         </div>
                                     </div>
                                 </div>
+
+                                <div className="space-y-2">
+                                    <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                        <Switch
+                                            id="settings-statistics-sidebar"
+                                            checked={statisticsSidebarVisible}
+                                            onCheckedChange={setStatisticsSidebarVisible}
+                                            disabled={isSavingPreferences || Boolean(statisticsSidebarSource)}
+                                        />
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="settings-statistics-sidebar" className={labelClass}>
+                                                    {t("pages.settings.showStatisticsInSidebar")}
+                                                </label>
+                                                {renderManagedLock(statisticsSidebarSource)}
+                                            </div>
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                {t("pages.settings.showStatisticsInSidebarHelp")}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div className="mt-6 flex justify-start">
@@ -1254,6 +1290,16 @@ export function Settings() {
                             </div>
                         </CardContent>
                     </Card>
+                    {config?.statistics && (
+                        <StatisticsSettings
+                            initial={config.statistics}
+                            inputClass={inputClass}
+                            labelClass={labelClass}
+                            renderManagedLock={renderManagedLock}
+                            showToast={showToast}
+                            disabled={!canManageSettings}
+                        />
+                    )}
                 </TabPanel>
             )}
 

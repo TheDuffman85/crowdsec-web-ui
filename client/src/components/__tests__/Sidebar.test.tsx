@@ -7,7 +7,7 @@ import { useNotificationUnreadCount } from '../../contexts/useNotificationUnread
 import { I18nContext } from '../../lib/i18n';
 import { BrandingContext } from '../../contexts/branding-context';
 import { DEFAULT_BRANDING } from '../../lib/branding';
-import { updateAllowlistsSidebarPreference } from '../../lib/api';
+import { updateAllowlistsSidebarPreference, updateStatisticsSidebarPreference } from '../../lib/api';
 
 const { refreshNowMock, setThemeMock } = vi.hoisted(() => ({ refreshNowMock: vi.fn(), setThemeMock: vi.fn() }));
 
@@ -248,6 +248,30 @@ describe('Sidebar', () => {
       window.dispatchEvent(new Event('allowlists-sidebar-preference-changed'));
     });
     expect(await screen.findAllByRole('link', { name: 'Allowlists' })).toHaveLength(2);
+  });
+
+  test('places statistics above metrics and hides it when its preference is disabled', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0, setUnreadCount: vi.fn(), refreshUnreadCount: vi.fn(),
+    });
+    const sidebarConfig: { statistics_sidebar_visible?: boolean; metrics_sidebar_visible: boolean } = { metrics_sidebar_visible: true };
+    fetchMock.mockImplementation(async (input: string | URL | Request) => (
+      String(input).includes('/api/config')
+        ? Response.json(sidebarConfig)
+        : Response.json({ update_available: false })
+    ));
+    renderSidebar();
+    const metricsLink = (await screen.findAllByRole('link', { name: 'Metrics' }))[0];
+    const statisticsLink = screen.getAllByRole('link', { name: 'Statistics' })[0];
+    expect(statisticsLink).toHaveAttribute('href', '/statistics');
+    expect(metricsLink.compareDocumentPosition(statisticsLink) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+
+    sidebarConfig.statistics_sidebar_visible = false;
+    await act(async () => {
+      await updateStatisticsSidebarPreference({ visible: false });
+      window.dispatchEvent(new Event('statistics-sidebar-preference-changed'));
+    });
+    await waitFor(() => expect(screen.queryAllByRole('link', { name: 'Statistics' })).toHaveLength(0));
   });
 
   test('hides metrics when sidebar preference is disabled', async () => {

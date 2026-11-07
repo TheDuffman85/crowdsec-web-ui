@@ -11,6 +11,7 @@ describe('configuration overrides', () => {
   const sidebarSettings = [
     ['allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE'],
     ['metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE'],
+    ['statisticsSidebarVisible', 'CONFIG_UI_STATISTICS_SIDEBAR_VISIBLE'],
   ] as const;
 
   test.each(sidebarSettings)('defaults %s visibility on without managing it', (setting) => {

@@ -1,7 +1,9 @@
+import { DEFAULT_STATISTICS_SETTINGS, type StatisticsSettings } from '../shared/statistics';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { isValidDateFormat, type DateFormat } from '../shared/date-format';
+import { parseDurationMs } from '../shared/duration';
 import type { ManagedSettingSource } from '../shared/contracts';
 export type { DateFormat } from '../shared/date-format';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
@@ -92,6 +94,8 @@ export interface DashboardAuthConfig {
 }
 
 export interface RuntimeConfig {
+  statistics: StatisticsSettings;
+  statisticsManaged: Array<keyof StatisticsSettings>;
   port: number;
   basePath: string;
   hostname?: string;
@@ -121,6 +125,8 @@ export interface RuntimeConfig {
   allowlistsSidebarVisibleManaged: boolean;
   metricsSidebarVisible: boolean;
   metricsSidebarVisibleManaged: boolean;
+  statisticsSidebarVisible: boolean;
+  statisticsSidebarVisibleManaged: boolean;
   /** CONFIG_ variables applied on top of the config file at startup. */
   configEnvironmentOverrides: ConfigEnvironmentOverride[];
   idleRefreshIntervalMs: number;
@@ -219,18 +225,7 @@ export function parseRefreshInterval(intervalStr: string | undefined | null): nu
   const str = intervalStr.toLowerCase();
 
   if (str === 'manual' || str === '0') return 0;
-
-  const match = str.match(/^(\d+)(ms|[smhd])$/);
-  if (match) {
-    const value = Number.parseInt(match[1], 10);
-    const unit = match[2];
-    if (unit === 'ms') return value;
-    if (unit === 's') return value * 1_000;
-    if (unit === 'm') return value * 60_000;
-    if (unit === 'h') return value * 3_600_000;
-    if (unit === 'd') return value * 86_400_000;
-  }
-  return 0;
+  return parseDurationMs(str) ?? 0;
 }
 
 export function parseLookbackToMs(lookbackPeriod: string | undefined | null): number {
@@ -492,12 +487,16 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,
     manualRefreshEnabled: parseBooleanEnv(env.CROWDSEC_MANUAL_REFRESH_ENABLED, false),
+    statistics: { ...DEFAULT_STATISTICS_SETTINGS },
+    statisticsManaged: [],
     refreshIntervalManaged: hasEnv(env, 'CROWDSEC_REFRESH_INTERVAL'),
     manualRefreshEnabledManaged: hasEnv(env, 'CROWDSEC_MANUAL_REFRESH_ENABLED'),
     allowlistsSidebarVisible: parseBooleanEnv(env.UI_ALLOWLISTS_SIDEBAR_VISIBLE, true),
     allowlistsSidebarVisibleManaged: hasEnv(env, 'UI_ALLOWLISTS_SIDEBAR_VISIBLE'),
     metricsSidebarVisible: parseBooleanEnv(env.UI_METRICS_SIDEBAR_VISIBLE, true),
     metricsSidebarVisibleManaged: hasEnv(env, 'UI_METRICS_SIDEBAR_VISIBLE'),
+    statisticsSidebarVisible: parseBooleanEnv(env.UI_STATISTICS_SIDEBAR_VISIBLE, true),
+    statisticsSidebarVisibleManaged: hasEnv(env, 'UI_STATISTICS_SIDEBAR_VISIBLE'),
     configEnvironmentOverrides: [],
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '10m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
@@ -604,6 +603,8 @@ function warnDeprecatedEnvironment(
 
 function createRuntimeConfigFromParsedConfig(parsed: ParsedConfigFile): RuntimeConfig {
   const runtimeConfig = createRuntimeConfigFromEnvironment(parsed.environment);
+  runtimeConfig.statistics = parsed.statistics;
+  runtimeConfig.statisticsManaged = parsed.statisticsManaged;
   runtimeConfig.instances = parsed.instances;
   runtimeConfig.sqliteWalEnabled = parsed.sqliteWalEnabled;
   runtimeConfig.sqliteIncrementalVacuumEnabled = parsed.sqliteIncrementalVacuumEnabled;

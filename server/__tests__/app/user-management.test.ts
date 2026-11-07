@@ -249,12 +249,13 @@ test('display preferences are saved per user', async () => {
   // Read-only users may change their own sidebar, language and font.
   expect((await put('allowlists-sidebar', { visible: false }, viewerCookie)).status).toBe(200);
   expect((await put('metrics-sidebar', { visible: false }, viewerCookie)).status).toBe(200);
+  expect((await put('statistics-sidebar', { visible: false }, viewerCookie)).status).toBe(200);
   expect((await put('language', { language: 'de' }, viewerCookie)).status).toBe(200);
   expect((await put('font', { font: 'inter' }, viewerCookie)).status).toBe(200);
   expect((await put('font', { font: '../evil' }, viewerCookie)).status).toBe(400);
 
-  expect(await readConfig(viewerCookie)).toMatchObject({ allowlists_sidebar_visible: false, metrics_sidebar_visible: false });
-  expect(await readConfig(adminCookie)).toMatchObject({ allowlists_sidebar_visible: true, metrics_sidebar_visible: true });
+  expect(await readConfig(viewerCookie)).toMatchObject({ allowlists_sidebar_visible: false, metrics_sidebar_visible: false, statistics_sidebar_visible: false });
+  expect(await readConfig(adminCookie)).toMatchObject({ allowlists_sidebar_visible: true, metrics_sidebar_visible: true, statistics_sidebar_visible: true });
   expect(await readStatus(viewerCookie)).toMatchObject({ preferences: { language: 'de', font: 'inter' } });
   expect(await readStatus(adminCookie)).toMatchObject({ preferences: {} });
   // A read-only user's language does not change the instance-wide notification language.

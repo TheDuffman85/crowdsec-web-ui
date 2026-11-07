@@ -4,7 +4,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Settings } from '../../Settings';
-import { fetchConfig, updateAllowlistsSidebarPreference, updateFontPreference, updateLanguagePreference, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
+import { fetchConfig, updateAllowlistsSidebarPreference, updateStatisticsSidebarPreference, updateFontPreference, updateLanguagePreference, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
 import { DateTimeContext, createDateTimeContextValue } from '../../../lib/dateTime';
 import { FontContext } from '../../../lib/font';
 
@@ -49,6 +49,7 @@ describe('Settings general and password', () => {
   test.each([
     ['allowlists_sidebar_visible', 'ui.allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE', 'Show Allowlists in sidebar'],
     ['metrics_sidebar_visible', 'ui.metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE', 'Show Metrics in sidebar'],
+    ['statistics_sidebar_visible', 'ui.statisticsSidebarVisible', 'CONFIG_UI_STATISTICS_SIDEBAR_VISIBLE', 'Show Statistics in sidebar'],
   ] as const)('loads and locks %s managed by configuration', async (key, path, env, label) => {
     const config = await fetchConfig();
     vi.mocked(fetchConfig).mockResolvedValue({
@@ -72,6 +73,7 @@ describe('Settings general and password', () => {
     expect(await screen.findByLabelText('Language')).toBeEnabled();
     expect(screen.getByRole('switch', { name: 'Show Allowlists in sidebar' })).toBeEnabled();
     expect(screen.getByRole('switch', { name: 'Show Metrics in sidebar' })).toBeEnabled();
+    expect(screen.getByRole('switch', { name: 'Show Statistics in sidebar' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.queryByLabelText('Refresh interval')).not.toBeInTheDocument();
   });
@@ -82,6 +84,25 @@ describe('Settings general and password', () => {
     expect(await screen.findByRole('tab', { name: 'pages.settings.account' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getAllByRole('tab').map((item) => item.textContent)).toEqual(['pages.settings.account']);
     expect(screen.queryByLabelText('Refresh interval')).not.toBeInTheDocument();
+  });
+
+  test('defaults statistics visibility on and saves it for read-only users', async () => {
+    const user = userEvent.setup();
+    vi.mocked(updateStatisticsSidebarPreference).mockResolvedValue({ success: true, statistics_sidebar_visible: false });
+    const changed = vi.fn();
+    window.addEventListener('statistics-sidebar-preference-changed', changed);
+    try {
+      render(<SettingsRouter><Settings /></SettingsRouter>);
+      const toggle = await screen.findByRole('switch', { name: 'Show Statistics in sidebar' });
+      expect(toggle).toBeChecked();
+      await user.click(toggle);
+      expect(updateStatisticsSidebarPreference).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      expect(updateStatisticsSidebarPreference).toHaveBeenCalledWith({ visible: false });
+    } finally {
+      window.removeEventListener('statistics-sidebar-preference-changed', changed);
+    }
   });
 
   test('saves the allowlists sidebar preference for read-only users', async () => {

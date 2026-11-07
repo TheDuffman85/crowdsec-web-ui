@@ -65,6 +65,8 @@ export function Layout() {
         switch (location.pathname) {
             case '/':
                 return t('pages.dashboard.title');
+            case '/statistics':
+                return t('pages.statistics.title');
             case '/alerts':
                 return t('pages.alerts.title');
             case '/decisions':
