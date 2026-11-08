@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
-  AlertCircle, ArrowUpRight, Clock3, Crosshair, Database, Gavel, Globe, Info, Layers, ListChecks, Network,
-  RefreshCw, Repeat, RotateCcw, Server, ShieldAlert, ShieldCheck, TrendingUp, Users, X,
+  AlertCircle, ArrowUpRight, Clock3, Crosshair, Database, Gavel, Globe, Info, ListChecks, Network,
+  RefreshCw, Repeat, RotateCcw, Server, ShieldAlert, ShieldCheck, Target, TrendingUp, Users, X,
 } from 'lucide-react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
@@ -492,10 +492,14 @@ export function Statistics() {
     />
   );
 
+  // Machines with unchanged alert counts, or none in either period, are not listed.
   const machineChanges = data ? [
-    ...data.increases.map((row) => ({ value: row.value, label: row.label, previous: row.previous, current: row.current })),
-    ...data.quietMachines.map((row) => ({ value: row.value, label: row.label, previous: row.previous, current: 0 })),
-  ] : [];
+    { key: 'rising', title: t('pages.statistics.machinesRising'), tone: 'text-red-600 dark:text-red-400', rows: data.increases },
+    { key: 'falling', title: t('pages.statistics.machinesFalling'), tone: 'text-green-600 dark:text-green-400', rows: data.decreases },
+    { key: 'quiet', title: t('pages.statistics.quiet'), tone: 'text-amber-600 dark:text-amber-400', rows: data.quietMachines.map((row) => ({ ...row, current: 0 })) },
+  ].filter((group) => group.rows.length > 0) : [];
+  // Quiet machines are absent from the current ranking but still belong to the comparison.
+  const hasMultipleMachines = !!data && data.machines.length + data.quietMachines.length > 1;
   const periodChange = usePeriodChange();
   const machineInstance = (value: string) => { try { return (JSON.parse(value) as string[])[0]; } catch { return undefined; } };
   // Ranges within the last two days are charted by hour.
@@ -666,6 +670,10 @@ export function Statistics() {
               </select>
             </div>
           </div>
+          <p className="flex items-start gap-1.5 text-xs leading-5 text-gray-500 dark:text-gray-400">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            {t('pages.statistics.rangeHint')}
+          </p>
           {(ip || machine || scenario) && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-gray-100 pt-4 text-sm dark:border-gray-700/50">
               <div className="flex flex-wrap gap-2">
@@ -692,6 +700,17 @@ export function Statistics() {
         )}
       </Card>
 
+      {data && data.coverage.partial && (
+        <Notice tone="warning">
+          <p>{t('pages.statistics.partial')}</p>
+          <p className="mt-1 text-xs opacity-80">
+            {t('pages.statistics.coverage')}: {data.coverage.from ? formatDay(data.coverage.from.slice(0, 10)) : '—'} – {formatTimestamp(data.coverage.through)} UTC
+          </p>
+        </Notice>
+      )}
+
+      {data && <StatisticsFindings findings={findings} context={findingContext} />}
+
       {configuration && !configuration.settings.enabled && (
         <Notice tone="info">
           <p>{t('pages.statistics.disabledHelp')}</p>
@@ -710,17 +729,6 @@ export function Statistics() {
       {loading && !data && <p role="status" className="p-8 text-center text-gray-500 dark:text-gray-400">{t('app.loading')}</p>}
 
       {data && <>
-        {data.coverage.partial && (
-          <Notice tone="warning">
-            <p>{t('pages.statistics.partial')}</p>
-            <p className="mt-1 text-xs opacity-80">
-              {t('pages.statistics.coverage')}: {data.coverage.from ? formatDay(data.coverage.from.slice(0, 10)) : '—'} – {formatTimestamp(data.coverage.through)} UTC
-            </p>
-          </Notice>
-        )}
-
-        <StatisticsFindings findings={findings} context={findingContext} />
-
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 min-[1800px]:grid-cols-6">
           <SummaryTile icon={ShieldAlert} tone="alert" title={t('pages.statistics.alerts')} value={data.totals.alerts} deltaLabel={t('pages.statistics.vsPrevious')}
             delta={delta(data.totals.alerts, compared?.alerts, 'down')} />
@@ -758,60 +766,66 @@ export function Statistics() {
         </Card>
 
         {rankings('attackers')}
-        {rankings('machines')}
         {scenarioTable(data.scenarios)}
+        {hasMultipleMachines && rankings('machines')}
 
-        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {breakdown(t('pages.dashboard.topCountries'), Globe, data.countries, data.totals.alerts, 'country')}
-          {breakdown(t('pages.dashboard.topAs'), Network, data.networks, data.totals.alerts)}
-          <Card className="h-full">
+        <div className="space-y-6">
+          <div className="grid min-w-0 items-start gap-6 md:grid-cols-2 xl:grid-cols-3">
+            {breakdown(t('pages.dashboard.topTargets'), Target, data.targets, data.totals.alerts)}
+            {breakdown(t('pages.dashboard.topCountries'), Globe, data.countries, data.totals.alerts, 'country')}
+            {breakdown(t('pages.dashboard.topAs'), Network, data.networks, data.totals.alerts)}
+          </div>
+          {hasMultipleMachines && <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg">
                 <TrendingUp className="h-5 w-5 text-primary-600 dark:text-primary-400" aria-hidden="true" />
                 {t('pages.statistics.machineChanges')}
               </CardTitle>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t('pages.statistics.machineChangesHelp')}</p>
             </CardHeader>
             <CardContent>
               {data.coverage.comparisonPartial ? <EmptyState>{t('pages.statistics.comparisonPartial')}</EmptyState>
                 : machineChanges.length === 0 ? <EmptyState>{t('common.noDataAvailable')}</EmptyState> : (
-                  <div className="space-y-2">
-                    {machineChanges.map((row, index) => {
-                      const quiet = row.current === 0;
-                      const change = periodChange(row.previous, row.current);
-                      const owner = machineInstance(row.value);
-                      return (
-                        <button
-                          key={row.value}
-                          type="button"
-                          disabled={quiet}
-                          onClick={() => update({ machine: row.value })}
-                          title={t('pages.statistics.machineChangeLabel', { machine: machineName(row.value, row.label), previous: formatNumber(row.previous), current: formatNumber(row.current) })}
-                          aria-label={t('pages.statistics.machineChangeLabel', { machine: machineName(row.value, row.label), previous: formatNumber(row.previous), current: formatNumber(row.current) })}
-                          className="block w-full rounded-lg border border-transparent p-2 text-left transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-gray-700/50 dark:disabled:hover:bg-transparent"
-                        >
-                          <PeriodChangeRow
-                            rank={index + 1}
-                            previous={row.previous}
-                            current={row.current}
-                            change={change}
-                            changeClassName={quiet ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}
-                            label={<>
-                              {instances.length > 1 && owner && instanceIcon(owner)}
-                              <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{machineName(row.value, row.label)}</span>
-                              {instances.length > 1 && owner && <span className="hidden shrink-0 truncate text-xs text-gray-500 sm:inline dark:text-gray-400">{instanceName(owner)}</span>}
-                              {quiet && <Badge variant="warning" className="shrink-0">{t('pages.statistics.quiet')}</Badge>}
-                            </>}
-                          />
-                        </button>
-                      );
-                    })}
+                  <div className={`grid gap-6 ${machineChanges.length === 3 ? 'lg:grid-cols-3' : ''} ${machineChanges.length > 1 ? 'md:grid-cols-2' : ''}`}>
+                    {machineChanges.map((group) => (
+                      <section key={group.key} aria-label={group.title}>
+                        <h3 className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{group.title}</h3>
+                        <div className="space-y-1">
+                          {group.rows.map((row) => {
+                            const quiet = row.current === 0;
+                            const owner = machineInstance(row.value);
+                            const label = t('pages.statistics.machineChangeLabel', { machine: machineName(row.value, row.label), previous: formatNumber(row.previous), current: formatNumber(row.current) });
+                            return (
+                              <button
+                                key={row.value}
+                                type="button"
+                                disabled={quiet}
+                                onClick={() => update({ machine: row.value })}
+                                title={label}
+                                aria-label={label}
+                                className="block w-full rounded-lg border border-transparent p-2 text-left transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-gray-700/50 dark:disabled:hover:bg-transparent"
+                              >
+                                <PeriodChangeRow
+                                  previous={row.previous}
+                                  current={row.current}
+                                  change={periodChange(row.previous, row.current)}
+                                  changeClassName={group.tone}
+                                  label={<>
+                                    {instances.length > 1 && owner && instanceIcon(owner)}
+                                    <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{machineName(row.value, row.label)}</span>
+                                    {instances.length > 1 && owner && <span className="hidden shrink-0 truncate text-xs text-gray-500 sm:inline dark:text-gray-400">{instanceName(owner)}</span>}
+                                  </>}
+                                />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    ))}
                   </div>
                 )}
             </CardContent>
-          </Card>
-          {breakdown(t('pages.statistics.decisionOrigins'), Layers, data.decisionOrigins, data.totals.decisions)}
-          {/* Types only carry information when remediations other than bans are in use. */}
-          {data.decisionTypes.length > 1 && breakdown(t('pages.statistics.decisionTypes'), Gavel, data.decisionTypes, data.totals.decisions)}
+          </Card>}
         </div>
       </>}
 

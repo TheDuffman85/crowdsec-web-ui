@@ -120,11 +120,15 @@ export interface StatisticsResponse {
   granularity: 'day' | 'hour';
   scenarios: StatisticsScenario[];
   countries: Array<{ label: string; count: number; uniqueIPs: number }>;
+  /** Known alert targets, ranked by alert count. Older observations may have no target. */
+  targets: Array<{ label: string; count: number; uniqueIPs: number }>;
   networks: Array<{ label: string; count: number; uniqueIPs: number }>;
   decisionTypes: Array<{ label: string; count: number }>;
   decisionOrigins: Array<{ label: string; count: number }>;
   /** Machines with more alerts than in the preceding period. */
   increases: Array<{ value: string; label: string; current: number; previous: number; change: number }>;
+  /** Machines that still raised alerts, but fewer than in the preceding period. */
+  decreases: Array<{ value: string; label: string; current: number; previous: number; change: number }>;
   /** Machines that raised alerts in the preceding period but none in this one. */
   quietMachines: Array<{ value: string; label: string; previous: number }>;
 }

@@ -23,7 +23,7 @@ const decisionIdentity = (row: string) => `json_array('decision', ${row}.instanc
 // Versioned tuples avoid repeating field names in the transient journal.
 const alertPayload = (row: string) => `json_array(1, 'a',
   ${row}.created_at, ${row}.instance_id, ${row}.source_ip, ${row}.country, ${row}.source_as_number,
-  ${row}.as_name, ${row}.machine_id, ${row}.machine, ${row}.scenario, ${row}.simulated, ${row}.events_count
+  ${row}.as_name, ${row}.machine_id, ${row}.machine, ${row}.scenario, ${row}.simulated, ${row}.events_count, ${row}.target
 )`;
 
 const decisionPayload = (row: string) => `json_array(1, 'd',

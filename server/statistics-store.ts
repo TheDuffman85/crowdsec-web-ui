@@ -11,7 +11,7 @@ import type { StatisticsOutboxRow } from './statistics-capture';
 interface Observation {
   kind: 'alert' | 'decision'; at: string; instance: string;
   ip?: string; country?: string; asn?: string; network?: string;
-  machineId?: string; machineName?: string; scenario?: string;
+  machineId?: string; machineName?: string; scenario?: string; target?: string;
   simulated: number; events?: number; alertAt?: string; alertSimulated?: number;
   type?: string; origin?: string; alertIdentity?: unknown[];
 }
@@ -23,7 +23,7 @@ export function decodeStatisticsObservation(payload: string): Observation {
   const observation: Observation = { kind: value[1] === 'a' ? 'alert' : 'decision', at: value[2], instance: value[3],
     ip: value[4], country: value[5], asn: value[6], network: value[7], machineId: value[8], machineName: value[9],
     scenario: value[10], simulated: value[11] };
-  if (observation.kind === 'alert') observation.events = value[12];
+  if (observation.kind === 'alert') Object.assign(observation, { events: value[12], target: value[13] });
   else Object.assign(observation, { alertAt: value[12], alertSimulated: value[13], type: value[14], origin: value[15], alertIdentity: value[16] });
   return observation;
 }
@@ -111,6 +111,11 @@ export class StatisticsStore {
     const cells = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cells'").get();
     if (!cells) this.db.transaction(() => { this.createCells(); this.createCellIndexes(); })();
     else if (!(this.db.prepare('PRAGMA table_info(cells)').all() as Array<{ name: string; pk: number }>).some((column) => column.name === 'kind' && column.pk === 1)) this.clusterCells();
+    // Targets were not captured by older versions. Preserve their counts and
+    // leave that dimension empty rather than inventing historical targets.
+    if (!(this.db.prepare('PRAGMA table_info(cells)').all() as Array<{ name: string }>).some((column) => column.name === 'target')) {
+      this.db.exec("ALTER TABLE cells ADD COLUMN target TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   /**
@@ -125,6 +130,7 @@ export class StatisticsStore {
       scenario TEXT NOT NULL, country TEXT NOT NULL, asn TEXT NOT NULL, network TEXT NOT NULL,
       type TEXT NOT NULL, origin TEXT NOT NULL,
       count INTEGER NOT NULL, events INTEGER NOT NULL, first_at TEXT NOT NULL, last_at TEXT NOT NULL,
+      target TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (kind, day, key)
     ) WITHOUT ROWID`);
   }
@@ -150,7 +156,7 @@ export class StatisticsStore {
       this.createCells();
       this.db.exec(`
         INSERT INTO cells SELECT kind, day, key, instance, simulated, alert_simulated, ip, machine, machine_id, machine_name,
-          scenario, country, asn, network, type, origin, count, events, first_at, last_at FROM cells_unclustered;
+          scenario, country, asn, network, type, origin, count, events, first_at, last_at, '' FROM cells_unclustered;
         UPDATE seen SET cell_day = (SELECT day FROM cells_unclustered c WHERE c.key = seen.cell_key) WHERE cell_key IS NOT NULL AND cell_day IS NULL;
         DROP TABLE cells_unclustered;
       `);
@@ -183,7 +189,7 @@ export class StatisticsStore {
     const getParent = this.db.prepare("SELECT c.* FROM seen s JOIN cells c ON c.kind = 'alert' AND c.day = s.cell_day AND c.key = s.cell_key WHERE s.identity = ?");
     const linkParent = this.db.prepare('UPDATE seen SET cell_day = ?, cell_key = ? WHERE identity = ?');
     const upsert = this.db.prepare(`INSERT INTO cells (kind, day, key, instance, simulated, alert_simulated, ip, machine, machine_id, machine_name,
-        scenario, country, asn, network, type, origin, count, events, first_at, last_at) VALUES (${Array(20).fill('?').join(',')})
+        scenario, country, asn, network, type, origin, target, count, events, first_at, last_at) VALUES (${Array(21).fill('?').join(',')})
       ON CONFLICT(kind, day, key) DO UPDATE SET count = count + excluded.count, events = events + excluded.events,
         first_at = min(first_at, excluded.first_at), last_at = max(last_at, excluded.last_at)`);
     const putMeta = this.db.prepare('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)');
@@ -219,10 +225,12 @@ export class StatisticsStore {
           const dims = [kind, day(at), o.instance, o.simulated ? 1 : 0, o.alertSimulated ? 1 : 0,
             ip, machine, machineId, text(o.machineName) || machineId, text(o.scenario), text(o.country),
             o.asn == null ? '' : String(o.asn), text(o.network), kind === 'alert' ? '' : text(o.type) || 'ban', kind === 'alert' ? '' : text(o.origin)];
-          const key = digest(JSON.stringify(dims));
+          const target = kind === 'alert' ? text(o.target) : '';
+          // Keep legacy keys for observations without a target, including decisions.
+          const key = digest(JSON.stringify(target ? [...dims, target] : dims));
           const events = kind === 'alert' && Number.isSafeInteger(o.events) && Number(o.events) >= 0 ? Number(o.events) : 0;
           const [cellKind, cellDay, ...rest] = dims;
-          upsert.run(cellKind, cellDay, key, ...rest, 1, events, at, at);
+          upsert.run(cellKind, cellDay, key, ...rest, target, 1, events, at, at);
           // Only the chart uses hours, so they keep just the series dimensions.
           if (kind !== 'ban' && cellDay >= firstHourlyDay) {
             const hourDims = [kind, at.slice(0, 13), o.instance, o.simulated ? 1 : 0, ip, machine, text(o.scenario)];
@@ -565,9 +573,9 @@ export class StatisticsStore {
       previousTotals = { ...counts, uniqueIPs, bannedIPs, repeatAttackers };
     }
     const currentMachines = all(`SELECT machine AS value, MAX(machine_name) AS label, SUM(count) AS current FROM cells WHERE kind = 'alert' AND machine != '' AND ${where} GROUP BY machine`);
-    const increases = currentMachines
-      .map((r) => ({ ...r, previous: previousMachines.get(r.value)?.n || 0, change: r.current - (previousMachines.get(r.value)?.n || 0) }))
-      .filter((r) => r.change > 0).sort((a, b) => b.change - a.change || a.value.localeCompare(b.value)).slice(0, f.limit);
+    const changes = currentMachines.map((r) => ({ ...r, previous: previousMachines.get(r.value)?.n || 0, change: r.current - (previousMachines.get(r.value)?.n || 0) }));
+    const increases = changes.filter((r) => r.change > 0).sort((a, b) => b.change - a.change || a.value.localeCompare(b.value)).slice(0, f.limit);
+    const decreases = changes.filter((r) => r.change < 0).sort((a, b) => a.change - b.change || a.value.localeCompare(b.value)).slice(0, f.limit);
     // A machine that stops reporting entirely may have a broken agent or
     // acquisition. With an IP or scenario filter, silence is expected.
     const active = new Set(currentMachines.map((r) => r.value as string));
@@ -597,8 +605,9 @@ export class StatisticsStore {
       attackers: ranking('ip'), machines: ranking('machine'), series, granularity, scenarios,
       // Like the dashboard cards, top lists skip alerts without a known value.
       countries: list('country', 'alert', "country != '' AND upper(country) != 'UNKNOWN' AND "),
+      targets: list('target', 'alert', "target NOT IN ('', 'Unknown', 'N/A') AND "),
       networks: list('network', 'alert', "network NOT IN ('', 'Unknown') AND "),
-      decisionTypes: list('type', 'issued'), decisionOrigins: list('origin', 'issued'), increases, quietMachines,
+      decisionTypes: list('type', 'issued'), decisionOrigins: list('origin', 'issued'), increases, decreases, quietMachines,
     };
   }
 }

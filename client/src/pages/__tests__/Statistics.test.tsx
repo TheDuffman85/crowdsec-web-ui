@@ -26,10 +26,10 @@ function payload(): StatisticsResponse {
     filters: { from: '2026-10-09', to: '2026-11-07', instance: 'all', simulation: 'live', limit: 10 }, revision: 1, configuration,
     coverage: { from: '2026-11-01T00:00:00Z', through: '2026-11-07T12:00:00Z', partial: true, comparisonPartial: true },
     totals: { alerts: 12, events: 48, uniqueIPs: 1, bans: 2, decisions: 3, repeatAttackers: 1, bannedIPs: 1, returnedAfterBan: 0, newIPs: null },
-    previousTotals: null,
+    previousTotals: null, targets: [{ label: 'web.example.com', count: 9, uniqueIPs: 1 }],
     attackers: [{ value: '192.0.2.7', label: '192.0.2.7', alerts: 12, events: 48, uniqueIPs: 1, bans: 2, machines: 1, activeDays: 3, firstActivity: '2026-11-01T10:00:00Z', lastActivity: '2026-11-07T11:00:00Z', country: 'DE', asn: '42', network: 'Example', scenarios: [{ label: 'ssh', count: 12 }], targetedMachines: [{ value: '["default","m-1"]', label: 'Server one', count: 12 }] }],
     machines: [{ value: '["default","m-1"]', label: 'Server one', instance: 'default', machineId: 'm-1', alerts: 12, events: 48, uniqueIPs: 1, bans: 2, machines: 1, activeDays: 3, firstActivity: null, lastActivity: null, country: 'DE', asn: '42', network: 'Example', scenarios: [], targetedMachines: [] }],
-    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, bans: 2, bannedIPs: 1, previous: null }], countries: [], networks: [], decisionTypes: [], decisionOrigins: [], increases: [], quietMachines: [],
+    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, bans: 2, bannedIPs: 1, previous: null }], countries: [], networks: [], decisionTypes: [], decisionOrigins: [], increases: [], decreases: [], quietMachines: [],
   };
 }
 function Location() { const location = useLocation(); return <output data-testid="location">{location.pathname}{location.search}</output>; }
@@ -43,9 +43,14 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); localStorage.clear(); });
 
 describe('Statistics page', () => {
-  test('shows rankings, missing coverage and unavailable comparison without treating gaps as zeros', async () => {
+  test('shows rankings and missing coverage but hides machine changes for a single machine', async () => {
     mount();
     expect(await screen.findByText('Top IPs')).toBeInTheDocument();
+    const topTargets = screen.getByRole('heading', { name: 'Top Targets' }).closest('.rounded-xl')!;
+    expect(within(topTargets as HTMLElement).getByText('web.example.com')).toBeInTheDocument();
+    expect(within(topTargets as HTMLElement).getByText('9')).toBeInTheDocument();
+    expect(within(topTargets as HTMLElement).getByText('75.0%')).toBeInTheDocument();
+    expect(within(topTargets as HTMLElement).getByText('1 IPs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '192.0.2.7' })).toBeInTheDocument();
     // Like on the Alerts page, the ban action has its own column.
     const topIps = screen.getByRole('button', { name: '192.0.2.7' }).closest('table')!;
@@ -54,7 +59,7 @@ describe('Statistics page', () => {
     // With one instance, Top Machines does not name it, like the rest of the app.
     expect(screen.queryByText('Production')).not.toBeInTheDocument();
     expect(screen.getByText(/Counts reflect observed data/)).toBeInTheDocument();
-    expect(screen.getByText(/complete preceding period/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Machine Changes' })).not.toBeInTheDocument();
     expect(sessionFetch).toHaveBeenCalledWith(expect.stringContaining('/api/statistics?'), expect.anything());
   });
 
@@ -208,9 +213,16 @@ describe('Statistics page', () => {
       coverage: { ...data.coverage, comparisonPartial: false },
       previousTotals: { alerts: 600, bans: 2, decisions: 3, uniqueIPs: 1, bannedIPs: 1, repeatAttackers: 1 },
       increases: [{ value: '["edge","proxy-02"]', label: 'proxy-02', current: 1896, previous: 366, change: 1530 }],
+      decreases: [{ value: '["default","web-01"]', label: 'web-01', current: 50, previous: 200, change: -150 }],
       quietMachines: [{ value: '["default","dev-bastion"]', label: 'dev-bastion', previous: 120 }],
     } satisfies StatisticsResponse));
     mount();
+    expect(await screen.findByText(/Machines with unchanged counts are not listed/)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'More alerts' })).toHaveTextContent('proxy-02');
+    const falling = screen.getByRole('region', { name: 'Fewer alerts' });
+    expect(within(falling).getByText('−75%')).toBeInTheDocument();
+    expect(within(falling).getByText('200 → 50')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'No alerts' })).toHaveTextContent('dev-bastion');
     const increase = await screen.findByRole('button', { name: /^proxy-02: 366 alerts in the preceding period, 1\D?896 in the selected period$/ });
     expect(within(increase).getByText('+418%')).toBeInTheDocument();
     expect(within(increase).getByText('Edge')).toBeInTheDocument();

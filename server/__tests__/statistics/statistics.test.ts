@@ -37,6 +37,52 @@ function fixture() {
 }
 
 describe('long-term statistics capture and aggregation', () => {
+  it('archives distinct targets and ranks them within the selected scope, without counting bans as alerts', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    const common = { created_at: '2026-01-10T10:00:00.000Z', target: 'web.example.com' };
+    f.alert(1, common); f.alert(2, common);
+    f.alert(3, { ...common, source: { ip: '1.2.3.5' } });
+    f.alert(4, { ...common, target: 'ssh.example.com' });
+    f.alert(5, { ...common, target: 'other.example.com', instance_id: 'other' });
+    f.alert(6, { ...common, target: 'simulated.example.com', simulated: true });
+    f.alert(7, { ...common, target: 'Unknown' });
+    f.alert(8, { ...common, target: 'N/A' });
+    f.alert(9, { ...common, target: '', machine_alias: '', machine_id: '' });
+    f.decision(1, 1); f.decision(2, 1);
+    const batch = f.consolidate();
+    expect(decodeStatisticsObservation(batch.rows.find((row) => decodeStatisticsObservation(row.payload).kind === 'alert')!.payload).target).toBe('web.example.com');
+    expect(f.query({ instance: 'default', simulation: 'live' }).targets).toEqual([
+      { label: 'web.example.com', count: 3, uniqueIPs: 2 },
+      { label: 'ssh.example.com', count: 1, uniqueIPs: 1 },
+    ]);
+    expect(f.query({ ip: '1.2.3.5' }).targets).toEqual([{ label: 'web.example.com', count: 1, uniqueIPs: 1 }]);
+    expect(f.query({ simulation: 'simulated' }).targets).toEqual([{ label: 'simulated.example.com', count: 1, uniqueIPs: 1 }]);
+    expect(f.query({ instance: 'other' }).targets).toEqual([{ label: 'other.example.com', count: 1, uniqueIPs: 1 }]);
+    expect(f.query({ from: '2026-01-11' }).targets).toEqual([]);
+    // Captured targets survive deleting cached alerts, and replay is idempotent.
+    f.source.db.prepare('DELETE FROM alerts').run();
+    f.store.consolidate(batch.rows, f.context);
+    expect(f.query({ instance: 'default', simulation: 'live' }).targets[0]).toEqual({ label: 'web.example.com', count: 3, uniqueIPs: 2 });
+  });
+
+  it('upgrades an existing clustered archive without losing historical counts or assuming targets', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'statistics-targets-'));
+    const file = path.join(dir, 'statistics.db');
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const first = new StatisticsStore(file);
+    const context: ConsolidationContext = { cutoff: '2026-01-01', epoch: 'e', enabled: false, caughtUp: true, coverageFrom: {}, instances: ['default'], now: '2026-02-01T12:00:00.000Z' };
+    const legacy = { seq: 1, identity: 'legacy', day: '2026-01-10', payload: JSON.stringify([1, 'a', '2026-01-10T10:00:00.000Z', 'default', '1.2.3.4', '', '', '', '', '', 'ssh', 0, 20]) };
+    first.consolidate([legacy], context);
+    first.db.exec('ALTER TABLE cells DROP COLUMN target');
+    first.close();
+    const upgraded = new StatisticsStore(file);
+    cleanups.push(() => upgraded.close());
+    upgraded.consolidate([legacy, { ...legacy, seq: 2, identity: 'new', payload: JSON.stringify([1, 'a', '2026-01-10T10:00:00.000Z', 'default', '1.2.3.4', '', '', '', '', '', 'ssh', 0, 20, 'web.example.com']) }], context);
+    const result = upgraded.query({ from: '2026-01-01', to: '2026-01-31', instance: 'all', simulation: 'all', limit: 10 }, 365, ['default'], Date.parse(context.now));
+    expect(result.totals).toMatchObject({ alerts: 2, events: 40 });
+    expect(result.targets).toEqual([{ label: 'web.example.com', count: 1, uniqueIPs: 1 }]);
+  });
+
   it('captures exact IP/machine/scenario relationships and distinct expired bans', () => {
     const f = fixture(); configureStatisticsCapture(f.source.db, true);
     f.alert(1); f.alert(2); f.alert(3, { scenario: 'http', machine_id: 'machine-2', machine_alias: 'Web' });
@@ -102,9 +148,23 @@ describe('long-term statistics capture and aggregation', () => {
     expect(result.attackers.find((row) => row.value === '6.6.6.6')?.returnedAfterBan).toBe(false);
     expect(result.quietMachines).toEqual([{ value: JSON.stringify(['default', 'machine-2']), label: 'Web', previous: 1 }]);
     expect(result.increases).toEqual([{ value: JSON.stringify(['default', 'machine-1']), label: 'Server', current: 3, previous: 1, change: 2 }]);
+    expect(result.decreases).toEqual([]);
     // Silence is expected when only part of the traffic is selected.
     expect(f.query({ instance: 'default', from: '2026-01-20', to: '2026-01-31', scenario: 'ssh' }).quietMachines).toEqual([]);
     expect(f.query({ instance: 'default', from: '2026-01-20', to: '2026-01-31', scenario: 'smb' }).totals).toMatchObject({ alerts: 2, uniqueIPs: 1, newIPs: 1 });
+  });
+
+  it('lists machines whose alerts fell, apart from those that went quiet', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    const at = (day: string) => `2026-01-${day}T10:00:00.000Z`;
+    f.alert(1, { created_at: at('10') }); f.alert(2, { created_at: at('11') }); f.alert(3, { created_at: at('12') });
+    f.alert(4, { created_at: at('13'), machine_id: 'machine-2', machine_alias: 'Web' });
+    f.alert(5, { created_at: at('21') });
+    f.consolidate();
+    const result = f.query({ instance: 'default', from: '2026-01-20', to: '2026-01-31' });
+    expect(result.decreases).toEqual([{ value: JSON.stringify(['default', 'machine-1']), label: 'Server', current: 1, previous: 3, change: -2 }]);
+    expect(result.increases).toEqual([]);
+    expect(result.quietMachines.map((row) => row.label)).toEqual(['Web']);
   });
 
   it('loads finding details: IPs with their ranges, returning IPs and machine activity', () => {
