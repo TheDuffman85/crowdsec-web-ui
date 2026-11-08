@@ -319,6 +319,20 @@ Supported dashboard filters: `instance`, `q`, `decision_q`, `country`, `scenario
 - The browser sends separate alert and decision queries from the same persisted Quick Filter state. Filtered Dashboard counts therefore match the corresponding paginated list totals, including default active-only and duplicate-hiding behavior on Decisions.
 - The legacy scalar filters remain supported. If both a scalar filter and `q` are supplied, both must match.
 
+## Long-term Statistics
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/statistics` | Return archived totals, period comparisons, activity series, rankings, and coverage for the selected scope. |
+| GET | `/api/statistics/details` | Return the IPs, ranges, or machines behind a finding. Accepts the same filters as `/api/statistics`. |
+| PUT | `/api/config/statistics` | Update any of `enabled`, `retentionDays`, `jobInterval`, and `jobTimeBudget`. Returns `{ "success": true, "statistics": { ... } }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when a changed field is set by the application configuration. |
+
+- `from` and `to` are inclusive UTC dates in `YYYY-MM-DD` format. They default to 29 days ago and today, respectively. The range can span up to 3,650 days. The API accepts an end date up to one day ahead of the server's UTC date for clock skew.
+- `instance` defaults to `all` and accepts a configured instance ID. `simulation` accepts `live` (default), `simulated`, or `all`. When simulations are disabled, the API uses `live`. `limit` accepts `10` (default), `20`, or `50`.
+- Optional filters include `ip` (an IP address or range), `machine` (a JSON array containing the instance ID and machine ID), `scenario`, `country` (two-letter code), `network` (AS name), and `target`.
+- Finding details require `kind=ips`, `kind=returned`, or `kind=machines`. Use `network` to scope IP results to an AS, `history=1` to include bans before the selected range for returned IPs, or `machines` with a JSON array of 1–25 machine keys. IP and range lists accept a `size` of 1–500 and default to 25.
+- Both read endpoints return `400` for invalid filters and `503` with `retryAfterMs` when the archive is unavailable. `GET /api/config` includes the statistics settings, managed fields, and collection status in its `statistics` object.
+
 ## CrowdSec Metrics
 
 | Method | Endpoint | Description |

@@ -193,12 +193,12 @@ export function seedStatisticsArchive(options: {
         const shape = statisticsAlertShape(index, atMs, nowMs, seed, sourceSeed);
         const identity = ['loadtest-archive', instanceId, index];
         rows.push({ seq: ++sequence, identity: JSON.stringify(identity), day: at.slice(0, 10), payload: JSON.stringify([1, 'a', at, instanceId, shape.ip,
-          shape.country, shape.asNumber, shape.asName, shape.machine, shape.machine, shape.scenario, shape.simulated ? 1 : 0, shape.eventsCount]) });
+          shape.country, shape.asNumber, shape.asName, shape.machine, shape.machine, shape.scenario, shape.simulated ? 1 : 0, shape.eventsCount, shape.target]) });
         alerts += 1;
         if (shape.bans) {
           rows.push({ seq: ++sequence, identity: JSON.stringify(['loadtest-archive-decision', instanceId, index]), day: at.slice(0, 10), payload: JSON.stringify([1, 'd', at, instanceId,
             shape.ip, shape.country, shape.asNumber, shape.asName, shape.machine, shape.machine, shape.scenario, shape.simulated ? 1 : 0,
-            at, shape.simulated ? 1 : 0, shape.decisionType, 'crowdsec', identity]) });
+            at, shape.simulated ? 1 : 0, shape.decisionType, 'crowdsec', identity, shape.target]) });
           decisions += 1;
         }
         if (rows.length >= 20_000) flush();

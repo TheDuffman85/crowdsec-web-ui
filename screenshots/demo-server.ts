@@ -210,8 +210,15 @@ const controller = createApp({
   mqttPublishImpl: async () => {},
 });
 
+await controller.statistics.run();
+const { error, backlog, backfillPending } = controller.statistics.configuration().status;
+if (error || backlog || backfillPending) {
+  throw new Error(error || 'Screenshot statistics backfill did not finish');
+}
+
 const server = serve({
   fetch: controller.fetch,
+  hostname: '127.0.0.1',
   port: controller.config.port,
 });
 

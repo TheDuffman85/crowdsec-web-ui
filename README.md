@@ -14,7 +14,7 @@
 
 # CrowdSec Web UI
 
-A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alerts, manage decisions, monitor runtime metrics, and send notifications from one responsive UI.
+A self-hosted web UI for investigating alerts, managing decisions, tracking long-term attack trends, monitoring runtime metrics, and sending notifications with [CrowdSec](https://crowdsec.net/).
 
 <div align="center">
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB" alt="React" /></a>
@@ -29,10 +29,11 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Area | Highlights |
 | --- | --- |
 | Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, shared quick filters, and simulation counts |
+| Statistics | Long-term attack trends, period comparisons, attacker and target rankings, and findings on recurring IPs, quiet machines, and gaps in ban coverage |
 | Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, configurable columns, and an optional view grouped by attacking IP session |
 | Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
 | Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
-| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, Decisions, and Allowlists |
+| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Statistics, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, linking local accounts to SSO identities, group roles, and instance-wide read-only mode |
@@ -45,6 +46,9 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 <p>
   <a href="screenshots/dashboard.png"><img src="screenshots/dashboard.png" alt="Dashboard" width="48%"></a>
   <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
+</p>
+<p align="center">
+  <a href="screenshots/statistics.png"><img src="screenshots/statistics.png" alt="Long-term statistics with findings, period comparisons, and an activity chart" width="65%"></a>
 </p>
 <p>
   <a href="screenshots/multi_instance.png"><img src="screenshots/multi_instance.png" alt="Combined multi-instance alerts" width="48%"></a>
@@ -1110,10 +1114,10 @@ statistics:
 
 Explicit YAML and environment settings lock the corresponding Settings controls. Other changes persist in `state.db` and apply without a restart.
 
-The **Statistics** page ranks attacking IPs, attacked machines and known targets, including exact unique IPs, linked bans, scenarios, country/ASN, activity dates and targeted machines. Top Targets shows alert counts and unique source IPs for each target. Targets are retained for newly captured alerts; observations archived before target collection was added have no target information. It is built to point out what needs attention:
+The **Statistics** page ranks attacking IPs, attacked machines and known targets. Rankings include unique IPs, linked bans, scenarios, country and ASN, activity dates, and targeted machines. Top Targets shows alert counts and unique source IPs for each target. Target information is available for alerts archived after target collection was added.
 
-- **Findings** list machines that stopped raising alerts (a stopped agent or broken log acquisition), scenarios that raise alerts but never lead to a ban (a profile or remediation gap), AppSec rules that block requests from IPs that are never banned, IPs that returned after a ban (ban durations too short), machines with a sharp increase, new attack types, a single AS behind a large share of alerts, and IPs attacking several machines. Expand a finding to load its details, 25 rows at a time (**Show more** extends a list up to 500): the IPs involved, the address ranges (/24 or /64) of a dominant AS, or a machine's last alert and scenarios. With enforcement permissions, **Ban** and **Block range** open the decision dialog prefilled for that address or range, and **Ban all** / **Block all** add the same decision for every listed address or range at once (allowlisted values are skipped unless you bypass the allowlist); Top IPs offer the single action.
-- **Summary tiles** show alerts, unique IPs (and how many were never seen before), bans, ban coverage (the share of attacking IPs that were banned), recurring IPs and IPs that returned after a ban, with the change against the preceding period of equal length.
+- **Findings** flag quiet machines, scenarios without bans, AppSec blocks, IPs that return after a ban, traffic spikes by machine, new attack types, dominant networks, and IPs that target several machines. Up to five findings appear initially, with warnings first. Expand a finding to see the IPs involved, the address ranges (`/24` or `/64`) of a dominant AS, or a machine's recent activity. IP and range tables start with 25 rows and can expand to 500. With enforcement permissions, **Ban** and **Block range** open the decision dialog for one value. **Ban all** and **Block all** apply the same decision to every listed value, skipping allowlisted values unless you bypass the allowlist. Top IPs also offer the single-IP action.
+- **Summary tiles** show alerts, unique IPs (and how many were never seen before), bans, ban coverage (the share of attacking IPs that were banned), recurring IPs, and IPs that returned after a ban. Most tiles compare their totals with the preceding period of equal length.
 - **Scenarios** show alerts with their trend, unique IPs, machines, bans and ban coverage per scenario; select one to filter the whole page by it.
 - Top countries and AS include their number of distinct IPs, which tells one noisy host from a botnet. Machine changes show increases and machines that went quiet.
 
