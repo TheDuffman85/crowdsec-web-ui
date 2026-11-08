@@ -71,13 +71,13 @@ function MetricsSourceBadge({ sourceId }: { sourceId?: string }) {
     ? `${source.instance_name} — ${source.endpoint_name}`
     : source.endpoint_name;
   return (
-    <Badge variant="outline" title={label}>
+    <Badge variant="outline" className="max-w-full" title={label}>
       {source.endpoint_icon && (
         <span className="mr-1 inline-flex h-3.5 min-w-3.5 items-center justify-center leading-none" aria-hidden="true">
           {source.endpoint_icon}
         </span>
       )}
-      {label}
+      <span className="truncate">{label}</span>
     </Badge>
   );
 }
@@ -313,7 +313,7 @@ function EmptyState({ message }: { message: string }) {
 
 function TooltipValue({ children, tone, tooltip, className = '' }: { children: ReactNode; tone: MetricTone; tooltip: string; className?: string }) {
   return (
-    <span className="group relative inline-flex shrink-0">
+    <span className="group inline-flex shrink-0">
       <span
         tabIndex={0}
         aria-label={tooltip}
@@ -323,7 +323,7 @@ function TooltipValue({ children, tone, tooltip, className = '' }: { children: R
       </span>
       <span
         role="tooltip"
-        className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-72 rounded-lg bg-gray-900 px-3 py-2 text-left text-xs font-normal leading-5 text-white shadow-lg group-hover:block group-focus-within:block dark:bg-gray-700"
+        className="pointer-events-none absolute end-0 top-full z-20 mt-2 hidden w-full max-w-72 rounded-lg bg-gray-900 px-3 py-2 text-start text-xs font-normal leading-5 text-white shadow-lg group-hover:block group-focus-within:block dark:bg-gray-700"
       >
         {tooltip}
       </span>
@@ -644,10 +644,10 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
         ) : list.filteredItems.length === 0 ? (
           <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {list.visibleItems.map((item) => (
               <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
-                <div className="flex items-start justify-between gap-3">
+                <div className="relative flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.source}>{item.source}</p>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -908,10 +908,10 @@ function TimingList({ items }: { items: CrowdsecMetricsTiming[] }) {
         ) : list.filteredItems.length === 0 ? (
           <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {list.visibleItems.map((item) => (
               <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg bg-gray-50 p-4 dark:bg-gray-900/40">
-                <div className="flex items-center justify-between gap-3">
+                <div className="relative flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.source}>{item.source}</p>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{item.type}</p>
@@ -1012,14 +1012,14 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
         ) : list.filteredItems.length === 0 ? (
           <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {list.visibleItems.map((item) => {
               const blockTone: MetricTone = item.blocked > 0 ? 'warning' : 'neutral';
               const allowed = Math.max(item.requests - item.blocked, 0);
 
               return (
                 <div key={`${item.source_id || ''}-${item.engine}-${item.source}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="relative flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.engine}>{item.engine}</p>
                       <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400" title={item.source}>{item.source}</p>
@@ -1152,7 +1152,7 @@ function CombinedSourcesSummary({ sources, includeInstance }: { sources: Crowdse
         <CardTitle>{t('pages.metrics.combinedSources')}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {sources.map((source, index) => {
             const label = includeInstance
               ? `${source.instance_name} — ${source.endpoint_name}`
@@ -1428,7 +1428,7 @@ export function Metrics() {
     && (requestedEndpointId === COMBINED_ENDPOINT_ID || !selectedChoice);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 wrap-anywhere">
       {showEndpointSelector && (
         <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           <div className="w-64 max-w-full">
