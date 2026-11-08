@@ -200,7 +200,7 @@ describe('Statistics page', () => {
     expect(within(returned).queryByText(/^Showing/)).not.toBeInTheDocument();
   });
 
-  test('compares machine activity with the preceding period as bars on one scale', async () => {
+  test('compares machine activity with the preceding period', async () => {
     const data = payload();
     vi.mocked(fetchConfig).mockResolvedValue({ statistics: configuration, lookback_days: 7, instances: [{ id: 'default', name: 'Production' }, { id: 'edge', name: 'Edge' }] } as ConfigResponse);
     vi.mocked(sessionFetch).mockImplementation(async () => Response.json({
@@ -214,11 +214,11 @@ describe('Statistics page', () => {
     const increase = await screen.findByRole('button', { name: /^proxy-02: 366 alerts in the preceding period, 1\D?896 in the selected period$/ });
     expect(within(increase).getByText('+418%')).toBeInTheDocument();
     expect(within(increase).getByText('Edge')).toBeInTheDocument();
-    expect(within(increase).getByText(/^1\D?896 alerts$/)).toBeInTheDocument();
+    expect(within(increase).getByText(/^366 → 1\D?896$/)).toBeInTheDocument();
     const quiet = screen.getByRole('button', { name: 'dev-bastion: 120 alerts in the preceding period, 0 in the selected period' });
     expect(quiet).toBeDisabled();
     expect(within(quiet).getByText('−100%')).toBeInTheDocument();
-    expect(screen.getByText('Preceding period')).toBeInTheDocument();
+    expect(within(quiet).getByText('120 → 0')).toBeInTheDocument();
   });
 
   test('does not compare or report period changes without a complete preceding period', async () => {

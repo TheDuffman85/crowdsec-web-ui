@@ -13,7 +13,7 @@ import { ScenarioName } from '../components/ScenarioName';
 import { CountryFlag } from '../components/CountryFlag';
 import { InstanceIcon } from '../components/InstanceIcon';
 import { AddDecisionModal } from '../components/AddDecisionModal';
-import { PeriodChangeBar, PeriodLegend } from '../components/PeriodChange';
+import { PeriodChangeRow } from '../components/PeriodChange';
 import { usePeriodChange } from '../lib/periodChange';
 import { DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
 import { fetchConfig } from '../lib/api';
@@ -496,8 +496,6 @@ export function Statistics() {
     ...data.increases.map((row) => ({ value: row.value, label: row.label, previous: row.previous, current: row.current })),
     ...data.quietMachines.map((row) => ({ value: row.value, label: row.label, previous: row.previous, current: 0 })),
   ] : [];
-  // Both periods share one scale, so bar lengths compare across machines.
-  const changeScale = Math.max(...machineChanges.map((row) => Math.max(row.previous, row.current)), 1);
   const periodChange = usePeriodChange();
   const machineInstance = (value: string) => { try { return (JSON.parse(value) as string[])[0]; } catch { return undefined; } };
   // Ranges within the last two days are charted by hour.
@@ -772,13 +770,12 @@ export function Statistics() {
                 <TrendingUp className="h-5 w-5 text-primary-600 dark:text-primary-400" aria-hidden="true" />
                 {t('pages.statistics.machineChanges')}
               </CardTitle>
-              {!data.coverage.comparisonPartial && machineChanges.length > 0 && <PeriodLegend className="mt-2" />}
             </CardHeader>
             <CardContent>
               {data.coverage.comparisonPartial ? <EmptyState>{t('pages.statistics.comparisonPartial')}</EmptyState>
                 : machineChanges.length === 0 ? <EmptyState>{t('common.noDataAvailable')}</EmptyState> : (
-                  <div className="space-y-1">
-                    {machineChanges.map((row) => {
+                  <div className="space-y-2">
+                    {machineChanges.map((row, index) => {
                       const quiet = row.current === 0;
                       const change = periodChange(row.previous, row.current);
                       const owner = machineInstance(row.value);
@@ -790,18 +787,21 @@ export function Statistics() {
                           onClick={() => update({ machine: row.value })}
                           title={t('pages.statistics.machineChangeLabel', { machine: machineName(row.value, row.label), previous: formatNumber(row.previous), current: formatNumber(row.current) })}
                           aria-label={t('pages.statistics.machineChangeLabel', { machine: machineName(row.value, row.label), previous: formatNumber(row.previous), current: formatNumber(row.current) })}
-                          className="block w-full rounded-lg p-2 text-left transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-gray-700/50 dark:disabled:hover:bg-transparent"
+                          className="block w-full rounded-lg border border-transparent p-2 text-left transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-gray-700/50 dark:disabled:hover:bg-transparent"
                         >
-                          <span className="flex items-center justify-between gap-3">
-                            <span className="flex min-w-0 items-center gap-2">
+                          <PeriodChangeRow
+                            rank={index + 1}
+                            previous={row.previous}
+                            current={row.current}
+                            change={change}
+                            changeClassName={quiet ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}
+                            label={<>
                               {instances.length > 1 && owner && instanceIcon(owner)}
                               <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{machineName(row.value, row.label)}</span>
                               {instances.length > 1 && owner && <span className="hidden shrink-0 truncate text-xs text-gray-500 sm:inline dark:text-gray-400">{instanceName(owner)}</span>}
                               {quiet && <Badge variant="warning" className="shrink-0">{t('pages.statistics.quiet')}</Badge>}
-                            </span>
-                            <span className={`shrink-0 text-sm font-bold tabular-nums ${quiet ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>{change}</span>
-                          </span>
-                          <span className="mt-1.5 block"><PeriodChangeBar previous={row.previous} current={row.current} scale={changeScale} /></span>
+                            </>}
+                          />
                         </button>
                       );
                     })}

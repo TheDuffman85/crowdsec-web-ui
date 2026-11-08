@@ -3,7 +3,7 @@ import { AlertCircle, ArrowUpRight, ChevronRight, ExternalLink, Gavel, Info, Lis
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Badge } from './ui/Badge';
 import { CountryFlag } from './CountryFlag';
-import { PeriodChangeBar, PeriodLegend } from './PeriodChange';
+import { PeriodChangeRow } from './PeriodChange';
 import { usePeriodChange } from '../lib/periodChange';
 import { sessionFetch } from '../lib/sessionFetch';
 import { apiUrl } from '../lib/basePath';
@@ -244,37 +244,32 @@ function DetailBody({ detail, context }: { detail: FindingDetail; context: Detai
 
   if (data.kind === 'machines') {
     return (
-      <div className="space-y-2">
-      <PeriodLegend />
       <div className="grid gap-3 lg:grid-cols-2">
-        {data.machines.map((machine) => {
-          // Scenarios of one machine share a scale.
-          const scale = Math.max(...machine.scenarios.map((scenario) => Math.max(scenario.previous, scenario.current)), 1);
-          return (
+        {data.machines.map((machine) => (
           <div key={machine.value} className="rounded-md border border-gray-100 p-3 text-sm dark:border-gray-700/60">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <span className="font-medium text-gray-900 dark:text-gray-100">{context.machineName(machine.value)}</span>
               <span className="text-xs text-gray-500 dark:text-gray-400">{t('pages.statistics.lastAlert')}: {machine.lastActivity ? `${context.formatTimestamp(machine.lastActivity)} UTC` : t('pages.statistics.noneRetained')}</span>
             </div>
             {machine.scenarios.length > 0 && (
-              <ul className="mt-3 space-y-2.5">
+              <ul className="mt-3 space-y-2">
                 {machine.scenarios.map((scenario) => (
-                  <li key={scenario.label} className="text-xs"
+                  <li key={scenario.label}
                     title={t('pages.statistics.machineChangeLabel', { machine: scenario.label, previous: formatNumber(scenario.previous), current: formatNumber(scenario.current) })}>
-                    <span className="mb-1 flex items-center justify-between gap-2">
-                      <span className="truncate text-gray-700 dark:text-gray-300">{scenario.label}</span>
-                      <span className={`shrink-0 font-semibold tabular-nums ${scenario.current > scenario.previous ? 'text-red-600 dark:text-red-400'
-                        : scenario.current < scenario.previous ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'}`}>
-                        {periodChange(scenario.previous, scenario.current)}
-                      </span>
-                    </span>
-                    <PeriodChangeBar previous={scenario.previous} current={scenario.current} scale={scale} />
+                    <PeriodChangeRow
+                      previous={scenario.previous}
+                      current={scenario.current}
+                      change={periodChange(scenario.previous, scenario.current)}
+                      changeClassName={scenario.current > scenario.previous ? 'text-red-600 dark:text-red-400'
+                        : scenario.current < scenario.previous ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'}
+                      label={<span className="truncate text-gray-700 dark:text-gray-300">{scenario.label}</span>}
+                    />
                   </li>
                 ))}
               </ul>
             )}
             {machine.ips.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1">
+              <div className="mt-3 flex flex-wrap gap-1">
                 {machine.ips.map((row) => (
                   <button key={row.ip} type="button" onClick={() => context.onFilter({ ip: row.ip })}
                     className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700">
@@ -284,9 +279,7 @@ function DetailBody({ detail, context }: { detail: FindingDetail; context: Detai
               </div>
             )}
           </div>
-          );
-        })}
-      </div>
+        ))}
       </div>
     );
   }
