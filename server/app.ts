@@ -682,10 +682,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let nextRefreshAt: string | null = null;
   let isSchedulerRunning = false;
   let stopped = false;
-  let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
-  let isHeartbeatSchedulerRunning = false;
-  let heartbeatPromise: Promise<void> | null = null;
-  let heartbeatFailureLogged = false;
   let bootstrapRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootstrapPromise: Promise<boolean> | null = null;
   let bootstrapSource: string | null = null;
@@ -1132,14 +1128,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     set nextRefreshAt(value: string | null) { nextRefreshAt = value; },
     get isSchedulerRunning() { return isSchedulerRunning; },
     set isSchedulerRunning(value: boolean) { isSchedulerRunning = value; },
-    get heartbeatTimeout() { return heartbeatTimeout; },
-    set heartbeatTimeout(value: ReturnType<typeof setTimeout> | null) { heartbeatTimeout = value; },
-    get isHeartbeatSchedulerRunning() { return isHeartbeatSchedulerRunning; },
-    set isHeartbeatSchedulerRunning(value: boolean) { isHeartbeatSchedulerRunning = value; },
-    get heartbeatPromise() { return heartbeatPromise; },
-    set heartbeatPromise(value: Promise<void> | null) { heartbeatPromise = value; },
-    get heartbeatFailureLogged() { return heartbeatFailureLogged; },
-    set heartbeatFailureLogged(value: boolean) { heartbeatFailureLogged = value; },
     get activeInstanceNetworkSyncs() { return activeInstanceNetworkSyncs; },
     set activeInstanceNetworkSyncs(value: number) { activeInstanceNetworkSyncs = value; },
     get refreshIntervalMs() { return refreshIntervalMs; },

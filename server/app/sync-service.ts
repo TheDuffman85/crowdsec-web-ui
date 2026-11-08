@@ -71,6 +71,14 @@ interface InstanceSyncRuntime {
   reconcileWindowsPerRefresh: number;
 }
 
+interface InstanceHeartbeatRuntime {
+  client: LapiClient;
+  label: string;
+  timeout: ReturnType<typeof setTimeout> | null;
+  promise: Promise<void> | null;
+  failureLogged: boolean;
+}
+
 interface ReconcileWindowState {
   version: 1;
   configFingerprint: string;
@@ -129,6 +137,8 @@ export interface SyncServiceDependencies extends Record<string, any> {
 export function createSyncService(dependencies: SyncServiceDependencies) {
   const state = dependencies.state;
   let schedulerGeneration = 0;
+  let heartbeatGeneration = 0;
+  const instanceHeartbeats = new Map<string, InstanceHeartbeatRuntime>();
   let retentionCleanupBatchSize = RETENTION_CLEANUP_MIN_BATCH_SIZE;
   let notificationEvaluation: Promise<void> | null = null;
   let notificationEvaluationRerunRequested = false;
@@ -2352,71 +2362,84 @@ function stopRefreshScheduler(logStop = true): void {
   }
 }
 
-async function sendMachineHeartbeat(): Promise<void> {
-  if (!lapiClient.hasAuthConfig()) {
-    return;
+async function sendMachineHeartbeat(runtime: InstanceHeartbeatRuntime): Promise<void> {
+  if (runtime.promise) {
+    return runtime.promise;
   }
 
-  if (state.heartbeatPromise) {
-    return state.heartbeatPromise;
-  }
-
-  state.heartbeatPromise = (async () => {
+  runtime.promise = Promise.resolve().then(async () => {
     try {
-      await lapiClient.heartbeat();
-      await lapiClient.sendUsageMetrics();
-      if (state.heartbeatFailureLogged) {
-        console.log('CrowdSec machine heartbeat restored.');
+      await runtime.client.heartbeat();
+      await runtime.client.sendUsageMetrics();
+      if (runtime.failureLogged) {
+        console.log(`${runtime.label}CrowdSec machine heartbeat restored.`);
       }
-      state.heartbeatFailureLogged = false;
+      runtime.failureLogged = false;
     } catch (error: any) {
       const message = error?.message || 'Unknown error';
-      if (!state.heartbeatFailureLogged) {
-        console.warn(`CrowdSec machine heartbeat or metrics update failed: ${message}`);
+      if (!runtime.failureLogged) {
+        console.warn(`${runtime.label}CrowdSec machine heartbeat or metrics update failed: ${message}`);
       }
-      state.heartbeatFailureLogged = true;
+      runtime.failureLogged = true;
     } finally {
-      state.heartbeatPromise = null;
+      runtime.promise = null;
     }
-  })();
+  });
 
-  return state.heartbeatPromise;
+  return runtime.promise;
 }
 
-async function runHeartbeatLoop(): Promise<void> {
-  if (!state.isHeartbeatSchedulerRunning) return;
+async function runHeartbeatLoop(runtime: InstanceHeartbeatRuntime, intervalMs: number, generation: number): Promise<void> {
+  if (generation !== heartbeatGeneration) return;
+  runtime.timeout = null;
 
-  await sendMachineHeartbeat();
+  await sendMachineHeartbeat(runtime);
 
-  if (!state.isHeartbeatSchedulerRunning || config.heartbeatIntervalMs <= 0) return;
+  // An in-flight request may finish after stop or restart. Only the current
+  // scheduler owns the next timer, and each instance waits for its own request.
+  if (generation !== heartbeatGeneration) return;
 
-  state.heartbeatTimeout = setTimeout(() => {
-    void runHeartbeatLoop();
-  }, config.heartbeatIntervalMs);
+  runtime.timeout = setTimeout(() => {
+    void runHeartbeatLoop(runtime, intervalMs, generation);
+  }, intervalMs);
 }
 
 function startHeartbeatScheduler(): void {
   stopHeartbeatScheduler(false);
-  if (config.heartbeatIntervalMs <= 0) {
-    console.log('CrowdSec machine heartbeat disabled.');
-    return;
-  }
+  const generation = heartbeatGeneration;
+  for (const instance of config.instances) {
+    const client = lapiClients.get(instance.id)!;
+    const intervalMs = instance.sync.heartbeatIntervalMs ?? config.heartbeatIntervalMs;
+    const label = config.instances.length > 1 ? `[${instance.name}] ` : '';
+    if (intervalMs <= 0) {
+      console.log(`${label}CrowdSec machine heartbeat disabled.`);
+      continue;
+    }
+    if (!client.hasAuthConfig()) continue;
 
-  console.log(`Starting CrowdSec machine heartbeat (${getIntervalName(config.heartbeatIntervalMs)})...`);
-  state.isHeartbeatSchedulerRunning = true;
-  state.heartbeatTimeout = setTimeout(() => {
-    void runHeartbeatLoop();
-  }, 0);
+    let runtime = instanceHeartbeats.get(instance.id);
+    if (!runtime) {
+      runtime = { client, label, timeout: null, promise: null, failureLogged: false };
+      instanceHeartbeats.set(instance.id, runtime);
+    }
+    const heartbeatRuntime = runtime;
+    console.log(`${label}Starting CrowdSec machine heartbeat (${getIntervalName(intervalMs)})...`);
+    heartbeatRuntime.timeout = setTimeout(() => {
+      void runHeartbeatLoop(heartbeatRuntime, intervalMs, generation);
+    }, 0);
+  }
 }
 
 function stopHeartbeatScheduler(logStop = true): void {
-  if (logStop && (state.isHeartbeatSchedulerRunning || state.heartbeatTimeout)) {
-    console.log('Stopping CrowdSec machine heartbeat...');
-  }
-  state.isHeartbeatSchedulerRunning = false;
-  if (state.heartbeatTimeout) {
-    clearTimeout(state.heartbeatTimeout);
-    state.heartbeatTimeout = null;
+  heartbeatGeneration += 1;
+  for (const runtime of instanceHeartbeats.values()) {
+    if (logStop && (runtime.timeout || runtime.promise)) {
+      console.log(`${runtime.label}Stopping CrowdSec machine heartbeat...`);
+    }
+    if (runtime.timeout) {
+      clearTimeout(runtime.timeout);
+      runtime.timeout = null;
+    }
   }
 }
 
