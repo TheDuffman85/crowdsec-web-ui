@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "Решения по типу",
   "pages.statistics.decisions": "Решения",
   "pages.statistics.detailsError": "Не удалось загрузить подробности.",
-  "pages.statistics.detailsRetention": "Подробности оповещений хранятся около {days} дней; более старые данные могут быть недоступны.",
+  "pages.statistics.detailsRetention": "Применяет эти фильтры и выбранный период как быстрые фильтры в оповещениях и решениях, заменяя текущие. Подробности хранятся около {days} дней; более старые данные могут быть недоступны.",
   "pages.statistics.disabledHelp": "Сбор отключён. Ранее собранные данные доступны до истечения срока хранения. Включите сбор в настройках, чтобы формировать историю.",
   "pages.statistics.enable": "Включить долгосрочный сбор",
   "pages.statistics.findingInBandScenario": "{scenario} (AppSec) заблокировал {count} запросов с {ips} IP; ни один из этих IP не был забанен.",

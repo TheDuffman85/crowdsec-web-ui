@@ -8,6 +8,8 @@ import { I18nContext, type I18nContextValue } from '../../lib/i18n';
 import { addDecision, addDecisions, checkAllowlist, fetchConfig } from '../../lib/api';
 import { sessionFetch } from '../../lib/sessionFetch';
 import en from '../../locales/en.json';
+import { createDateTimeContextValue, DateTimeContext, DEFAULT_DATE_TIME_SETTINGS } from '../../lib/dateTime';
+import { loadStoredQuickFilters, saveStoredQuickFilters } from '../../lib/quickFilters';
 import type { ConfigResponse } from '../../types';
 import { DEFAULT_STATISTICS_SETTINGS, type StatisticsConfiguration, type StatisticsResponse } from '../../../../shared/statistics';
 
@@ -70,7 +72,7 @@ describe('Statistics page', () => {
   });
 
   test('keeps ranking limits and attacker filters in the URL and builds UTC investigation links', async () => {
-    mount();
+    mount(<DateTimeContext.Provider value={createDateTimeContextValue({ ...DEFAULT_DATE_TIME_SETTINGS, timeZone: 'Europe/Berlin' })}><Statistics /></DateTimeContext.Provider>);
     const attacker = await screen.findByRole('row', { name: '192.0.2.7' });
     fireEvent.click(within(attacker).getAllByRole('cell')[1]);
     await screen.findByRole('link', { name: 'View Alerts' });
@@ -81,9 +83,24 @@ describe('Statistics page', () => {
     const link = screen.getByRole('link', { name: 'View Alerts' });
     const target = new URL(link.getAttribute('href')!, 'http://localhost');
     expect(target.pathname).toBe('/alerts');
-    expect(target.searchParams.get('q')).toContain('date>=2026-10-09T00:00:00Z AND date<2026-11-08T00:00:00Z');
-    expect(target.searchParams.get('q')).toContain('ip="192.0.2.7"');
-    expect(target.searchParams.get('simulation')).toBe('live');
+    // The UTC days are expressed in the display time zone (CEST, then CET), as the quick filters use it.
+    expect(target.searchParams.get('q')).toContain('date>=2026-10-09T02 AND date<=2026-11-08T00');
+    expect(target.searchParams.get('q')).toContain('ip=192.0.2.7');
+    expect(target.searchParams.get('q')).toContain('sim=live');
+    expect(target.searchParams.has('simulation')).toBe(false);
+    const decisions = new URL(screen.getByRole('link', { name: 'View Decisions' }).getAttribute('href')!, 'http://localhost');
+    expect(decisions.pathname).toBe('/decisions');
+    expect(decisions.searchParams.get('q')).toBe(target.searchParams.get('q'));
+    expect(decisions.searchParams.get('include_expired')).toBe('true');
+    // Following a link replaces the saved quick filters with the Statistics selection.
+    saveStoredQuickFilters({ selections: { country: { included: ['FR'], excluded: [] } }, dateRange: { start: '', end: '' }, simulation: 'all' });
+    fireEvent.click(link);
+    expect(loadStoredQuickFilters()).toEqual({
+      selections: { ip: { included: ['192.0.2.7'], excluded: [] } },
+      dateRange: { start: '2026-10-09T02', end: '2026-11-08T00' },
+      simulation: 'live',
+    });
+    expect(screen.getByTestId('location').textContent).toBe(`/alerts${target.search}`);
   });
 
   test.each(['Enter', ' '])('opens ranking rows with the %j key', async (key) => {
@@ -131,7 +148,7 @@ describe('Statistics page', () => {
     await screen.findByRole('link', { name: 'View Alerts' });
     expect(new URLSearchParams(String(vi.mocked(sessionFetch).mock.calls.at(-1)?.[0]).split('?')[1]).get(field)).toBe(value);
     const alerts = new URL(screen.getByRole('link', { name: 'View Alerts' }).getAttribute('href')!, 'http://localhost');
-    expect(alerts.searchParams.get('q')).toContain(`${field === 'network' ? 'as' : field}=${JSON.stringify(value)}`);
+    expect(alerts.searchParams.get('q')).toContain(`${field === 'network' ? 'as' : field}=${value.includes(' ') ? JSON.stringify(value) : value}`);
     fireEvent.click(screen.getByRole('button', { name: clearLabel }));
     await waitFor(() => expect(new URLSearchParams(screen.getByTestId('location').textContent!.split('?')[1]).has(field)).toBe(false));
     const currentRow = async () => within((await screen.findByRole('heading', { name: title })).closest('.rounded-xl') as HTMLElement).getByRole('button', { name: new RegExp(label) });
@@ -239,7 +256,7 @@ describe('Statistics page', () => {
     fireEvent.click(within(scenario).getAllByRole('cell')[1]);
     await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('scenario=crowdsecurity%2Fhttp-probing'));
     const link = await screen.findByRole('link', { name: 'View Alerts' });
-    expect(new URL(link.getAttribute('href')!, 'http://localhost').searchParams.get('q')).toContain('scenario="crowdsecurity/http-probing"');
+    expect(new URL(link.getAttribute('href')!, 'http://localhost').searchParams.get('q')).toContain('scenario=crowdsecurity/http-probing');
     expect(String(vi.mocked(sessionFetch).mock.calls.at(-1)?.[0])).toContain('scenario=crowdsecurity%2Fhttp-probing');
   });
 

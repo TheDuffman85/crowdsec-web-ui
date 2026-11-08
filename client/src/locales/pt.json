@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "Decisões por tipo",
   "pages.statistics.decisions": "Decisões",
   "pages.statistics.detailsError": "Não foi possível carregar os detalhes.",
-  "pages.statistics.detailsRetention": "Os detalhes dos alertas são mantidos por cerca de {days} dias; detalhes mais antigos podem não estar disponíveis.",
+  "pages.statistics.detailsRetention": "Aplica estes filtros e o período selecionado como filtros rápidos em Alertas e Decisões, substituindo os atuais. Os detalhes são mantidos por cerca de {days} dias; detalhes mais antigos podem não estar disponíveis.",
   "pages.statistics.disabledHelp": "A coleta está desativada. As estatísticas existentes permanecem até expirar. Ative a coleta nas configurações para criar um histórico.",
   "pages.statistics.enable": "Ativar coleta de longo prazo",
   "pages.statistics.findingInBandScenario": "{scenario} (AppSec) bloqueou {count} requisições de {ips} IPs; nenhum desses IPs foi banido.",

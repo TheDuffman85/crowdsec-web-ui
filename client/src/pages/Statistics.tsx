@@ -2,7 +2,7 @@ import { useEffect, useEffectEvent, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
-  AlertCircle, ArrowUpRight, Clock3, Crosshair, Database, Gavel, Globe, Info, ListChecks, Network,
+  AlertCircle, Clock3, Crosshair, Database, Gavel, Globe, Info, ListChecks, Network,
   RefreshCw, Repeat, RotateCcw, Server, ShieldAlert, ShieldCheck, Target, TrendingUp, Users, X,
 } from 'lucide-react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -21,16 +21,44 @@ import { fetchConfig } from '../lib/api';
 import { sessionFetch } from '../lib/sessionFetch';
 import { apiUrl } from '../lib/basePath';
 import { useI18n } from '../lib/i18n';
-import { formatDateTimeValue, formatTimeValue, useDateTime } from '../lib/dateTime';
+import { formatDateTimeValue, formatTimeValue, getBrowserTimeZone, useDateTime } from '../lib/dateTime';
+import { mergeStoredQuickFiltersIntoQuery, saveStoredQuickFilters, type QuickFilterSimulationValue, type StoredQuickFilters } from '../lib/quickFilters';
 import { getCountryName } from '../lib/utils';
 import { STICKY_ACTIONS_CELL_CLASS_NAME, STICKY_ACTIONS_HEADER_CLASS_NAME } from '../lib/tableColumns';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { formatCustomDate } from '../../../shared/date-format';
-import type { ConfigResponse } from '../types';
+import type { ConfigResponse, FacetField } from '../types';
+import type { SearchDateRange } from '../../../shared/search';
 import type { StatisticsRanking, StatisticsResponse, StatisticsScenario } from '../../../shared/statistics';
 
 const DAY = 86_400_000;
 const isoDay = (stamp: number) => new Date(stamp).toISOString().slice(0, 10);
+
+/**
+ * The hour containing `stamp` as an hour-precision search value (`YYYY-MM-DDTHH`) in `timeZone`,
+ * the format the Alerts and Decisions quick filters use. Returns null in zones whose offset is
+ * not a whole hour, where a local hour does not line up with a UTC day boundary.
+ */
+function searchHour(stamp: number, timeZone: string | null): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en', {
+      ...(timeZone ? { timeZone } : {}),
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(stamp);
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((candidate) => candidate.type === type)?.value ?? '';
+    return part('minute') === '00' ? `${part('year')}-${part('month')}-${part('day')}T${part('hour')}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The Statistics UTC day range as a quick-filter date range for the Alerts and Decisions pages. */
+function quickFilterDateRange(from: string, to: string, timeZone: string | null): SearchDateRange {
+  const start = searchHour(Date.parse(`${from}T00:00:00Z`), timeZone);
+  // An hour-precision `date<=` includes the whole hour, so the last hour of the day ends the range.
+  const end = searchHour(Date.parse(`${to}T23:00:00Z`), timeZone);
+  return start && end ? { start, end } : { start: `${from}T00:00:00Z`, end: `${to}T23:59:59.999Z` };
+}
 const isIsoDay = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value));
 
 const PRESETS = ['today', 'yesterday', '7', '30', '90', '365'] as const;
@@ -90,6 +118,7 @@ const PROFILE_DOCS = 'https://docs.crowdsec.net/docs/local_api/profiles/format';
 // Shared with the Settings page so form controls look the same everywhere.
 const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400';
 const inputClass = 'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:[color-scheme:dark]';
+const actionButtonClass = 'inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 focus-visible:outline-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600';
 const linkClass = 'cursor-pointer font-medium text-primary-600 hover:text-primary-700 hover:underline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:text-primary-300';
 // Same axis styling as the dashboard activity chart.
 const axisProps = { stroke: '#888888', fontSize: 12, tickLine: false, axisLine: false } as const;
@@ -377,19 +406,33 @@ export function Statistics() {
   };
   const unknown = (label: string) => (label === 'Unknown' ? t('pages.statistics.unknown') : label);
 
-  const related = new URLSearchParams({ instance });
-  const end = Number.isFinite(Date.parse(to)) ? isoDay(Date.parse(to) + DAY) : to;
-  const search: string[] = [`date>=${from}T00:00:00Z`, `date<${end}T00:00:00Z`];
-  if (ip) search.push(`ip=${JSON.stringify(ip)}`);
-  if (scenario) search.push(`scenario=${JSON.stringify(scenario)}`);
-  if (country) search.push(`country=${JSON.stringify(country)}`);
-  if (network) search.push(`as=${JSON.stringify(network)}`);
-  if (target) search.push(`target=${JSON.stringify(target)}`);
+  // "View Alerts" and "View Decisions" apply the Statistics filters as the saved quick filters of
+  // those pages, replacing what was saved there, so the target shows exactly what was selected here
+  // and keeps it, like a drill-down from the Dashboard.
+  let relatedInstance = instance;
+  const relatedSelections: StoredQuickFilters['selections'] = {};
+  const include = (field: FacetField, value: string | null | undefined) => {
+    if (value) relatedSelections[field] = { included: [value], excluded: [] };
+  };
+  include('ip', ip);
+  include('scenario', scenario);
+  include('country', country);
+  include('as', network);
+  include('target', target);
   if (machine) {
-    try { const key = JSON.parse(machine) as string[]; related.set('instance', key[0]); search.push(`machine=${JSON.stringify(key[1])}`); } catch { /* The API reports invalid URL filters. */ }
+    try { const key = JSON.parse(machine) as string[]; relatedInstance = key[0]; include('machine', key[1]); } catch { /* The API reports invalid URL filters. */ }
   }
-  related.set('q', search.join(' AND '));
-  related.set('simulation', simulationsEnabled ? simulation : 'live');
+  const relatedQuickFilters: StoredQuickFilters = {
+    selections: relatedSelections,
+    dateRange: quickFilterDateRange(from, to, dateTime.timeZone || getBrowserTimeZone()),
+    simulation: simulationsEnabled ? simulation as QuickFilterSimulationValue : 'all',
+  };
+  const relatedHref = (page: 'alerts' | 'decisions') => {
+    const params = new URLSearchParams({ instance: relatedInstance, q: mergeStoredQuickFiltersIntoQuery(page, '', relatedQuickFilters) });
+    if (page === 'decisions') params.set('include_expired', 'true');
+    return `/${page}?${params}`;
+  };
+  const applyRelatedQuickFilters = () => saveStoredQuickFilters(relatedQuickFilters);
 
   const presetLabel = (key: Preset) => (key === 'today' ? t('pages.statistics.today')
     : key === 'yesterday' ? t('pages.statistics.yesterday')
@@ -723,10 +766,16 @@ export function Statistics() {
                 {network && <FilterChip label={network} clearLabel={t('components.quickFilters.clearSection', { field: t('tableColumns.as') })} onClear={() => update({ network: null })} />}
                 {target && <FilterChip label={target} clearLabel={t('components.quickFilters.clearSection', { field: t('tableColumns.target') })} onClear={() => update({ target: null })} />}
               </div>
-              <Link className={`${linkClass} inline-flex items-center gap-1`} to={`/alerts?${related}`}>
-                {t('pages.dashboard.viewAlerts')}
-                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
-              </Link>
+              <div className="flex flex-wrap gap-2">
+                <Link className={actionButtonClass} to={relatedHref('alerts')} onClick={applyRelatedQuickFilters}>
+                  <ShieldAlert className="h-4 w-4" aria-hidden="true" />
+                  {t('pages.dashboard.viewAlerts')}
+                </Link>
+                <Link className={actionButtonClass} to={relatedHref('decisions')} onClick={applyRelatedQuickFilters}>
+                  <Gavel className="h-4 w-4" aria-hidden="true" />
+                  {t('pages.dashboard.viewDecisions')}
+                </Link>
+              </div>
               <span className="text-xs text-gray-500 dark:text-gray-400">{t('pages.statistics.detailsRetention', { days: config?.lookback_days || 7 })}</span>
             </div>
           )}

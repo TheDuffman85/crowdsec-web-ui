@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "タイプ別の決定",
   "pages.statistics.decisions": "決定",
   "pages.statistics.detailsError": "詳細を読み込めませんでした。",
-  "pages.statistics.detailsRetention": "アラートの詳細は約 {days} 日間保持されます。それ以前の詳細は利用できない場合があります。",
+  "pages.statistics.detailsRetention": "これらのフィルターと選択した期間を、アラートと決定のクイックフィルターとして適用し、現在のフィルターを置き換えます。詳細は約 {days} 日間保持されます。それ以前の詳細は利用できない場合があります。",
   "pages.statistics.disabledHelp": "収集は無効です。既存の統計は保持期限まで利用できます。設定で収集を有効にすると履歴の蓄積が始まります。",
   "pages.statistics.enable": "長期収集を有効化",
   "pages.statistics.findingInBandScenario": "{scenario}（AppSec）が {ips} 件の IP からの {count} 件のリクエストをブロックしました。これらの IP は BAN されていません。",

@@ -1148,7 +1148,7 @@
   "pages.statistics.decisionTypes": "Decisions by Type",
   "pages.statistics.decisions": "Decisions",
   "pages.statistics.detailsError": "Details could not be loaded.",
-  "pages.statistics.detailsRetention": "Alert details are kept for about {days} days; older details may no longer be available.",
+  "pages.statistics.detailsRetention": "Applies these filters and the selected period as the quick filters on Alerts and Decisions, replacing the current ones. Details are kept for about {days} days; older details may no longer be available.",
   "pages.statistics.disabledHelp": "Collection is disabled. Previously collected statistics remain available until their retention expires. Enable collection in Settings to start building history.",
   "pages.statistics.enable": "Enable long-term collection",
   "pages.statistics.findingInBandScenario": "{scenario} (AppSec) blocked {count} requests from {ips} IPs; none of these IPs was banned.",

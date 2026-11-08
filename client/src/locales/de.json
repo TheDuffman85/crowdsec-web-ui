@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "Entscheidungen nach Typ",
   "pages.statistics.decisions": "Entscheidungen",
   "pages.statistics.detailsError": "Details konnten nicht geladen werden.",
-  "pages.statistics.detailsRetention": "Alarmdetails werden etwa {days} Tage aufbewahrt; ältere Details sind möglicherweise nicht mehr verfügbar.",
+  "pages.statistics.detailsRetention": "Übernimmt diese Filter und den gewählten Zeitraum als Schnellfilter für Alarme und Entscheidungen und ersetzt die bisherigen. Details werden etwa {days} Tage aufbewahrt; ältere Details sind möglicherweise nicht mehr verfügbar.",
   "pages.statistics.disabledHelp": "Die Erfassung ist deaktiviert. Vorhandene Statistiken bleiben bis zum Ablauf verfügbar. Die Erfassung in den Einstellungen aktivieren, um einen Verlauf aufzubauen.",
   "pages.statistics.enable": "Langfristige Erfassung aktivieren",
   "pages.statistics.findingInBandScenario": "{scenario} (AppSec) blockierte {count} Anfragen von {ips} IPs; keine dieser IPs wurde gebannt.",

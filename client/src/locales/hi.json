@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "प्रकार के अनुसार निर्णय",
   "pages.statistics.decisions": "निर्णय",
   "pages.statistics.detailsError": "विवरण लोड नहीं हो सके।",
-  "pages.statistics.detailsRetention": "अलर्ट का विवरण लगभग {days} दिन रखा जाता है; पुराना विवरण अनुपलब्ध हो सकता है।",
+  "pages.statistics.detailsRetention": "इन फ़िल्टरों और चुनी गई अवधि को अलर्ट और निर्णयों में त्वरित फ़िल्टर के रूप में लागू करता है और मौजूदा फ़िल्टरों को बदल देता है। विवरण लगभग {days} दिन रखा जाता है; पुराना विवरण अनुपलब्ध हो सकता है।",
   "pages.statistics.disabledHelp": "संग्रह अक्षम है। मौजूदा आँकड़े अवधारण अवधि समाप्त होने तक उपलब्ध रहते हैं। इतिहास बनाने के लिए सेटिंग में संग्रह सक्षम करें।",
   "pages.statistics.enable": "दीर्घकालिक संग्रह सक्षम करें",
   "pages.statistics.findingInBandScenario": "{scenario} (AppSec) ने {ips} IP से {count} अनुरोध रोके; इनमें से कोई IP बैन नहीं हुआ।",

@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "按类型统计决策",
   "pages.statistics.decisions": "决策",
   "pages.statistics.detailsError": "无法加载详情。",
-  "pages.statistics.detailsRetention": "告警详情保留约 {days} 天；更早的详情可能已不可用。",
+  "pages.statistics.detailsRetention": "将这些筛选条件和所选时间段应用为告警和决策的快速筛选，并替换当前的筛选。详情保留约 {days} 天；更早的详情可能已不可用。",
   "pages.statistics.disabledHelp": "收集已禁用。现有统计在保留期到期前仍可查看。请在设置中启用收集以建立历史。",
   "pages.statistics.enable": "启用长期收集",
   "pages.statistics.findingInBandScenario": "{scenario}（AppSec）拦截了来自 {ips} 个 IP 的 {count} 个请求；这些 IP 均未被封禁。",

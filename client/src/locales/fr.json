@@ -1147,7 +1147,7 @@
   "pages.statistics.decisionTypes": "Décisions par catégorie",
   "pages.statistics.decisions": "Décisions",
   "pages.statistics.detailsError": "Impossible de charger les détails.",
-  "pages.statistics.detailsRetention": "Les détails des alertes sont conservés environ {days} jours ; les détails plus anciens peuvent être indisponibles.",
+  "pages.statistics.detailsRetention": "Applique ces filtres et la période sélectionnée comme filtres rapides dans Alertes et Décisions, en remplaçant les filtres actuels. Les détails sont conservés environ {days} jours ; les détails plus anciens peuvent être indisponibles.",
   "pages.statistics.disabledHelp": "La collecte est désactivée. Les statistiques existantes restent disponibles jusqu’à expiration. Activez la collecte dans les paramètres pour constituer un historique.",
   "pages.statistics.enable": "Activer la collecte à long terme",
   "pages.statistics.findingInBandScenario": "{scenario} (AppSec) a bloqué {count} requêtes depuis {ips} IP ; aucune de ces IP n’a été bannie.",

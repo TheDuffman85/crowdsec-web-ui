@@ -1148,7 +1148,7 @@
   "pages.statistics.decisionTypes": "유형별 결정",
   "pages.statistics.decisions": "결정",
   "pages.statistics.detailsError": "세부 정보를 불러오지 못했습니다.",
-  "pages.statistics.detailsRetention": "알림 세부 정보는 약 {days}일 동안 보관되며, 오래된 정보는 사용할 수 없을 수 있습니다.",
+  "pages.statistics.detailsRetention": "이 필터와 선택한 기간을 알림 및 결정의 빠른 필터로 적용하며 기존 필터를 대체합니다. 세부 정보는 약 {days}일 동안 보관되며, 오래된 정보는 사용할 수 없을 수 있습니다.",
   "pages.statistics.disabledHelp": "수집이 비활성화되어 있습니다. 기존 통계는 보관 기간 만료까지 유지됩니다. 기록을 쌓으려면 설정에서 수집을 활성화하세요.",
   "pages.statistics.enable": "장기 수집 활성화",
   "pages.statistics.findingInBandScenario": "{scenario}(AppSec)이(가) {ips}개 IP의 요청 {count}건을 차단했지만 이 IP들은 차단되지 않았습니다.",

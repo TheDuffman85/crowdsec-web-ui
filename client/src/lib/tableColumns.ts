@@ -5,8 +5,8 @@ const TABLE_COLUMN_PREFERENCES_STORAGE_KEY = 'crowdsec-web-ui:table-column-prefe
 
 // Keeps the row actions reachable when the columns are wider than the page. The backgrounds
 // are opaque versions of the row and header colors, so scrolled cells do not show through.
-// The row needs the `group` class for the hover color.
-const STICKY_ACTIONS_CLASS_NAME = 'lg:sticky lg:end-0 transition-colors group-hover:bg-gray-50 dark:group-hover:bg-[color-mix(in_srgb,var(--color-gray-700)_50%,var(--color-gray-800))]';
+// The row needs the `group` class for the hover color, and `aria-selected` for the selected color.
+const STICKY_ACTIONS_CLASS_NAME = 'lg:sticky lg:end-0 transition-colors group-hover:bg-gray-50 dark:group-hover:bg-[color-mix(in_srgb,var(--color-gray-700)_50%,var(--color-gray-800))] group-aria-selected:bg-primary-50 group-aria-selected:group-hover:bg-primary-100 dark:group-aria-selected:bg-[color-mix(in_srgb,var(--color-primary-900)_40%,var(--color-gray-800))] dark:group-aria-selected:group-hover:bg-[color-mix(in_srgb,var(--color-primary-900)_50%,var(--color-gray-800))]';
 export const STICKY_ACTIONS_HEADER_CLASS_NAME = 'lg:sticky lg:end-0 bg-gray-50 dark:bg-[color-mix(in_srgb,var(--color-gray-900)_50%,var(--color-gray-800))]';
 export const STICKY_ACTIONS_CELL_CLASS_NAME = `${STICKY_ACTIONS_CLASS_NAME} bg-white dark:bg-gray-800`;
 export const STICKY_ACTIONS_EXPIRED_CELL_CLASS_NAME = `${STICKY_ACTIONS_CLASS_NAME} bg-gray-50 dark:bg-[color-mix(in_srgb,var(--color-gray-900)_20%,var(--color-gray-800))]`;

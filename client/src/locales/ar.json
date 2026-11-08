@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "القرارات حسب النوع",
   "pages.statistics.decisions": "القرارات",
   "pages.statistics.detailsError": "تعذّر تحميل التفاصيل.",
-  "pages.statistics.detailsRetention": "تُحفظ تفاصيل التنبيهات نحو {days} يوم؛ قد لا تتوفر التفاصيل الأقدم.",
+  "pages.statistics.detailsRetention": "يطبّق هذه المرشحات والفترة المحددة كمرشحات سريعة في التنبيهات والقرارات بدلاً من المرشحات الحالية. تُحفظ التفاصيل نحو {days} يوم؛ قد لا تتوفر التفاصيل الأقدم.",
   "pages.statistics.disabledHelp": "الجمع معطل. تبقى الإحصاءات السابقة حتى انتهاء مدة الاحتفاظ. فعّل الجمع في الإعدادات لبدء إنشاء السجل.",
   "pages.statistics.enable": "تفعيل الجمع طويل الأمد",
   "pages.statistics.findingInBandScenario": "حجب {scenario} (AppSec) عدد {count} طلبات من {ips} عنوان IP؛ ولم يُحظر أي من هذه العناوين.",

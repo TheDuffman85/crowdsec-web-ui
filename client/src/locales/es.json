@@ -1145,7 +1145,7 @@
   "pages.statistics.decisionTypes": "Decisiones por tipo",
   "pages.statistics.decisions": "Decisiones",
   "pages.statistics.detailsError": "No se pudieron cargar los detalles.",
-  "pages.statistics.detailsRetention": "Los detalles de las alertas se conservan unos {days} días; los más antiguos pueden no estar disponibles.",
+  "pages.statistics.detailsRetention": "Aplica estos filtros y el periodo seleccionado como filtros rápidos en Alertas y Decisiones, reemplazando los actuales. Los detalles se conservan unos {days} días; los más antiguos pueden no estar disponibles.",
   "pages.statistics.disabledHelp": "La recopilación está desactivada. El historial existente sigue disponible hasta su vencimiento. Active la recopilación en Configuración para crear un historial.",
   "pages.statistics.enable": "Activar recopilación a largo plazo",
   "pages.statistics.findingInBandScenario": "{scenario} (AppSec) bloqueó {count} solicitudes desde {ips} IP; ninguna de esas IP fue bloqueada.",
