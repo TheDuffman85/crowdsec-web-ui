@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -228,12 +228,10 @@ export function Statistics() {
   const { dateFormat } = dateTime;
   const [params, setParams] = useSearchParams();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const [result, setResult] = useState<{ key: string; queryString: string; data: StatisticsResponse | null; error: string } | null>(null);
+  const [result, setResult] = useState<{ key: string; queryString: string; data: StatisticsResponse | null; error: string; retryable?: boolean } | null>(null);
   const [configError, setConfigError] = useState('');
   const [reload, setReload] = useState(0);
-  // Bumped when the server reports a newer archive revision than the one shown.
   const [archiveChange, setArchiveChange] = useState(0);
-  const shownRevision = useRef<number | null>(null);
   const [today, setToday] = useState(() => isoDay(Date.now()));
   const [stored] = useState(readStoredSelection);
   // The URL wins over the stored selection, so links keep working.
@@ -301,41 +299,65 @@ export function Statistics() {
     }
   }, [instance, machine, setParams]);
   useEffect(() => {
-    let active = true;
-    void fetchConfig().then((value) => { if (active) { setConfig(value); setConfigError(''); } }).catch(() => { if (active) setConfigError(t('pages.statistics.loadError')); });
-    return () => { active = false; };
-  }, [reload, t]);
-  useEffect(() => {
     const abort = new AbortController();
     void sessionFetch(`${apiUrl('/api/statistics')}?${queryString}`, { signal: abort.signal }).then(async (response) => {
-      if (!response.ok) throw new Error(t('pages.statistics.loadError'));
+      if (!response.ok) {
+        if (!abort.signal.aborted) setResult({ key: requestKey, queryString, data: null, error: t('pages.statistics.loadError'), retryable: response.status >= 500 });
+        return;
+      }
       const payload = await response.json() as StatisticsResponse;
       if (!abort.signal.aborted) setResult({ key: requestKey, queryString, data: payload, error: '' });
-    }).catch((e: unknown) => { if (!abort.signal.aborted) setResult({ key: requestKey, queryString, data: null, error: e instanceof Error ? e.message : t('pages.statistics.loadError') }); });
+    }).catch((e: unknown) => {
+      if (!abort.signal.aborted) setResult({ key: requestKey, queryString, data: null, error: e instanceof Error ? e.message : t('pages.statistics.loadError'), retryable: true });
+    });
     return () => abort.abort();
   }, [queryString, requestKey, t]);
-  useEffect(() => { if (data) shownRevision.current = data.revision; }, [data]);
-  // The archive only changes when a background job commits. While the page is
-  // visible, poll the lightweight configuration and rerun the statistics query
-  // only after the server reports a newer revision (or the UTC day rolls over).
+  const refreshArchive = useEffectEvent((statistics: ConfigResponse['statistics']) => {
+    if (!statistics) return;
+    const retentionDays = statistics.settings.retentionDays;
+    const knownRetention = config?.statistics?.settings.retentionDays;
+    if (knownRetention !== undefined && retentionDays !== knownRetention) {
+      setArchiveChange((change) => change + 1);
+      return;
+    }
+    if (!current) return;
+    const { revision } = statistics.status;
+    const stale = data && (revision > data.revision || retentionDays !== data.configuration.settings.retentionDays);
+    const retry = result.retryable && (statistics.settings.enabled || revision > 0);
+    if (stale || retry) setArchiveChange((change) => change + 1);
+  });
+  // Poll configuration while visible and fetch statistics when the archive
+  // changes or a temporary error can be retried.
   useEffect(() => {
     let active = true;
+    let inFlight = false;
+    const loadConfig = async (polling: boolean) => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const value = await fetchConfig();
+        if (!active) return;
+        setConfig(value);
+        setConfigError('');
+        if (polling) refreshArchive(value.statistics);
+      } catch {
+        if (active && !polling) setConfigError(t('pages.statistics.loadError'));
+      } finally {
+        inFlight = false;
+      }
+    };
     const poll = () => {
       if (document.visibilityState === 'hidden') return;
       setToday(isoDay(Date.now()));
-      void fetchConfig().then((value) => {
-        if (!active) return;
-        setConfig(value);
-        const revision = value.statistics?.status.revision;
-        if (revision !== undefined && shownRevision.current !== null && revision > shownRevision.current) setArchiveChange((r) => r + 1);
-      }).catch(() => { /* Keep the current view; the next poll retries. */ });
+      void loadConfig(true);
     };
+    void loadConfig(false);
     const timer = setInterval(poll, 60_000);
     document.addEventListener('visibilitychange', poll);
     return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', poll); };
-  }, []);
+  }, [reload, t]);
 
-  const configuration = data?.configuration || config?.statistics;
+  const configuration = config?.statistics ?? data?.configuration;
   const instances = config?.instances || [];
   // Statistics are bucketed by UTC day, so days are always formatted in UTC.
   const formatDay = (day: string, compact = false) => {
@@ -519,7 +541,12 @@ export function Statistics() {
 
   const canBan = config?.permissions?.can_manage_enforcement !== false;
   const [pendingDecision, setPendingDecision] = useState<{ value: string; values?: string[]; reason: string; duration: string } | null>(null);
-  const [decided, setDecided] = useState<Set<string>>(() => new Set());
+  const [decidedByValue, setDecidedByValue] = useState<Map<string, Set<string>>>(() => new Map());
+  const visibleInstanceIds = instance === 'all' ? instances.map(({ id }) => id) : [instance];
+  const decided = new Set<string>();
+  for (const [value, instanceIds] of decidedByValue) {
+    if (visibleInstanceIds.length > 0 && visibleInstanceIds.every((id) => instanceIds.has(id))) decided.add(value);
+  }
   const findings: Finding[] = [];
   if (data) {
     const compare = !data.coverage.comparisonPartial;
@@ -716,7 +743,9 @@ export function Statistics() {
         </Notice>
       )}
 
-      {data && <StatisticsFindings findings={findings} context={findingContext} />}
+      {data && <StatisticsFindings findings={findings} context={{
+        ...findingContext, archiveKey: `${data.revision}:${data.configuration.settings.retentionDays}`,
+      }} />}
 
       {configuration && !configuration.settings.enabled && (
         <Notice tone="info">
@@ -849,7 +878,15 @@ export function Statistics() {
           currentInstanceName={instance !== 'all' ? instanceName(instance) : undefined}
           defaultAllInstances={instance === 'all'}
           onClose={() => setPendingDecision(null)}
-          onDecisionAdded={async (added) => { setDecided((current) => new Set([...current, ...added])); }}
+          onDecisionAdded={async (added) => {
+            setDecidedByValue((current) => {
+              const next = new Map(current);
+              for (const { values, instanceIds } of added) {
+                for (const value of values) next.set(value, new Set([...(next.get(value) ?? []), ...instanceIds]));
+              }
+              return next;
+            });
+          }}
         />
       )}
     </div>

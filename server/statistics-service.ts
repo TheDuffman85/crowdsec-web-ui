@@ -168,13 +168,16 @@ export class StatisticsService {
 
   async query(filters: StatisticsFilters): Promise<StatisticsResponse> {
     if (!fs.existsSync(this.file)) throw new Error('Statistics are not available yet; enable collection and wait for the first background job');
-    const { lastSuccess, ...data } = await this.reader.request<StoredStatistics>({ type: 'query', filters, retentionDays: this.settings.retentionDays,
+    // Return the settings used by the query even if they change while it runs.
+    const settings = this.settings;
+    const { lastSuccess, ...data } = await this.reader.request<StoredStatistics>({ type: 'query', filters, retentionDays: settings.retentionDays,
       instances: this.options.config.instances.map((i) => i.id),
       // Allow one missed or delayed job before the latest coverage counts as stale.
-      freshnessMs: 2 * durationMs(this.settings.jobInterval) });
+      freshnessMs: 2 * durationMs(settings.jobInterval) });
     if (lastSuccess && (!this.status.lastSuccess || lastSuccess > this.status.lastSuccess)) this.status.lastSuccess = lastSuccess;
     if (data.revision > this.status.revision) this.status.revision = data.revision;
-    return { ...data, coverage: { ...data.coverage, partial: data.coverage.partial || this.status.backfillPending || this.status.backlog > 0 }, configuration: this.configuration() };
+    return { ...data, coverage: { ...data.coverage, partial: data.coverage.partial || this.status.backfillPending || this.status.backlog > 0 },
+      configuration: { ...this.configuration(), settings: { ...settings } } };
   }
 
   async details(filters: StatisticsFilters, request: StatisticsDetailRequest): Promise<StatisticsDetails> {

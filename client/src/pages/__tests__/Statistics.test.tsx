@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { Link, MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Statistics } from '../Statistics';
 import { StatisticsSettings } from '../../components/StatisticsSettings';
@@ -145,6 +145,45 @@ describe('Statistics page', () => {
     fireEvent.click(within(attacker).getByRole('button', { name: 'Ban' }));
     expect(await screen.findByLabelText('IP / Range')).toHaveValue('192.0.2.7');
     expect(screen.getByTestId('location').textContent).not.toContain('ip=');
+  });
+
+  test('marks a ban as added only after a successful attempt', async () => {
+    const instance = { instance_id: 'default', instance_name: 'Production' };
+    vi.mocked(addDecision)
+      .mockResolvedValueOnce({ results: [{ ...instance, success: false, error: 'Unavailable' }] })
+      .mockResolvedValueOnce({ results: [{ ...instance, success: true }] });
+    mount();
+    const row = await screen.findByRole('row', { name: '192.0.2.7' });
+    fireEvent.click(within(row).getByRole('button', { name: 'Ban' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add Manual Decision' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Decision' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Failed: Production');
+    expect(within(row).queryByText('Decision added')).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry failed instances' }));
+    expect(await within(row).findByText('Decision added')).toBeInTheDocument();
+  });
+
+  test('keeps a decision badge on the instances that confirmed the ban', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue({
+      statistics: configuration, instances: [{ id: 'default', name: 'Production' }, { id: 'edge', name: 'Edge' }],
+    } as ConfigResponse);
+    vi.mocked(addDecision).mockResolvedValue({ results: [{ instance_id: 'default', instance_name: 'Production', success: true }] });
+    const path = '/statistics?from=2026-10-09&to=2026-11-07';
+    mount(<><Statistics /><Link to={path + '&instance=edge'}>Switch to Edge</Link><Link to={path + '&instance=all'}>Show all instances</Link>
+      <Link to={path + '&instance=default'}>Switch to Production</Link></>, path + '&instance=default');
+    const row = () => screen.findByRole('row', { name: '192.0.2.7' });
+    fireEvent.click(within(await row()).getByRole('button', { name: 'Ban' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Decision' }));
+    expect(await within(await row()).findByText('Decision added')).toBeInTheDocument();
+    expect(addDecision).toHaveBeenCalledWith(expect.objectContaining({ scope: 'instance', instance_id: 'default' }));
+
+    for (const link of ['Switch to Edge', 'Show all instances']) {
+      fireEvent.click(screen.getByRole('link', { name: link }));
+      expect(within(await row()).getByRole('button', { name: 'Ban' })).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole('link', { name: 'Switch to Production' }));
+    expect(within(await row()).getByText('Decision added')).toBeInTheDocument();
   });
 
   test('turns the statistics into findings and compares tiles only with a complete preceding period', async () => {
@@ -320,6 +359,41 @@ describe('Statistics page', () => {
     expect(within(returned).queryByText(/^Showing/)).not.toBeInTheDocument();
   });
 
+  test('keeps newly allowlisted bulk retry values pending on the failed instance', async () => {
+    const data = payload();
+    const values = ['203.0.113.9', '203.0.113.10'];
+    const production = { instance_id: 'default', instance_name: 'Production', success: true };
+    const edge = { instance_id: 'edge', instance_name: 'Edge' };
+    vi.mocked(fetchConfig).mockResolvedValue({
+      statistics: configuration, instances: [{ id: 'default', name: 'Production' }, { id: 'edge', name: 'Edge' }],
+    } as ConfigResponse);
+    vi.mocked(addDecisions)
+      .mockResolvedValueOnce({ added: values, allowlisted: [], results: [production, { ...edge, success: false }], succeeded: 1, failed: 1 })
+      .mockResolvedValueOnce({ added: [], allowlisted: values.map((value) => ({ value, allowlisted: [{ ...edge, reason: 'office' }] })), results: [], succeeded: 0, failed: 0 })
+      .mockResolvedValueOnce({ added: values, allowlisted: [], results: [{ ...edge, success: true }], succeeded: 1, failed: 0 });
+    vi.mocked(sessionFetch).mockImplementation(async (url) => String(url).includes('/api/statistics/details')
+      ? Response.json({ kind: 'returned', ips: values.map((ip) => ({ ip, alerts: 7, bans: 1, machines: 1, firstBan: '2026-11-02' })), total: 2 })
+      : Response.json({ ...data, totals: { ...data.totals, returnedAfterBan: 2 } }));
+    mount();
+    const summary = await screen.findByRole('button', { name: /2 IPs attacked again/ });
+    fireEvent.click(summary);
+    const finding = summary.closest('li')!;
+    fireEvent.click(await within(finding).findByRole('button', { name: 'Ban all (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add 2 Decisions' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry failed instances' }));
+
+    expect(await screen.findByText('2 allowlisted values were skipped')).toBeInTheDocument();
+    expect(within(finding).queryByText('Decision added')).not.toBeInTheDocument();
+    const submit = screen.getByRole('button', { name: 'Add 2 Decisions' });
+    expect(submit).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Bypass allowlist'));
+    fireEvent.click(submit);
+    expect(await within(finding).findAllByText('Decision added')).toHaveLength(2);
+    expect(addDecisions).toHaveBeenLastCalledWith(expect.objectContaining({
+      scope: 'instance', instance_id: 'edge', values, bypass_allowlist: true,
+    }));
+  });
+
   test('compares machine activity with the preceding period', async () => {
     const data = payload();
     vi.mocked(fetchConfig).mockResolvedValue({ statistics: configuration, lookback_days: 7, instances: [{ id: 'default', name: 'Production' }, { id: 'edge', name: 'Edge' }] } as ConfigResponse);
@@ -366,6 +440,81 @@ describe('Statistics page', () => {
     expect(await screen.findByText(/Collection is disabled/)).toBeInTheDocument();
     expect(await screen.findByRole('alert')).toHaveTextContent('Statistics are unavailable');
     expect(screen.queryByText('Top IPs')).not.toBeInTheDocument();
+  });
+});
+
+describe('Statistics polling', () => {
+  test('recovers when the first archive becomes available', async () => {
+    vi.mocked(fetchConfig).mockResolvedValueOnce({ statistics: { ...configuration, status: { ...configuration.status, revision: 0 } } } as ConfigResponse);
+    vi.mocked(sessionFetch).mockResolvedValueOnce(Response.json({ error: 'Unavailable' }, { status: 503 }));
+    mount();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Statistics are unavailable');
+
+    fireEvent(document, new Event('visibilitychange'));
+    expect(await screen.findByRole('heading', { name: 'Top IPs' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  test('uses polled collection status even when the archive revision stays the same', async () => {
+    mount();
+    await screen.findByRole('heading', { name: 'Top IPs' });
+    vi.mocked(fetchConfig).mockResolvedValueOnce({ statistics: { ...configuration, settings: { ...configuration.settings, enabled: false } } } as ConfigResponse);
+
+    fireEvent(document, new Event('visibilitychange'));
+    expect(await screen.findByText(/Collection is disabled/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Top IPs' })).toBeInTheDocument();
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('refreshes details in an open finding when the archive changes', async () => {
+    let revision = 1;
+    vi.mocked(sessionFetch).mockImplementation(async (url) => {
+      if (String(url).includes('/api/statistics/details')) {
+        const ips = [{ ip: '203.0.113.9', alerts: 7, bans: 1, machines: 1, firstBan: '2026-11-02' }];
+        if (revision === 2) ips.push({ ...ips[0], ip: '203.0.113.10' });
+        return Response.json({ kind: 'returned', ips, total: ips.length });
+      }
+      const data = payload();
+      return Response.json({ ...data, revision, totals: { ...data.totals, returnedAfterBan: revision } });
+    });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /1 IPs attacked again/ }));
+    expect(await screen.findByRole('row', { name: '203.0.113.9' })).toBeInTheDocument();
+
+    revision = 2;
+    vi.mocked(fetchConfig).mockResolvedValueOnce({ statistics: { ...configuration, status: { ...configuration.status, revision } } } as ConfigResponse);
+    fireEvent(document, new Event('visibilitychange'));
+    expect(await screen.findByRole('button', { name: /2 IPs attacked again/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByRole('row', { name: '203.0.113.10' })).toBeInTheDocument();
+  });
+
+  test('refreshes totals and open findings after retention changes without a new archive revision', async () => {
+    let settings = { ...configuration.settings, enabled: false };
+    vi.mocked(fetchConfig).mockImplementation(async () => ({ statistics: { ...configuration, settings } } as ConfigResponse));
+    vi.mocked(sessionFetch).mockImplementation(async (url) => {
+      const restricted = settings.retentionDays === 1;
+      if (String(url).includes('/api/statistics/details')) {
+        const ips = (restricted ? ['203.0.113.10'] : ['203.0.113.9', '203.0.113.10'])
+          .map((ip) => ({ ip, alerts: 7, bans: 1, machines: 1, firstBan: '2026-11-02' }));
+        return Response.json({ kind: 'returned', ips, total: ips.length });
+      }
+      const data = payload();
+      return Response.json({
+        ...data, configuration: { ...configuration, settings }, attackers: restricted ? [] : data.attackers,
+        totals: { ...data.totals, returnedAfterBan: restricted ? 1 : 2 },
+      });
+    });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /2 IPs attacked again/ }));
+    expect(await screen.findByRole('row', { name: '203.0.113.9' })).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: '192.0.2.7' })).toBeInTheDocument();
+
+    settings = { ...settings, retentionDays: 1 };
+    fireEvent(document, new Event('visibilitychange'));
+    expect(await screen.findByRole('button', { name: /1 IPs attacked again/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByRole('row', { name: '203.0.113.10' })).toBeInTheDocument();
+    expect(screen.queryByRole('row', { name: '203.0.113.9' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('row', { name: '192.0.2.7' })).not.toBeInTheDocument();
   });
 });
 

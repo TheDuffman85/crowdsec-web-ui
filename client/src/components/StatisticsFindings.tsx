@@ -36,6 +36,7 @@ export interface Finding {
 interface DetailContext {
   /** Current page filters as a query string, without the detail parameters. */
   query: string;
+  archiveKey: string;
   canBan: boolean;
   /** Values that received a decision on this page. */
   decided: Set<string>;
@@ -192,7 +193,9 @@ function IPTable({ title, actions, rows, draft, returned = false, context, foote
 
 function DetailBody({ detail, context, actions }: { detail: FindingDetail; context: DetailContext; actions?: ReactNode }) {
   const { t } = useI18n();
-  const [state, setState] = useState<{ data: StatisticsDetails | null; error: boolean; url?: string }>({ data: null, error: false });
+  const { archiveKey } = context;
+  const [result, setResult] = useState<{ data: StatisticsDetails | null; archiveKey: string; url: string } | null>(null);
+  const state = result?.archiveKey === archiveKey ? result : null;
   const [size, setSize] = useState(STATISTICS_DETAIL_PAGE);
   const [attempt, setAttempt] = useState(0);
   const periodChange = usePeriodChange();
@@ -217,11 +220,10 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
     void sessionFetch(url, { signal: abort.signal }).then(async (response) => {
       if (!response.ok) throw new Error('details');
       const data = await response.json() as StatisticsDetails;
-      // The previous rows stay visible until more have loaded.
-      if (!abort.signal.aborted) setState({ data, error: false, url });
-    }).catch(() => { if (!abort.signal.aborted) setState({ data: null, error: true }); });
+      if (!abort.signal.aborted) setResult({ data, archiveKey, url });
+    }).catch(() => { if (!abort.signal.aborted) setResult({ data: null, archiveKey, url }); });
     return () => abort.abort();
-  }, [url, attempt]);
+  }, [url, attempt, archiveKey]);
 
   if (detail.kind === 'scanners') {
     return (
@@ -244,16 +246,16 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
       </Table>
     );
   }
-  if (state.error) {
+  if (state && !state.data) {
     return (
       <>{actionBar}<p className="text-sm text-amber-700 dark:text-amber-300">
         {t('pages.statistics.detailsError')}{' '}
-        <button type="button" className={linkClass} onClick={() => { setState({ data: null, error: false }); setAttempt((value) => value + 1); }}>{t('pages.statistics.retry')}</button>
+        <button type="button" className={linkClass} onClick={() => { setResult(null); setAttempt((value) => value + 1); }}>{t('pages.statistics.retry')}</button>
       </p></>
     );
   }
-  const data = state.data;
-  if (!data || data.kind !== detail.kind) return <>{actionBar}<p role="status" className="text-sm text-gray-500 dark:text-gray-400">{t('app.loading')}</p></>;
+  if (!state?.data || state.data.kind !== detail.kind) return <>{actionBar}<p role="status" className="text-sm text-gray-500 dark:text-gray-400">{t('app.loading')}</p></>;
+  const { data } = state;
 
   if (data.kind === 'machines') {
     return (
