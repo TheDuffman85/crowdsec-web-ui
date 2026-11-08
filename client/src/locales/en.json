@@ -1165,6 +1165,7 @@
   "pages.statistics.findingWideScanners": "{count} of the top IPs attacked {machines} or more machines and are probing your infrastructure.",
   "pages.statistics.findings": "Findings",
   "pages.statistics.firstBan": "First ban",
+  "pages.statistics.firstSeen": "First seen",
   "pages.statistics.from": "From",
   "pages.statistics.hideDetails": "Hide details",
   "pages.statistics.interval": "Job interval (5m–24h)",

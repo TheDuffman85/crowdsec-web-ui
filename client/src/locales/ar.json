@@ -1162,6 +1162,7 @@
   "pages.statistics.findingWideScanners": "هاجم {count} من أبرز عناوين IP عدد {machines} أجهزة أو أكثر ويستكشفون بنيتك التحتية.",
   "pages.statistics.findings": "النتائج",
   "pages.statistics.firstBan": "أول حظر",
+  "pages.statistics.firstSeen": "أول ظهور",
   "pages.statistics.from": "من",
   "pages.statistics.hideDetails": "إخفاء التفاصيل",
   "pages.statistics.interval": "فاصل المهمة (5m–24h)",

@@ -100,6 +100,10 @@ export interface StatisticsScenario {
   machines: number;
   bans: number;
   bannedIPs: number;
+  /** UTC days with alerts of the scenario in the range. */
+  activeDays: number;
+  firstActivity: string | null;
+  lastActivity: string | null;
   /** Alerts in the preceding period of equal length, or null when it is not fully covered. */
   previous: number | null;
 }

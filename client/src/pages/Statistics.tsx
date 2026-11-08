@@ -415,6 +415,20 @@ export function Statistics() {
     </div>
   );
 
+  const activity = (row: Pick<StatisticsRanking, 'activeDays' | 'firstActivity' | 'lastActivity'>) => (
+    <>
+      <span className="font-medium text-gray-900 dark:text-gray-100">{t('pages.statistics.activeDays', { count: row.activeDays })}</span>
+      {(row.firstActivity || row.lastActivity) && (
+        <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 text-xs text-gray-500 dark:text-gray-400">
+          <dt>{t('pages.statistics.firstSeen')}</dt>
+          <dd className="tabular-nums text-gray-700 dark:text-gray-300">{formatTimestamp(row.firstActivity)}</dd>
+          <dt>{t('pages.statistics.lastSeen')}</dt>
+          <dd className="tabular-nums text-gray-700 dark:text-gray-300">{formatTimestamp(row.lastActivity)}</dd>
+        </dl>
+      )}
+    </>
+  );
+
   const rankings = (kind: 'attackers' | 'machines') => {
     const rows = data?.[kind] || [];
     const attackers = kind === 'attackers';
@@ -464,15 +478,7 @@ export function Statistics() {
                       <td className={cell}>
                         <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{formatNumber(attackers ? row.machines : row.uniqueIPs)}</span>
                       </td>
-                      <td className={`${cell} whitespace-nowrap`}>
-                        <span className="font-medium text-gray-900 dark:text-gray-100">{t('pages.statistics.activeDays', { count: row.activeDays })}</span>
-                        {(row.firstActivity || row.lastActivity) && (
-                          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                            <div>{formatTimestamp(row.firstActivity)}</div>
-                            <div>{formatTimestamp(row.lastActivity)}</div>
-                          </div>
-                        )}
-                      </td>
+                      <td className={`${cell} whitespace-nowrap`}>{activity(row)}</td>
                       {actions && (
                         <td className={`${cell} whitespace-nowrap text-right ${STICKY_ACTIONS_CELL_CLASS_NAME}`}>
                           {decided.has(row.value)
@@ -630,6 +636,7 @@ export function Statistics() {
                   <th className={`${headerCell} text-right`}>{t('pages.dashboard.machines')}</th>
                   <th className={`${headerCell} text-right`}>{t('pages.statistics.bans')}</th>
                   <th className={`${headerCell} text-right`}>{t('pages.statistics.banCoverage')}</th>
+                  <th className={headerCell}>{t('pages.statistics.activity')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -652,6 +659,7 @@ export function Statistics() {
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.machines)}</td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
                       <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && row.count >= FINDINGS.unbannedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{share === null ? '—' : `${share}%`}</td>
+                      <td className={`${cell} whitespace-nowrap`}>{activity(row)}</td>
                     </ClickableTableRow>
                   );
                 })}

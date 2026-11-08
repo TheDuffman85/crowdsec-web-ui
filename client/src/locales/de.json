@@ -1162,6 +1162,7 @@
   "pages.statistics.findingWideScanners": "{count} der Top-IPs griffen {machines} oder mehr Maschinen an und tasten Ihre Infrastruktur ab.",
   "pages.statistics.findings": "Erkenntnisse",
   "pages.statistics.firstBan": "Erster Bann",
+  "pages.statistics.firstSeen": "Zuerst gesehen",
   "pages.statistics.from": "Von",
   "pages.statistics.hideDetails": "Details ausblenden",
   "pages.statistics.interval": "Jobintervall (5m–24h)",

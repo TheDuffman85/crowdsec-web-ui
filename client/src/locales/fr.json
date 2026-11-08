@@ -1164,6 +1164,7 @@
   "pages.statistics.findingWideScanners": "{count} des principales IP ont attaqué {machines} machines ou plus et sondent votre infrastructure.",
   "pages.statistics.findings": "Constats",
   "pages.statistics.firstBan": "Premier bannissement",
+  "pages.statistics.firstSeen": "Vu pour la première fois",
   "pages.statistics.from": "Du",
   "pages.statistics.hideDetails": "Masquer les détails",
   "pages.statistics.interval": "Intervalle du traitement (5m–24h)",

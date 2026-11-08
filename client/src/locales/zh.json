@@ -1162,6 +1162,7 @@
   "pages.statistics.findingWideScanners": "前列 IP 中有 {count} 个攻击了 {machines} 台或更多机器，正在探测您的基础设施。",
   "pages.statistics.findings": "发现",
   "pages.statistics.firstBan": "首次封禁",
+  "pages.statistics.firstSeen": "首次出现",
   "pages.statistics.from": "开始",
   "pages.statistics.hideDetails": "隐藏详情",
   "pages.statistics.interval": "任务间隔（5m–24h）",

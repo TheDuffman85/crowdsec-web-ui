@@ -1165,6 +1165,7 @@
   "pages.statistics.findingWideScanners": "상위 IP 중 {count}개가 {machines}대 이상의 머신을 공격하며 인프라를 탐색하고 있습니다.",
   "pages.statistics.findings": "발견 사항",
   "pages.statistics.firstBan": "첫 차단",
+  "pages.statistics.firstSeen": "처음 확인",
   "pages.statistics.from": "시작",
   "pages.statistics.hideDetails": "세부 정보 숨기기",
   "pages.statistics.interval": "작업 간격(5m–24h)",

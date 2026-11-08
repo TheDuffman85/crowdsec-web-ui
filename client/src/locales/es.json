@@ -1162,6 +1162,7 @@
   "pages.statistics.findingWideScanners": "{count} de las IP principales atacaron {machines} o más máquinas y están sondeando su infraestructura.",
   "pages.statistics.findings": "Hallazgos",
   "pages.statistics.firstBan": "Primer bloqueo",
+  "pages.statistics.firstSeen": "Visto por primera vez",
   "pages.statistics.from": "Desde",
   "pages.statistics.hideDetails": "Ocultar detalles",
   "pages.statistics.interval": "Intervalo del trabajo (5m–24h)",

@@ -1162,6 +1162,7 @@
   "pages.statistics.findingWideScanners": "शीर्ष IP में से {count} ने {machines} या अधिक मशीनों पर हमला किया और आपके इन्फ्रास्ट्रक्चर की जाँच कर रहे हैं।",
   "pages.statistics.findings": "निष्कर्ष",
   "pages.statistics.firstBan": "पहला बैन",
+  "pages.statistics.firstSeen": "पहली बार देखा",
   "pages.statistics.from": "से",
   "pages.statistics.hideDetails": "विवरण छिपाएँ",
   "pages.statistics.interval": "कार्य अंतराल (5m–24h)",

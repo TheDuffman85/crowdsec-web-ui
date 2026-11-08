@@ -132,8 +132,8 @@ describe('long-term statistics capture and aggregation', () => {
     expect(result.machines[0]).toMatchObject({ alerts: 3, uniqueIPs: 1, bans: 2 });
     expect(result.attackers[0].returnedAfterBan).toBe(true);
     expect(result.scenarios).toEqual([
-      { label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, bans: 2, bannedIPs: 1, previous: null },
-      { label: 'http', count: 1, uniqueIPs: 1, machines: 1, bans: 0, bannedIPs: 0, previous: null },
+      { label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, bans: 2, bannedIPs: 1, activeDays: 2, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-11T10:00:00.000Z', previous: null },
+      { label: 'http', count: 1, uniqueIPs: 1, machines: 1, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-10T10:00:00.000Z', previous: null },
     ]);
   });
 
@@ -145,7 +145,7 @@ describe('long-term statistics capture and aggregation', () => {
     f.consolidate();
     const result = f.query();
     expect(result.countries).toEqual([{ label: 'DE', count: 1, uniqueIPs: 1 }]);
-    expect(result.scenarios).toEqual([{ label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, bans: 0, bannedIPs: 0, previous: null }]);
+    expect(result.scenarios).toEqual([{ label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-10T10:00:00.000Z', previous: null }]);
     expect(result.attackers.map((row) => [row.value, row.alerts])).toEqual([['192.0.2.0/24', 2], ['1.2.3.4', 1], ['1.2.3.5', 1]]);
     expect(result.totals).toMatchObject({ alerts: 4, uniqueIPs: 2, repeatAttackers: 0 });
     expect(f.query({ ip: '192.0.2.0/24' }).totals.alerts).toBe(2);

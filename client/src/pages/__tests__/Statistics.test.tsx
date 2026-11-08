@@ -29,7 +29,7 @@ function payload(): StatisticsResponse {
     previousTotals: null, targets: [{ label: 'web.example.com', count: 9, uniqueIPs: 1 }],
     attackers: [{ value: '192.0.2.7', label: '192.0.2.7', alerts: 12, events: 48, uniqueIPs: 1, bans: 2, machines: 1, activeDays: 3, firstActivity: '2026-11-01T10:00:00Z', lastActivity: '2026-11-07T11:00:00Z', country: 'DE', asn: '42', network: 'Example', scenarios: [{ label: 'ssh', count: 12 }], targetedMachines: [{ value: '["default","m-1"]', label: 'Server one', count: 12 }] }],
     machines: [{ value: '["default","m-1"]', label: 'Server one', instance: 'default', machineId: 'm-1', alerts: 12, events: 48, uniqueIPs: 1, bans: 2, machines: 1, activeDays: 3, firstActivity: null, lastActivity: null, country: 'DE', asn: '42', network: 'Example', scenarios: [], targetedMachines: [] }],
-    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, bans: 2, bannedIPs: 1, previous: null }], countries: [], networks: [], decisionTypes: [], decisionOrigins: [], increases: [], decreases: [], quietMachines: [],
+    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, bans: 2, bannedIPs: 1, activeDays: 3, firstActivity: '2026-11-05T08:00:00Z', lastActivity: '2026-11-07T09:30:00Z', previous: null }], countries: [], networks: [], decisionTypes: [], decisionOrigins: [], increases: [], decreases: [], quietMachines: [],
   };
 }
 function Location() { const location = useLocation(); return <output data-testid="location">{location.pathname}{location.search}</output>; }
@@ -56,6 +56,12 @@ describe('Statistics page', () => {
     const topIps = screen.getByRole('row', { name: '192.0.2.7' }).closest('table')!;
     expect(within(topIps).getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
     expect(within(topIps).getByRole('button', { name: 'Ban' }).closest('td')).toBe(within(topIps).getAllByRole('cell').at(-1));
+    // Activity names its first and last timestamps, in Top IPs and Top Scenarios alike.
+    expect(within(topIps).getByRole('columnheader', { name: 'Activity (UTC)' })).toBeInTheDocument();
+    expect(within(topIps).getAllByRole('cell').at(-2)).toHaveTextContent('3 days activeFirst seen11/1/2026, 10:00:00 AMLast seen11/7/2026, 11:00:00 AM');
+    const topScenarios = screen.getByRole('row', { name: 'ssh' }).closest('table')!;
+    expect(within(topScenarios).getAllByRole('columnheader').at(-1)).toHaveTextContent('Activity (UTC)');
+    expect(within(topScenarios).getAllByRole('cell').at(-1)).toHaveTextContent('3 days activeFirst seen11/5/2026, 8:00:00 AMLast seen11/7/2026, 9:30:00 AM');
     // With one instance, Top Machines does not name it, like the rest of the app.
     expect(screen.queryByText('Production')).not.toBeInTheDocument();
     expect(screen.getByText(/Counts reflect observed data/)).toBeInTheDocument();
@@ -195,8 +201,8 @@ describe('Statistics page', () => {
       totals: { ...data.totals, alerts: 200, uniqueIPs: 40, bannedIPs: 30, returnedAfterBan: 4, newIPs: 25 },
       previousTotals: { alerts: 100, bans: 2, decisions: 3, uniqueIPs: 40, bannedIPs: 20, repeatAttackers: 1 },
       scenarios: [
-        { label: 'crowdsecurity/http-probing', count: 150, uniqueIPs: 30, machines: 2, bans: 0, bannedIPs: 0, previous: 0 },
-        { label: 'crowdsecurity/ssh-bf', count: 50, uniqueIPs: 10, machines: 1, bans: 30, bannedIPs: 10, previous: 50 },
+        { label: 'crowdsecurity/http-probing', count: 150, uniqueIPs: 30, machines: 2, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: null, lastActivity: null, previous: 0 },
+        { label: 'crowdsecurity/ssh-bf', count: 50, uniqueIPs: 10, machines: 1, bans: 30, bannedIPs: 10, activeDays: 1, firstActivity: null, lastActivity: null, previous: 50 },
       ],
       networks: [{ label: 'Example Cloud', count: 120, uniqueIPs: 25 }],
       quietMachines: [{ value: web, label: 'Web', previous: 80 }],
@@ -252,7 +258,7 @@ describe('Statistics page', () => {
       return Response.json({
         ...data,
         totals: { ...data.totals, alerts: 200, returnedAfterBan: 1 },
-        scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 709, uniqueIPs: 93, machines: 1, bans: 0, bannedIPs: 0, previous: null }],
+        scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 709, uniqueIPs: 93, machines: 1, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: null, lastActivity: null, previous: null }],
         networks: [{ label: 'Example Cloud', count: 120, uniqueIPs: 25 }],
       } satisfies StatisticsResponse);
     });
@@ -300,7 +306,7 @@ describe('Statistics page', () => {
         kind: 'ips', ranges: [], rangeTotal: 0, total: 2,
         ips: ['203.0.113.9', '203.0.113.10'].map((ip) => ({ ip, alerts: 7, bans: 0, machines: 1, activeDays: 1, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z' })),
       });
-      return Response.json({ ...data, scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 14, uniqueIPs: 2, machines: 1, bans: 0, bannedIPs: 0, previous: null }] } satisfies StatisticsResponse);
+      return Response.json({ ...data, scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 14, uniqueIPs: 2, machines: 1, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: null, lastActivity: null, previous: null }] } satisfies StatisticsResponse);
     });
     mount();
     const summary = await screen.findByRole('button', { name: /AppSec.*blocked/ });

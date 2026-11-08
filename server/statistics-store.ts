@@ -600,7 +600,9 @@ export class StatisticsStore {
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} THEN ip END) AS uniqueIPs,
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND machine != '' THEN machine END) AS machines,
         SUM(CASE WHEN ${isBan} THEN count ELSE 0 END) AS bans,
-        COUNT(DISTINCT CASE WHEN ${isBan} AND ${SINGLE_IP} THEN ip END) AS bannedIPs
+        COUNT(DISTINCT CASE WHEN ${isBan} AND ${SINGLE_IP} THEN ip END) AS bannedIPs,
+        COUNT(DISTINCT CASE WHEN kind = 'alert' THEN day END) AS activeDays,
+        MIN(CASE WHEN kind = 'alert' THEN first_at END) AS firstActivity, MAX(CASE WHEN kind = 'alert' THEN last_at END) AS lastActivity
       FROM cells WHERE kind IN ('alert', 'ban') AND scenario != '' AND ${where}
       GROUP BY scenario HAVING count > 0 ORDER BY count DESC, label LIMIT ${f.limit}`)
       .map((row) => ({ ...row, previous: compare ? previousScenarios.get(row.label) || 0 : null }));
