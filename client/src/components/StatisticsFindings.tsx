@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { AlertCircle, ChevronRight, ExternalLink, Filter, Gavel, Info, ListChecks, type LucideIcon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Badge } from './ui/Badge';
@@ -26,8 +26,6 @@ export interface DecisionDraft { reason: string; duration: string; rangeDuration
 
 export interface Finding {
   key: string;
-  /** Findings of one group beyond the first few stay hidden until requested. */
-  group: string;
   severity: 'warning' | 'info';
   text: string;
   help?: { text: string; href?: string };
@@ -50,7 +48,8 @@ interface DetailContext {
   machineName: (value: string) => string;
 }
 
-const LISTED = 3;
+const LISTED = 5;
+const SEVERITY_ORDER = { warning: 0, info: 1 };
 const linkClass = 'cursor-pointer font-medium text-primary-600 hover:text-primary-700 hover:underline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:text-primary-300';
 const headerCell = 'whitespace-nowrap px-3 py-2 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400';
 const cell = 'px-3 py-2 align-top';
@@ -370,13 +369,11 @@ function FindingItem({ finding, context }: { finding: Finding; context: DetailCo
 
 export function StatisticsFindings({ findings, context }: { findings: Finding[]; context: DetailContext }) {
   const { t } = useI18n();
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
-  const groups: string[] = [];
-  const byGroup = new Map<string, Finding[]>();
-  for (const finding of findings) {
-    if (!byGroup.has(finding.group)) { groups.push(finding.group); byGroup.set(finding.group, []); }
-    byGroup.get(finding.group)!.push(finding);
-  }
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const ordered = [...findings].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+  const shown = expanded ? ordered : ordered.slice(0, LISTED);
+  const extraCount = findings.length - LISTED;
   return (
     <Card>
       <CardHeader>
@@ -386,29 +383,16 @@ export function StatisticsFindings({ findings, context }: { findings: Finding[];
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {findings.length === 0 ? <p className="py-4 text-center text-sm text-gray-500 dark:text-gray-400">{t('pages.statistics.noFindings')}</p> : (
-          <ul className="space-y-2">
-            {groups.flatMap((group) => {
-              const items = byGroup.get(group)!;
-              const expanded = expandedGroups.has(group);
-              const shown = expanded ? items : items.slice(0, LISTED);
-              const rows = shown.map((finding) => <FindingItem key={finding.key} finding={finding} context={context} />);
-              if (items.length > LISTED) {
-                rows.push(
-                  <li key={`${group}-toggle`}>
-                    <button type="button" className={`${linkClass} px-3 text-xs`} onClick={() => setExpandedGroups((current) => {
-                      const next = new Set(current);
-                      if (next.has(group)) next.delete(group); else next.add(group);
-                      return next;
-                    })}>
-                      {expanded ? t('pages.statistics.showFewer') : t('pages.statistics.showMore', { count: items.length - LISTED })}
-                    </button>
-                  </li>,
-                );
-              }
-              return rows;
-            })}
+        {shown.length === 0 ? <p className="py-4 text-center text-sm text-gray-500 dark:text-gray-400">{t('pages.statistics.noFindings')}</p> : (
+          <ul id={listId} className="space-y-2">
+            {shown.map((finding) => <FindingItem key={finding.key} finding={finding} context={context} />)}
           </ul>
+        )}
+        {extraCount > 0 && (
+          <button type="button" aria-expanded={expanded} aria-controls={listId}
+            className={`${linkClass} mt-2 px-3 text-xs`} onClick={() => setExpanded((value) => !value)}>
+            {expanded ? t('pages.statistics.showFewer') : t('pages.statistics.showMore', { count: extraCount })}
+          </button>
         )}
       </CardContent>
     </Card>

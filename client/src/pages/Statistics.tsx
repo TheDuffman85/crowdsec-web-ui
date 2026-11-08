@@ -525,34 +525,34 @@ export function Statistics() {
     const compare = !data.coverage.comparisonPartial;
     const scenarioDraft = (scenario: string): DecisionDraft => ({ reason: scenario, duration: '4h' });
     // A machine without alerts may have a stopped agent or broken acquisition.
-    data.quietMachines.forEach((row) => findings.push({ key: `quiet-${row.value}`, group: 'quiet', severity: 'warning',
+    data.quietMachines.forEach((row) => findings.push({ key: `quiet-${row.value}`, severity: 'warning',
       text: t('pages.statistics.findingQuietMachine', { machine: machineName(row.value, row.label), count: formatNumber(row.previous) }),
       detail: { kind: 'machines', machines: [row.value] } }));
     // Alerts that never lead to a ban point at a profile or remediation gap.
     const unbanned = data.scenarios.filter((row) => row.bans === 0);
     unbanned.filter((row) => !isInBandScenario(row.label) && row.count >= FINDINGS.unbannedScenarioAlerts).forEach((row) => findings.push({
-      key: `unbanned-${row.label}`, group: 'unbanned', severity: 'warning',
+      key: `unbanned-${row.label}`, severity: 'warning',
       text: t('pages.statistics.findingUnbannedScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
       help: { text: t('pages.statistics.findingUnbannedScenarioHelp'), href: PROFILE_DOCS },
       action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
       detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
     }));
     if (data.totals.returnedAfterBan > 0) {
-      findings.push({ key: 'returned', group: 'returned', severity: 'warning',
+      findings.push({ key: 'returned', severity: 'warning',
         text: t('pages.statistics.findingReturnedAfterBan', { count: formatNumber(data.totals.returnedAfterBan) }),
         help: { text: t('pages.statistics.findingReturnedAfterBanHelp'), href: `${PROFILE_DOCS}#duration_expr` },
         detail: { kind: 'returned', history: compare, decision: { reason: t('pages.statistics.reasonReturned'), duration: '7d' } } });
     }
     if (compare) {
       data.increases.filter((row) => row.current >= FINDINGS.spikeAlerts && row.current >= row.previous * FINDINGS.spikeFactor).forEach((row) => findings.push({
-        key: `spike-${row.value}`, group: 'spike', severity: 'warning',
+        key: `spike-${row.value}`, severity: 'warning',
         text: t('pages.statistics.findingMachineSpike', { machine: machineName(row.value, row.label), current: formatNumber(row.current), previous: formatNumber(row.previous) }),
         action: { label: t('pages.statistics.showMachine'), onSelect: () => update({ machine: row.value }) },
         detail: { kind: 'machines', machines: [row.value] },
       }));
     }
     unbanned.filter((row) => isInBandScenario(row.label) && row.count >= FINDINGS.inBandAlerts).forEach((row) => findings.push({
-      key: `inband-${row.label}`, group: 'inband', severity: 'info',
+      key: `inband-${row.label}`, severity: 'info',
       text: t('pages.statistics.findingInBandScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
       help: { text: t('pages.statistics.findingInBandScenarioHelp') },
       action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
@@ -560,7 +560,7 @@ export function Statistics() {
     }));
     if (compare) {
       data.scenarios.filter((row) => row.previous === 0).forEach((row) => findings.push({
-        key: `new-${row.label}`, group: 'new', severity: 'info',
+        key: `new-${row.label}`, severity: 'info',
         text: t('pages.statistics.findingNewScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
         action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
         detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
@@ -568,13 +568,13 @@ export function Statistics() {
     }
     const network = data.networks[0];
     if (network && data.totals.alerts > 0 && network.count / data.totals.alerts >= FINDINGS.networkShare && network.uniqueIPs >= FINDINGS.networkIPs) {
-      findings.push({ key: 'network', group: 'network', severity: 'info', text: t('pages.statistics.findingNetwork', {
+      findings.push({ key: 'network', severity: 'info', text: t('pages.statistics.findingNetwork', {
         network: network.label, percent: Math.round(network.count / data.totals.alerts * 100), ips: formatNumber(network.uniqueIPs) }),
       help: { text: t('pages.statistics.findingNetworkHelp') },
       detail: { kind: 'ips', network: network.label, decision: { reason: t('pages.statistics.reasonNetwork', { network: network.label }), duration: '4h', rangeDuration: '24h' } } });
     }
     const scanners = data.attackers.filter((row) => row.machines >= FINDINGS.wideScannerMachines);
-    if (scanners.length) findings.push({ key: 'scanners', group: 'scanners', severity: 'info',
+    if (scanners.length) findings.push({ key: 'scanners', severity: 'info',
       text: t('pages.statistics.findingWideScanners', { count: scanners.length, machines: FINDINGS.wideScannerMachines }),
       detail: { kind: 'scanners', rows: scanners, decision: { reason: t('pages.statistics.reasonScanner'), duration: '4h' } } });
   }

@@ -164,12 +164,23 @@ describe('Statistics page', () => {
       increases: [{ value: '["default","m-1"]', label: 'Server one', current: 60, previous: 10, change: 50 }],
     } satisfies StatisticsResponse));
     mount();
-    expect(await screen.findByText(/Web raised no alerts in this period, after 80/)).toBeInTheDocument();
-    expect(screen.getByText(/crowdsecurity\/http-probing raised 150 alerts from 30 IPs without a single ban/)).toBeInTheDocument();
-    expect(screen.getByText(/4 IPs attacked again on a later day after being banned/)).toBeInTheDocument();
-    expect(screen.getByText(/Server one received 60 alerts, up from 10/)).toBeInTheDocument();
-    expect(screen.getByText(/New attack type: crowdsecurity\/http-probing/)).toBeInTheDocument();
+    const findings = (await screen.findByRole('heading', { name: 'Findings' })).closest('.rounded-xl') as HTMLElement;
+    const showMore = within(findings).getByRole('button', { name: 'Show 1 more' });
+    expect(within(findings).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      expect.stringMatching(/Web raised no alerts in this period, after 80/),
+      expect.stringMatching(/crowdsecurity\/http-probing raised 150 alerts from 30 IPs without a single ban/),
+      expect.stringMatching(/4 IPs attacked again on a later day after being banned/),
+      expect.stringMatching(/Server one received 60 alerts, up from 10/),
+      expect.stringMatching(/New attack type: crowdsecurity\/http-probing/),
+    ]);
+    expect(within(findings).getAllByRole('button').at(-1)).toBe(showMore);
+    fireEvent.click(showMore);
+    expect(within(findings).getAllByRole('listitem')).toHaveLength(6);
     expect(screen.getByText(/Example Cloud accounts for 60% of all alerts, from 25 IPs/)).toBeInTheDocument();
+    const showFewer = within(findings).getByRole('button', { name: 'Show fewer' });
+    expect(within(findings).getAllByRole('button').at(-1)).toBe(showFewer);
+    fireEvent.click(showFewer);
+    expect(within(findings).getAllByRole('listitem')).toHaveLength(5);
     // Alerts doubled; ban coverage rose from 50% to 75%.
     expect(screen.getByText('+100%')).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
