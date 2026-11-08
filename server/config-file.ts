@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isMap, isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
 import type { RuntimeConfig } from './config';
+import { validateStatisticsSettings, type StatisticsSettings } from '../shared/statistics';
 import { ConfigurationEnvironmentError } from './config-error';
 import { parseInstancesConfig, parseManualDecisionScenarios, type CrowdsecInstanceConfig } from './instances-config';
 
@@ -9,6 +10,8 @@ type UnknownRecord = Record<string, unknown>;
 type ConfigPath = readonly (string | number)[];
 
 export interface ParsedConfigFile {
+  statistics: StatisticsSettings;
+  statisticsManaged: Array<keyof StatisticsSettings>;
   environment: NodeJS.ProcessEnv;
   instances: CrowdsecInstanceConfig[];
   sqliteWalEnabled: boolean;
@@ -184,7 +187,7 @@ function applySecretReference(
 
 export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.ProcessEnv): ParsedConfigFile {
   const root = record(parsed, 'config');
-  knownKeys(root, ['server', 'storage', 'ui', 'auth', 'notifications', 'audit', 'updates', 'crowdsec', 'instances'], 'root');
+  knownKeys(root, ['server', 'storage', 'ui', 'auth', 'notifications', 'audit', 'updates', 'crowdsec', 'instances', 'statistics'], 'root');
 
   const env: NodeJS.ProcessEnv = {};
   for (const name of RETAINED_METADATA_ENV) {
@@ -218,7 +221,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
     : parseByteSize(storage.journalSizeLimit, 'storage.journalSizeLimit');
 
   const ui = section(root, 'ui');
-  knownKeys(ui, ['timeZone', 'timeFormat', 'dateFormat', 'readOnly', 'allowlistsSidebarVisible', 'metricsSidebarVisible'], 'ui');
+  knownKeys(ui, ['timeZone', 'timeFormat', 'dateFormat', 'readOnly', 'allowlistsSidebarVisible', 'metricsSidebarVisible', 'statisticsSidebarVisible'], 'ui');
   if (ui.timeZone !== undefined && ui.timeZone !== null && ui.timeZone !== 'browser') {
     env.TZ = string(ui.timeZone, 'ui.timeZone');
   }
@@ -227,6 +230,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setBoolean(env, ui, 'readOnly', 'PERMISSION_READ_ONLY', 'ui');
   setBoolean(env, ui, 'allowlistsSidebarVisible', 'UI_ALLOWLISTS_SIDEBAR_VISIBLE', 'ui');
   setBoolean(env, ui, 'metricsSidebarVisible', 'UI_METRICS_SIDEBAR_VISIBLE', 'ui');
+  setBoolean(env, ui, 'statisticsSidebarVisible', 'UI_STATISTICS_SIDEBAR_VISIBLE', 'ui');
 
   const auth = section(root, 'auth');
   knownKeys(auth, ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'passwordLogin', 'oidc'], 'auth');
@@ -309,7 +313,12 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setInteger(env, sync, 'reconcileWindowsPerRefresh', 'CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH', 'crowdsec.sync');
   setBoolean(env, sync, 'bootstrapRetryEnabled', 'CROWDSEC_BOOTSTRAP_RETRY_ENABLED', 'crowdsec.sync');
 
+  let statistics: StatisticsSettings;
+  try { statistics = validateStatisticsSettings(section(root, 'statistics')); }
+  catch (error) { throw new Error(`Configuration error: ${error instanceof Error ? error.message : String(error)}`); }
   return {
+    statistics,
+    statisticsManaged: Object.keys(section(root, 'statistics')) as Array<keyof StatisticsSettings>,
     environment: env,
     instances: parseInstancesConfig({ instances: root.instances }, sourceEnv),
     sqliteWalEnabled,
@@ -356,13 +365,14 @@ const INITIAL_CONFIG_HEADER = [
 ] as const;
 
 export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
-  ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
+  ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'statistics', 'crowdsec', 'instances']],
+  ['statistics', ['enabled', 'retentionDays', 'jobInterval', 'jobTimeBudget']],
   ['server', ['port', 'basePath', 'hostname']],
   ['storage', [
     'dataDir', 'cacheDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
     'queryTimeout', 'analyticsQueryTimeout',
   ]],
-  ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly', 'allowlistsSidebarVisible', 'metricsSidebarVisible']],
+  ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly', 'allowlistsSidebarVisible', 'metricsSidebarVisible', 'statisticsSidebarVisible']],
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'passwordLogin', 'oidc']],
   ['auth.passwordLogin', ['enabled']],
@@ -554,6 +564,7 @@ function generatedInstances(env: NodeJS.ProcessEnv, config: RuntimeConfig): unkn
 
 export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: RuntimeConfig): UnknownRecord {
   const document: UnknownRecord = {
+    statistics: { ...config.statistics },
     server: { port: config.port, basePath: config.basePath, ...(config.hostname ? { hostname: config.hostname } : {}) },
     storage: {
       dataDir: config.dbDir,
@@ -568,7 +579,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
     ui: {
       timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, dateFormat: config.dateFormat,
       readOnly: config.readOnly, allowlistsSidebarVisible: config.allowlistsSidebarVisible,
-      metricsSidebarVisible: config.metricsSidebarVisible,
+      metricsSidebarVisible: config.metricsSidebarVisible, statisticsSidebarVisible: config.statisticsSidebarVisible,
     },
     auth: {
       enabled: config.dashboardAuth.enabled === null ? 'auto' : config.dashboardAuth.enabled,
@@ -649,6 +660,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
 }
 
 const CONFIG_SECTION_ENV = [
+  ['CONFIG_STATISTICS', ['statistics']],
   ['CONFIG_SERVER', ['server']],
   ['CONFIG_STORAGE', ['storage']],
   ['CONFIG_UI', ['ui']],
@@ -661,6 +673,10 @@ const CONFIG_SECTION_ENV = [
 ] as const;
 
 const CONFIG_VALUE_ENV = [
+  ['CONFIG_STATISTICS_ENABLED', ['statistics', 'enabled']],
+  ['CONFIG_STATISTICS_RETENTION_DAYS', ['statistics', 'retentionDays']],
+  ['CONFIG_STATISTICS_JOB_INTERVAL', ['statistics', 'jobInterval']],
+  ['CONFIG_STATISTICS_JOB_TIME_BUDGET', ['statistics', 'jobTimeBudget']],
   ['CONFIG_SERVER_PORT', ['server', 'port']],
   ['CONFIG_SERVER_BASE_PATH', ['server', 'basePath']],
   ['CONFIG_SERVER_HOSTNAME', ['server', 'hostname']],
@@ -678,6 +694,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_UI_READ_ONLY', ['ui', 'readOnly']],
   ['CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE', ['ui', 'allowlistsSidebarVisible']],
   ['CONFIG_UI_METRICS_SIDEBAR_VISIBLE', ['ui', 'metricsSidebarVisible']],
+  ['CONFIG_UI_STATISTICS_SIDEBAR_VISIBLE', ['ui', 'statisticsSidebarVisible']],
   ['CONFIG_AUTH_ENABLED', ['auth', 'enabled']],
   ['CONFIG_AUTH_PASSWORD_LOGIN_ENABLED', ['auth', 'passwordLogin', 'enabled']],
   ['CONFIG_AUTH_OIDC_ISSUER_URL', ['auth', 'oidc', 'issuerUrl']],

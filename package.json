@@ -19,6 +19,7 @@
     "dev:client": "vite",
     "loadtest:seed": "tsx scripts/seed-load-test-data.ts",
     "loadtest:server": "tsx scripts/load-test-server.ts",
+    "loadtest:benchmark:statistics": "tsx scripts/benchmark-statistics.ts",
     "loadtest:benchmark:multi": "node scripts/benchmark-multi-instance.mjs",
     "loadtest:build-client": "vite build",
     "geocoder:data": "node scripts/download-geonames-data.mjs",

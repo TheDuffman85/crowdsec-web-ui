@@ -14,7 +14,7 @@
 
 # CrowdSec Web UI
 
-A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alerts, manage decisions, monitor runtime metrics, and send notifications from one responsive UI.
+A self-hosted web UI for investigating alerts, managing decisions, tracking long-term attack trends, monitoring runtime metrics, and sending notifications with [CrowdSec](https://crowdsec.net/).
 
 <div align="center">
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB" alt="React" /></a>
@@ -29,10 +29,11 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Area | Highlights |
 | --- | --- |
 | Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, shared quick filters, and simulation counts |
+| Statistics | Long-term attack trends, period comparisons, attacker and target rankings, and findings on recurring IPs, quiet machines, and gaps in ban coverage |
 | Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, configurable columns, and an optional view grouped by attacking IP session |
 | Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
 | Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
-| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, Decisions, and Allowlists |
+| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Statistics, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, linking local accounts to SSO identities, group roles, and instance-wide read-only mode |
@@ -45,6 +46,9 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 <p>
   <a href="screenshots/dashboard.png"><img src="screenshots/dashboard.png" alt="Dashboard" width="48%"></a>
   <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
+</p>
+<p align="center">
+  <a href="screenshots/statistics.png"><img src="screenshots/statistics.png" alt="Long-term statistics with findings, period comparisons, and an activity chart" width="65%"></a>
 </p>
 <p>
   <a href="screenshots/multi_instance.png"><img src="screenshots/multi_instance.png" alt="Combined multi-instance alerts" width="48%"></a>
@@ -179,7 +183,7 @@ Adjust the URL and certificate paths. Enable `CONFIG_INSTANCE_LAPI_TLS_CA_FILE` 
 | --- | --- |
 | Client | React, Vite, and Tailwind CSS; builds to `dist/client` |
 | Server | Node.js and Hono; builds to `dist/server` |
-| Storage | SQLite via `better-sqlite3`: durable `state.db` and rebuildable `cache.db` under `/app/data` |
+| Storage | SQLite via `better-sqlite3`: durable `state.db` and optional `statistics.db`, plus rebuildable `cache.db` under `/app/data` |
 | CrowdSec | Watcher password or agent mTLS; delta refreshes and chunked historical synchronization |
 | Container | Runs as the non-root `node` user |
 
@@ -229,11 +233,11 @@ To manage a locked value in Settings again, remove it from both the environment 
 | `server.port` | `3000` | HTTP listen port. | `CONFIG_SERVER_PORT` |
 | `server.basePath` | `""` | Optional URL prefix such as `/crowdsec`; no trailing slash. | `CONFIG_SERVER_BASE_PATH` |
 | `server.hostname` | Unset (`localhost`) | Hostname or IP address this installation identifies itself with to remote services. Email destinations announce it in SMTP `EHLO`; set a FQDN for mail servers that reject `localhost`. It is not a listen address. | `CONFIG_SERVER_HOSTNAME` |
-| `storage.dataDir` | `/app/data` | Location of `state.db`: users, passkeys, notification channels and rules, saved filters, and UI settings. Back it up. | `CONFIG_STORAGE_DATA_DIR` |
+| `storage.dataDir` | `/app/data` | Location of `state.db` and optional `statistics.db`: users, passkeys, notification channels and rules, saved filters, and UI settings. Back it up. | `CONFIG_STORAGE_DATA_DIR` |
 | `storage.cacheDir` | `storage.dataDir` | Location of `cache.db`, the alert and decision cache. It is rebuilt from LAPI when lost, so it can live on fast local storage. | `CONFIG_STORAGE_CACHE_DIR` |
 | `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | Local GeoNames snapshot used for location labels. | `CONFIG_STORAGE_GEONAMES_DIR` |
-| `storage.walEnabled` | `true` | Enables SQLite write-ahead logging for `cache.db`. Set to `false` for filesystems that do not support WAL. `state.db` always uses a rollback journal. | `CONFIG_STORAGE_WAL_ENABLED` |
-| `storage.incrementalVacuumEnabled` | `true` | Uses bounded incremental vacuum while idle. Applies when `cache.db` is created. | `CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED` |
+| `storage.walEnabled` | `true` | Enables SQLite write-ahead logging for `cache.db` and `statistics.db`. Set to `false` for filesystems that do not support WAL. `state.db` always uses a rollback journal. | `CONFIG_STORAGE_WAL_ENABLED` |
+| `storage.incrementalVacuumEnabled` | `true` | Uses bounded incremental vacuum while idle. Applies when `cache.db` or `statistics.db` is created. | `CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED` |
 | `storage.journalSizeLimit` | `128MiB` | Retained WAL size after checkpoints. This does not cap transactions; use `unlimited` to disable trimming. Ignored when WAL is disabled. | `CONFIG_STORAGE_JOURNAL_SIZE_LIMIT` |
 | `storage.queryTimeout` | `30s` | Maximum execution time for regular database queries, such as list pages and cache synchronization. Raise it for very large databases or slow storage. | `CONFIG_STORAGE_QUERY_TIMEOUT` |
 | `storage.analyticsQueryTimeout` | `60s` | Maximum execution time for dashboard statistics queries. | `CONFIG_STORAGE_ANALYTICS_QUERY_TIMEOUT` |
@@ -242,6 +246,7 @@ To manage a locked value in Settings again, remove it from both the environment 
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
 | `ui.allowlistsSidebarVisible` | `true` | Shows the Allowlists sidebar link. The `/allowlists` route remains available when hidden. Omit to let each user choose in Settings > Profile. | `CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE` |
+| `ui.statisticsSidebarVisible` | `true` | Shows the Statistics sidebar link. The `/statistics` route remains available when hidden. Omit to let each user choose in Settings > Profile. | `CONFIG_UI_STATISTICS_SIDEBAR_VISIBLE` |
 | `ui.metricsSidebarVisible` | `true` | Shows the Metrics sidebar link. The `/metrics` route remains available when Prometheus metrics are configured. Omit to let each user choose in Settings > Profile. | `CONFIG_UI_METRICS_SIDEBAR_VISIBLE` |
 | `updates.enabled` | `true` in packaged images | Enables the built-in update check. | `CONFIG_UPDATES_ENABLED` |
 
@@ -1063,14 +1068,15 @@ A [Helm chart for CrowdSec Web UI](https://github.com/zekker6/helm-charts/tree/m
 
 ## Persistence and Alert History
 
-Data is split into two SQLite files:
+Application state, cached alert details, and optional historical statistics use separate SQLite files:
 
 | File | Location | Contents | When lost |
 | --- | --- | --- | --- |
 | `state.db` | `storage.dataDir` | Users, passkeys, notification channels, rules and history, saved filters, queued alert deletions, and UI settings | Gone; restore it from a backup |
-| `cache.db` | `storage.cacheDir` | Alerts and decisions synchronized from LAPI | Rebuilt by the next synchronization |
+| `cache.db` | `storage.cacheDir` | Alerts, decisions and pending statistics observations synchronized from LAPI | Available LAPI history is reimported; unprocessed observations may be lost |
+| `statistics.db` | `storage.dataDir` | Daily statistics, hourly activity for the last two days, and compact deduplication identities, when enabled | Gone; restore it from a backup |
 
-Mount the directories, not single files: WAL mode also uses `cache.db-wal` and `cache.db-shm`.
+Mount the directories, not single files: WAL mode also uses `cache.db-wal` / `cache.db-shm` and, when statistics are enabled, `statistics.db-wal` / `statistics.db-shm`. Stop the application before copying database files for a backup, or use SQLite’s online backup API. Back up `statistics.db` alongside `state.db` and `config.yaml`; completed statistics cannot be rebuilt after the underlying LAPI history expires.
 
 ```yaml
 volumes:
@@ -1086,6 +1092,46 @@ Upgrading from a version that used a single `crowdsec.db` copies its durable dat
 - During LAPI outages, the application serves its available cache and retries in the background; partial imports are marked.
 
 Use `POST /api/cache/clear` for a full cache reset. Synchronization internals are documented in [DEVELOPMENT.md](DEVELOPMENT.md#cache-and-synchronization-internals).
+
+### Long-term statistics
+
+New installations collect statistics by default. Installations that existed before this feature keep it off until you enable it under **Settings → General → Statistics**, or configure:
+
+```yaml
+statistics:
+  enabled: true
+  retentionDays: 90
+  jobInterval: 1h
+  jobTimeBudget: 30s
+```
+
+| Setting | Default | Environment variable |
+| --- | --- | --- |
+| `statistics.enabled` | `true` for new installations, `false` for existing ones | `CONFIG_STATISTICS_ENABLED` |
+| `statistics.retentionDays` | `90` (1–3650) | `CONFIG_STATISTICS_RETENTION_DAYS` |
+| `statistics.jobInterval` | `1h` (5m–24h) | `CONFIG_STATISTICS_JOB_INTERVAL` |
+| `statistics.jobTimeBudget` | `30s` (1s–60s) | `CONFIG_STATISTICS_JOB_TIME_BUDGET` |
+
+Explicit YAML and environment settings lock the corresponding Settings controls. Other changes persist in `state.db` and apply without a restart.
+
+The **Statistics** page ranks attacking IPs, attacked machines and known targets. Rankings include unique IPs, linked bans, scenarios, country and ASN, activity dates, and targeted machines. Top Targets shows alert counts and unique source IPs for each target. Target information is available for alerts archived after target collection was added.
+
+- **Findings** flag quiet machines, scenarios without bans, AppSec blocks, IPs that return after a ban, traffic spikes by machine, new attack types, dominant networks, and IPs that target several machines. Up to five findings appear initially, with warnings first. Expand a finding to see the IPs involved, the address ranges (`/24` or `/64`) of a dominant AS, or a machine's recent activity. IP and range tables start with 25 rows and can expand to 500. With enforcement permissions, **Ban** and **Block range** open the decision dialog for one value. **Ban all** and **Block all** apply the same decision to every listed value, skipping allowlisted values unless you bypass the allowlist. Top IPs also offer the single-IP action.
+- **Summary tiles** show alerts, unique IPs (and how many were never seen before), bans, ban coverage (the share of attacking IPs that were banned), recurring IPs, and IPs that returned after a ban. Most tiles compare their totals with the preceding period of equal length.
+- **Scenarios** show alerts with their trend, unique IPs, machines, bans and ban coverage per scenario; select one to filter the whole page by it.
+- Top countries and AS include their number of distinct IPs, which tells one noisy host from a botnet. Machine changes show increases and machines that went quiet.
+
+Choose individual/all instances, live/simulation mode, Top 10/20/50, calendar presets or custom dates. Dates use **UTC**; Today is a partial day, not a rolling 24-hour window. Ranges within today and yesterday chart activity by hour, longer or older ranges by day. Comparisons and new-IP counts are only shown when the preceding period is fully covered.
+
+Counts represent the first captured observation. Deleting alerts or expiring decisions does not subtract history. Each distinct decision counts once, even when its expiry is extended. Ranking bans are linked to alerts dated in the selected period; issuance charts use the decision’s own creation date. Missing addresses and network ranges do not count as unique attacking IPs. Counts only cover alerts and decisions imported by the existing sync filters.
+
+Collection starts with available cached data; it does not fetch additional history from CrowdSec. A transactional queue preserves observations until a separate, lower-priority worker consolidates them in batches of up to 500. HTTP reads use a separate statistics query worker and never trigger collection. Coverage and backlog indicators identify incomplete periods; chart gaps are not treated as zero attacks. Investigation links show alert details only while those details remain in the normal cache.
+
+Statistics survive cache resets. Disabling collection finishes pending observations and keeps existing summaries until expiry; enabling it again backfills available cached records. Reducing retention permanently removes older summaries and deduplication identities. Queries enforce retention immediately. Expired data is pruned in bounded batches once per UTC day and after retention changes, including while collection is disabled. Restarts resume an unfinished backfill instead of rescanning the cache. Records dated up to one day ahead of the server clock are kept on their own date; anything further ahead is ignored. Processed observation payloads are discarded. Only compact aggregate relationships, timestamps, counts, hourly histograms and deduplication identities remain; alert bodies, events and search indexes are not archived. Exact IP statistics still grow with distinct IP/machine/scenario relationships.
+
+For data directories on filesystems without SQLite WAL support, set `storage.walEnabled: false`; this also applies to `statistics.db`. Statistics storage uses incremental vacuum when enabled at database creation. Never delete `statistics.db` as part of a cache rebuild.
+
+Run `pnpm loadtest:benchmark:statistics` for an isolated A/B comparison of capture overhead, foreground request p95 during consolidation, historical query time, and storage size with repeated and high-cardinality attacker data. Temporary benchmark data never uses the configured application directory. `STATISTICS_BENCHMARK_RECORDS`, `STATISTICS_BENCHMARK_RUNS`, and `STATISTICS_BENCHMARK_SAMPLES` control its size; changes above 5% are an investigation gate, not a guarantee across deployment hardware.
 
 ### SQLite database maintenance
 

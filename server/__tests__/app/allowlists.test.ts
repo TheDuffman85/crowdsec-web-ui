@@ -357,6 +357,50 @@ describe('manual decisions and allowlists', () => {
     }
   });
 
+  test('bulk add skips allowlisted values in one LAPI request and adds them when bypassed', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { controller, database, lapiClient, fetchCalls } = createController({
+      fetchResolver: allowlistResolver,
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    const alertPosts = () => fetchCalls.filter((call) => call.url.endsWith('/v1/alerts') && call.method === 'POST');
+    const bulkAdd = (body: Record<string, unknown>) => controller.fetch(new Request('http://localhost/crowdsec/api/decisions/bulk-add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+    try {
+      await lapiClient.login();
+
+      expect((await bulkAdd({ values: [] })).status).toBe(400);
+      expect((await bulkAdd({ values: ['203.0.113.5', 'example.com'] })).status).toBe(400);
+      expect((await bulkAdd({ values: Array.from({ length: 501 }, (_, index) => `203.0.${index >> 8}.${index & 255}`) })).status).toBe(400);
+      expect((await bulkAdd({ values: ['203.0.113.5'], duration: 'soon' })).status).toBe(400);
+      expect(alertPosts()).toHaveLength(0);
+
+      const response = await bulkAdd({ values: ['203.0.113.5', '10.1.2.3', '198.51.100.0/24', '203.0.113.5'], duration: '4h', reason: 'scanner' });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        added: ['203.0.113.5', '198.51.100.0/24'],
+        allowlisted: [{ value: '10.1.2.3', allowlisted: [{ instance_id: 'default', instance_name: 'CrowdSec', reason: '10.0.0.0/8 from office (VPN)' }] }],
+        succeeded: 1,
+        failed: 0,
+      });
+      expect(alertPosts()).toHaveLength(1);
+      expect((alertPosts()[0].body as Array<{ source: { value: string } }>).map((alert) => alert.source.value)).toEqual(['203.0.113.5', '198.51.100.0/24']);
+      expect(auditEntries(logSpy)).toEqual([expect.objectContaining({ action: 'decision.add', values: ['203.0.113.5', '198.51.100.0/24'], outcome: 'success' })]);
+
+      const bypassed = await bulkAdd({ values: ['10.1.2.3'], bypass_allowlist: true });
+      expect(await bypassed.json()).toMatchObject({ added: ['10.1.2.3'], allowlisted: [], succeeded: 1 });
+      expect(alertPosts()).toHaveLength(2);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      logSpy.mockRestore();
+      destroyTempDir();
+    }
+  });
+
   test('adds decisions when the value is not allowlisted or the LAPI cannot check', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let checkStatus = 200;

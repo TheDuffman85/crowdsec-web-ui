@@ -111,6 +111,9 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_ALLOWLIST_SIZES
     LOADTEST_METRICS_BOUNCERS
     LOADTEST_METRICS_MACHINES
+    LOADTEST_STATISTICS
+    LOADTEST_STATISTICS_HISTORY_DAYS
+    LOADTEST_STATISTICS_DAILY_ALERTS
     CONFIG_UI_TIME_FORMAT
     CONFIG_AUTH_ENABLED
     CONFIG_AUTH_SESSION_SECRET
@@ -185,9 +188,15 @@ configure_loadtest_profile() {
         alert-sessions-multi)
             profile_file="$LOADTEST_PROFILE_DIR/alert-sessions-multi.sh"
             ;;
+        statistics)
+            profile_file="$LOADTEST_PROFILE_DIR/statistics.sh"
+            ;;
+        statistics-multi)
+            profile_file="$LOADTEST_PROFILE_DIR/statistics-multi.sh"
+            ;;
         *)
             log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
-            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet, alert-sessions, alert-sessions-multi"
+            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet, alert-sessions, alert-sessions-multi, statistics, statistics-multi"
             exit 1
             ;;
     esac
@@ -258,6 +267,9 @@ export_loadtest_config() {
     export LOADTEST_ALLOWLIST_SIZES
     export LOADTEST_METRICS_BOUNCERS
     export LOADTEST_METRICS_MACHINES
+    export LOADTEST_STATISTICS
+    export LOADTEST_STATISTICS_HISTORY_DAYS
+    export LOADTEST_STATISTICS_DAILY_ALERTS
     export CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL
     export CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL
     export CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD

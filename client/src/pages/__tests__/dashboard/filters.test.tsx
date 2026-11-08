@@ -11,6 +11,12 @@ async function openSimulationQuickFilter() {
   await userEvent.click(screen.getByRole('button', { name: 'Mode' }));
 }
 
+function getStatCard(heading: HTMLElement): HTMLElement {
+  const card = heading.closest('.rounded-xl');
+  expect(card).not.toBeNull();
+  return card as HTMLElement;
+}
+
 describe('Dashboard filters and drilldowns', () => {
   test('sends the browser timezone with dashboard filters', async () => {
     render(
@@ -360,8 +366,8 @@ describe('Dashboard filters and drilldowns', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('heading', { name: 'Top AS' });
-    const groupBy = screen.getByRole('group', { name: 'Group by' });
+    const asCard = getStatCard(await screen.findByRole('heading', { name: 'Top AS' }));
+    const groupBy = within(asCard).getByRole('group', { name: 'Group by' });
     expect(within(groupBy).getByRole('button', { name: 'AS' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
 
@@ -382,6 +388,66 @@ describe('Dashboard filters and drilldowns', () => {
       included: ['1.2.3.4'],
       excluded: [],
     });
+  });
+
+  test('switches the top targets card to top machines and filters by the selected machine', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const targetCard = getStatCard(await screen.findByRole('heading', { name: 'Top Targets' }));
+    const groupBy = within(targetCard).getByRole('group', { name: 'Group by' });
+    expect(within(groupBy).getByRole('button', { name: 'Targets' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('web-01')).not.toBeInTheDocument();
+
+    await user.click(within(groupBy).getByRole('button', { name: 'Machines' }));
+    expect(screen.getByRole('heading', { name: 'Top Machines' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Top Targets' })).not.toBeInTheDocument();
+    expect(localStorage.getItem('dashboard_top_target_mode')).toBe('machine');
+
+    await user.click(screen.getByText('web-01'));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'machine=web-01-id' }),
+      expect.any(Object),
+    ));
+    expect(JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections.machine).toEqual({
+      included: ['web-01-id'],
+      excluded: [],
+    });
+  });
+
+  test.each([
+    ['machine ID from Quick Filters', 'web-01-id'],
+    ['machine alias from a typed query', 'web-01'],
+  ])('matches and clears a stored %s on the top machines card', async (_description, storedValue) => {
+    const user = userEvent.setup();
+    localStorage.setItem('dashboard_top_target_mode', 'machine');
+    localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
+      selections: {
+        machine: { included: [storedValue], excluded: [] },
+      },
+      dateRange: { start: '', end: '' },
+      simulation: 'all',
+    }));
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const machineCard = getStatCard(await screen.findByRole('heading', { name: 'Top Machines' }));
+    await waitFor(() => expect(within(machineCard).getAllByText('web-01')).toHaveLength(1));
+    expect(within(machineCard).queryByText('web-01-id')).not.toBeInTheDocument();
+    const row = within(machineCard).getByText('web-01').closest('.cursor-pointer');
+    expect(row).toHaveClass('bg-primary-50');
+
+    await user.click(within(machineCard).getByText('web-01'));
+    await waitFor(() => expect(
+      JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections.machine?.included ?? [],
+    ).toEqual([]));
   });
 
   test('keeps the activity-history range and quick-filter date range in sync', async () => {

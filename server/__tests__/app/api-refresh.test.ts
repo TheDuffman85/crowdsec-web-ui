@@ -694,15 +694,22 @@ describe('createApp refresh API', () => {
       }));
       await dashboardBuildStarted;
 
-      const completedRefresh = await Promise.race([
-        refreshPromise,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
-      ]);
-      if (!completedRefresh) {
-        releaseDashboard();
-        await refreshPromise;
-        throw new Error('Refresh response remained blocked by dashboard preparation');
-      }
+      // This checks independence from the held dashboard build, not response
+      // latency. Cold SQLite workers can take more than 500ms to start on CI.
+      const whileDashboardHeld = async <T>(operation: T | Promise<T>, label: string): Promise<T> => {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            operation,
+            new Promise<never>((_resolve, reject) => {
+              timeout = setTimeout(() => reject(new Error(`${label} remained blocked by dashboard preparation`)), 10_000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeout);
+        }
+      };
+      const completedRefresh = await whileDashboardHeld(refreshPromise, 'Refresh response');
       expect(completedRefresh.status).toBe(200);
 
       const readsPromise = Promise.all([
@@ -712,12 +719,7 @@ describe('createApp refresh API', () => {
         alerts: (await alertsResponse.json()) as PaginatedResponse<SlimAlert>,
         decisions: (await decisionsResponse.json()) as PaginatedResponse<{ id: string | number }>,
       }));
-      const pendingReads = await Promise.race([
-        readsPromise,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
-      ]);
-      expect(pendingReads).not.toBeNull();
-      if (!pendingReads) throw new Error('Page reads remained blocked by dashboard preparation');
+      const pendingReads = await whileDashboardHeld(readsPromise, 'Page reads');
       expect(pendingReads.alerts.pagination.total).toBe(2);
       expect(pendingReads.decisions.pagination.total).toBe(2);
 

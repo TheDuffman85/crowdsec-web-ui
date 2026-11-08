@@ -82,13 +82,21 @@ export function StatCard<TItem extends StatListItem>({
                                 <div
                                     key={idx}
                                     onClick={handleRowClick}
+                                    role={onSelect ? 'button' : undefined}
+                                    aria-pressed={onSelect ? isSelected : undefined}
+                                    tabIndex={onSelect ? 0 : undefined}
+                                    onKeyDown={(event) => {
+                                        if (event.target !== event.currentTarget || !onSelect || (event.key !== 'Enter' && event.key !== ' ')) return;
+                                        event.preventDefault();
+                                        handleRowClick();
+                                    }}
                                     aria-disabled={selectionDisabledReason ? 'true' : undefined}
                                     title={selectionDisabledReason}
-                                    className={`flex items-center justify-between p-2 rounded-lg transition-colors border ${
-                                        selectionDisabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
+                                    className={`flex items-center justify-between p-2 rounded-lg transition-colors border focus-visible:outline-2 focus-visible:outline-primary-500 ${
+                                        !onSelect ? '' : selectionDisabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
                                     } ${isSelected
                                         ? 'bg-primary-50 dark:bg-primary-900/40 border-primary-200 dark:border-primary-800'
-                                        : `border-transparent ${selectionDisabledReason ? '' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`
+                                        : `border-transparent ${!onSelect || selectionDisabledReason ? '' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`
                                         }`}
                                 >
                                     <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">

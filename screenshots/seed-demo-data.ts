@@ -1,5 +1,6 @@
 import { rmSync } from 'node:fs';
 import path from 'node:path';
+import { removeStatisticsDatabase, seedStatisticsArchive } from '../scripts/load-test-statistics';
 import { hashPassword } from '../server/app-auth';
 import { CACHE_DATABASE_FILE, CrowdsecDatabase, STATE_DATABASE_FILE } from '../server/database';
 
@@ -13,6 +14,7 @@ for (const file of [CACHE_DATABASE_FILE, STATE_DATABASE_FILE, 'crowdsec.db']) {
     rmSync(path.join(dbDir, `${file}${suffix}`), { force: true });
   }
 }
+removeStatisticsDatabase(dbDir);
 rmSync(configPath, { force: true });
 
 const database = new CrowdsecDatabase({ dataDir: dbDir });
@@ -405,6 +407,20 @@ database.insertNotification({
 
 database.setMeta('refresh_interval_ms', '300000');
 database.setMeta('multi_instance_cache_schema_ready', 'true');
+database.setMeta('statistics_settings', JSON.stringify({ enabled: true }));
 database.close();
+
+// Keep the older demo traffic in the archive so the other pages retain their small cache fixtures.
+for (const [index, { instanceId, dailyAlerts }] of [
+  { instanceId: 'primary', dailyAlerts: 120 },
+  { instanceId: 'branch', dailyAlerts: 70 },
+  { instanceId: 'edge', dailyAlerts: 45 },
+].entries()) {
+  seedStatisticsArchive({
+    dbDir, instanceId, seed: index + 1, sourceSeed: 1, nowMs: now.getTime(),
+    historyDays: 30, cacheStartMs: Date.parse(pastIso(1)), dailyAlerts, retentionDays: 90,
+    log: (message) => console.log(`${instanceId}: ${message}`),
+  });
+}
 
 console.log(`Seeded screenshot databases in ${dbDir}`);

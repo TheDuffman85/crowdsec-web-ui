@@ -88,6 +88,137 @@ function createMultiController(options: {
   return { controller, database, primary, secondary };
 }
 
+describe('multi-instance heartbeats', () => {
+  test('uses each instance client and interval, including the global fallback', async () => {
+    const { controller, database, primary, secondary } = createMultiController();
+    controller.config.heartbeatIntervalMs = 5_000;
+    controller.config.instances[1].sync = { heartbeatIntervalMs: 2_000 };
+    vi.useFakeTimers();
+    try {
+      controller.startBackgroundTasks();
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(1);
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(1);
+      expect(primary.sendUsageMetrics).toHaveBeenCalledTimes(1);
+      expect(secondary.sendUsageMetrics).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(1);
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(2);
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(3);
+
+      controller.stopBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(2);
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(3);
+    } finally {
+      controller.stopBackgroundTasks();
+      vi.useRealTimers();
+      database.close();
+    }
+  });
+
+  test.each([
+    { global: 5_000, primary: 0, secondary: undefined, expected: [0, 3] },
+    { global: 0, primary: undefined, secondary: 5_000, expected: [0, 3] },
+    { global: 5_000, primary: undefined, secondary: 0, expected: [3, 0] },
+    { global: 0, primary: undefined, secondary: undefined, expected: [0, 0] },
+  ])('respects disabled intervals: $global / $primary / $secondary', async (intervals) => {
+    const { controller, database, primary, secondary } = createMultiController();
+    controller.config.heartbeatIntervalMs = intervals.global;
+    controller.config.instances[0].sync = { heartbeatIntervalMs: intervals.primary };
+    controller.config.instances[1].sync = { heartbeatIntervalMs: intervals.secondary };
+    vi.useFakeTimers();
+    try {
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(intervals.expected[0]);
+      expect(primary.sendUsageMetrics).toHaveBeenCalledTimes(intervals.expected[0]);
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(intervals.expected[1]);
+      expect(secondary.sendUsageMetrics).toHaveBeenCalledTimes(intervals.expected[1]);
+    } finally {
+      controller.stopBackgroundTasks();
+      vi.useRealTimers();
+      database.close();
+    }
+  });
+
+  test('isolates slow requests and does not reschedule an in-flight heartbeat after shutdown', async () => {
+    const { controller, database, primary, secondary } = createMultiController();
+    controller.config.heartbeatIntervalMs = 1_000;
+    let releaseHeartbeat!: () => void;
+    primary.heartbeat.mockImplementation(() => new Promise<void>((resolve) => { releaseHeartbeat = resolve; }));
+    vi.useFakeTimers();
+    try {
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(0);
+      // Restart while a request is pending must join it without creating a second loop.
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(1);
+      expect(primary.sendUsageMetrics).not.toHaveBeenCalled();
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(5);
+
+      releaseHeartbeat();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(primary.sendUsageMetrics).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(2);
+
+      controller.stopBackgroundTasks();
+      releaseHeartbeat();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(2);
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(6);
+    } finally {
+      controller.stopBackgroundTasks();
+      releaseHeartbeat?.();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      database.close();
+    }
+  });
+
+  test('retries failures and tracks warning suppression and recovery per instance', async () => {
+    const { controller, database, primary, secondary } = createMultiController();
+    controller.config.heartbeatIntervalMs = 1_000;
+    primary.heartbeat.mockRejectedValueOnce(new Error('primary offline'))
+      .mockRejectedValueOnce(new Error('primary offline'));
+    secondary.sendUsageMetrics.mockRejectedValue(new Error('secondary metrics offline'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(primary.heartbeat).toHaveBeenCalledTimes(4);
+      expect(primary.sendUsageMetrics).toHaveBeenCalledTimes(2);
+      expect(secondary.heartbeat).toHaveBeenCalledTimes(4);
+      expect(secondary.sendUsageMetrics).toHaveBeenCalledTimes(4);
+      expect(warnSpy.mock.calls.filter(([message]) => String(message).includes('heartbeat or metrics update failed')))
+        .toEqual([
+          ['[Primary] CrowdSec machine heartbeat or metrics update failed: primary offline'],
+          ['[Secondary] CrowdSec machine heartbeat or metrics update failed: secondary metrics offline'],
+        ]);
+      expect(logSpy).toHaveBeenCalledWith('[Primary] CrowdSec machine heartbeat restored.');
+      expect(logSpy).not.toHaveBeenCalledWith('[Secondary] CrowdSec machine heartbeat restored.');
+
+      secondary.sendUsageMetrics.mockResolvedValue(undefined);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(logSpy).toHaveBeenCalledWith('[Secondary] CrowdSec machine heartbeat restored.');
+    } finally {
+      controller.stopBackgroundTasks();
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+      database.close();
+    }
+  });
+});
+
 describe('multi-instance API', () => {
   test('publishes primary reconciliation while a queued secondary transaction remains open', async () => {
     let primaryStarted!: () => void;

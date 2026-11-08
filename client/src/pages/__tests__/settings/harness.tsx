@@ -38,6 +38,8 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.showMetricsInSidebarHelp': 'Metrics sidebar help.',
     'pages.settings.showAllowlistsInSidebar': 'Show Allowlists in sidebar',
     'pages.settings.showAllowlistsInSidebarHelp': 'Allowlists sidebar help.',
+    'pages.settings.showStatisticsInSidebar': 'Show Statistics in sidebar',
+    'pages.settings.showStatisticsInSidebarHelp': 'Statistics sidebar help.',
     'pages.settings.authDisabledHint': 'Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.',
     'pages.settings.authentication': 'Authentication',
     'pages.settings.authenticationDescription': 'Manage account sign-in methods.',
@@ -138,6 +140,7 @@ vi.mock('../../../lib/api', () => ({
   updateManualRefreshSetting: vi.fn(),
   updateMetricsSidebarPreference: vi.fn(),
   updateAllowlistsSidebarPreference: vi.fn(),
+  updateStatisticsSidebarPreference: vi.fn(),
   updateLanguagePreference: vi.fn(async (language: string) => ({ success: true, language })),
   updateFontPreference: vi.fn(async (font: string) => ({ success: true, font })),
 }));

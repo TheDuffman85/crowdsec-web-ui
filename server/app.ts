@@ -1,3 +1,5 @@
+import { StatisticsService } from './statistics-service';
+import { registerStatisticsRoutes } from './app/statistics-routes';
 import { PublishedRevisionLock } from './published-revision-lock';
 import fs from 'fs';
 import path from 'path';
@@ -87,11 +89,13 @@ import {
   loadManualDecisionScenarios,
   loadMetricsSidebarVisible,
   loadAllowlistsSidebarVisible,
+  loadStatisticsSidebarVisible,
   loadPersistedConfig,
   resolveNotificationSecretKey,
   saveManualDecisionScenarios,
   saveMetricsSidebarVisible,
   saveAllowlistsSidebarVisible,
+  saveStatisticsSidebarVisible,
   savePersistedConfig,
 } from './app/preferences';
 import {
@@ -127,6 +131,7 @@ import {
 } from './app/request-parsing';
 import {
   addDashboardAlert,
+  addDashboardAlertBuckets,
   addDashboardDecision,
   addDashboardDecisionCountry,
   compareDashboardDecisionRank,
@@ -135,6 +140,7 @@ import {
   dashboardBuckets,
   dashboardCountryList,
   dashboardIpList,
+  dashboardMachineList,
   dashboardWorldMapData,
   getDashboardBucketKey,
   getDashboardBucketKeys,
@@ -232,11 +238,12 @@ export interface CreateAppOptions {
     | 'setMeta'
     | 'runExclusive'
     | 'close'
-  > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction' | 'runIncrementalVacuum' | 'replaceAllowlists'>>;
+  > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction' | 'runIncrementalVacuum' | 'replaceAllowlists' | 'configureStatistics' | 'statisticsBatch' | 'acknowledgeStatistics'>>;
   attackLocationResolver?: AttackLocationResolver;
 }
 
 export interface AppController {
+  statistics: StatisticsService;
   app: Hono;
   fetch: Hono['fetch'];
   config: RuntimeConfig;
@@ -580,6 +587,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     isComplete: options.initialCacheState?.isComplete ?? false,
     lastUpdate: options.initialCacheState?.lastUpdate ?? null,
   };
+  const statistics = new StatisticsService({
+    config, database, sync: syncWorker, ready: () => cache.isInitialized,
+    complete: () => cache.isComplete && ![...instanceSyncStatuses.values()].some((status) => status.state === 'partial' || status.state === 'failed'),
+    busy: () => [...instanceSyncStatuses.values()].some((status) => status.isSyncing),
+  });
   const instanceLastUpdates = new Map(config.instances.map((instance) => [
     instance.id,
     instance.id === primaryInstance.id ? cache.lastUpdate : null,
@@ -639,6 +651,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let allowlistsSidebarVisible = config.allowlistsSidebarVisibleManaged
     ? config.allowlistsSidebarVisible
     : loadAllowlistsSidebarVisible(database);
+  let statisticsSidebarVisible = config.statisticsSidebarVisibleManaged
+    ? config.statisticsSidebarVisible
+    : loadStatisticsSidebarVisible(database);
   let manualDecisionScenarios = loadManualDecisionScenarios(database);
   const reconcileConfigFingerprint = crypto.createHash('sha256').update(JSON.stringify({
     lookbackMs: config.lookbackMs,
@@ -667,10 +682,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let nextRefreshAt: string | null = null;
   let isSchedulerRunning = false;
   let stopped = false;
-  let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
-  let isHeartbeatSchedulerRunning = false;
-  let heartbeatPromise: Promise<void> | null = null;
-  let heartbeatFailureLogged = false;
   let bootstrapRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootstrapPromise: Promise<boolean> | null = null;
   let bootstrapSource: string | null = null;
@@ -946,6 +957,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     attackLocationResolver,
     addDashboardAttackLocation,
     addDashboardAlert,
+    addDashboardAlertBuckets,
     addDashboardDecision,
     addDashboardDecisionCountry,
     addIpCondition,
@@ -966,6 +978,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     dashboardBuckets,
     dashboardCountryList,
     dashboardIpList,
+    dashboardMachineList,
     dashboardWorldMapData,
     database,
     decisionFieldCondition,
@@ -1115,14 +1128,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     set nextRefreshAt(value: string | null) { nextRefreshAt = value; },
     get isSchedulerRunning() { return isSchedulerRunning; },
     set isSchedulerRunning(value: boolean) { isSchedulerRunning = value; },
-    get heartbeatTimeout() { return heartbeatTimeout; },
-    set heartbeatTimeout(value: ReturnType<typeof setTimeout> | null) { heartbeatTimeout = value; },
-    get isHeartbeatSchedulerRunning() { return isHeartbeatSchedulerRunning; },
-    set isHeartbeatSchedulerRunning(value: boolean) { isHeartbeatSchedulerRunning = value; },
-    get heartbeatPromise() { return heartbeatPromise; },
-    set heartbeatPromise(value: Promise<void> | null) { heartbeatPromise = value; },
-    get heartbeatFailureLogged() { return heartbeatFailureLogged; },
-    set heartbeatFailureLogged(value: boolean) { heartbeatFailureLogged = value; },
     get activeInstanceNetworkSyncs() { return activeInstanceNetworkSyncs; },
     set activeInstanceNetworkSyncs(value: number) { activeInstanceNetworkSyncs = value; },
     get refreshIntervalMs() { return refreshIntervalMs; },
@@ -1320,6 +1325,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     set metricsSidebarVisible(value: boolean) { metricsSidebarVisible = value; },
     get allowlistsSidebarVisible() { return allowlistsSidebarVisible; },
     set allowlistsSidebarVisible(value: boolean) { allowlistsSidebarVisible = value; },
+    get statisticsSidebarVisible() { return statisticsSidebarVisible; },
+    set statisticsSidebarVisible(value: boolean) { statisticsSidebarVisible = value; },
     get manualDecisionScenarios() { return manualDecisionScenarios; },
     set manualDecisionScenarios(value: string[]) { manualDecisionScenarios = value; },
     get cacheRefreshCompletedAt() { return cacheRefreshCompletedAt; },
@@ -1359,7 +1366,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     allowlistService,
     isValidIpOrRange,
   });
+  registerStatisticsRoutes({ app, config, statistics, ensureAuth, ensureCanManageSettings });
   registerApiRoutes({
+    statistics,
     app,
     state: apiRouteState,
     allowlistService,
@@ -1450,6 +1459,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     saveManualDecisionScenarios,
     saveMetricsSidebarVisible,
     saveAllowlistsSidebarVisible,
+    saveStatisticsSidebarVisible,
     savePersistedConfig,
     startRefreshScheduler,
     syncStatus,
@@ -1712,6 +1722,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   return {
+    statistics,
     app,
     fetch: app.fetch,
     config,
@@ -1728,6 +1739,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       for (const timer of instanceRefreshTimers.values()) clearTimeout(timer);
       instanceRefreshTimers.clear();
       historicalInstanceSyncPending.clear();
+      statistics.close();
       queryWorker.close();
       if (analyticsQueryWorker !== queryWorker) analyticsQueryWorker.close();
       facetQueryWorker.close();
@@ -1745,6 +1757,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   function startBackgroundTasks(): void {
     if (stopped) return;
+    statistics.start();
     if (!lapiClient.hasAuthConfig()) {
       console.warn('Cache initialization skipped - CrowdSec LAPI authentication not configured');
       return;
@@ -1759,6 +1772,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     void ensureBootstrapReady('startup').then(() => {
       if (stopped) return;
       for (const instance of config.instances.slice(1)) scheduleInstanceRefresh(instance.id);
+      void statistics.run();
     }).catch((error: unknown) => {
       if (!stopped) console.error('Background bootstrap failed:', error);
     });

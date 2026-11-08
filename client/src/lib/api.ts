@@ -1,5 +1,7 @@
 import type {
   AddDecisionRequest,
+  BulkAddDecisionRequest,
+  BulkAddDecisionResponse,
   AlertRecord,
   AlertSessionsResponse,
   AllowlistCheckResponse,
@@ -32,6 +34,7 @@ import type {
   StatsDecision,
   UpdateMetricsSidebarPreferenceRequest,
   UpdateAllowlistsSidebarPreferenceRequest,
+  UpdateStatisticsSidebarPreferenceRequest,
   UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
   UpsertNotificationChannelRequest,
@@ -350,6 +353,21 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
     return payload;
 }
 
+/** Adds one decision per value. Allowlisted values are skipped and returned unless `bypass_allowlist` is set. */
+export async function addDecisions(data: BulkAddDecisionRequest): Promise<BulkAddDecisionResponse> {
+    const res = await sessionFetch(apiUrl('/api/decisions/bulk-add'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    });
+    const payload = await res.clone().json().catch(() => null) as BulkAddDecisionResponse | null;
+    if (!res.ok && (!payload || typeof payload !== 'object' || !Array.isArray(payload.results))) {
+        await handleApiError(res, 'Failed to add decisions', 'Write Operations');
+    }
+    clearGetCaches();
+    return payload as BulkAddDecisionResponse;
+}
+
 export async function fetchAllowlists(instanceScope: string, query = ''): Promise<AllowlistsResponse> {
     const params = new URLSearchParams({ instance: instanceScope });
     if (query) params.set('q', query);
@@ -408,6 +426,17 @@ export async function updateAllowlistsSidebarPreference(data: UpdateAllowlistsSi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     }, 'Failed to update allowlists sidebar preference');
+}
+
+export async function updateStatisticsSidebarPreference(data: UpdateStatisticsSidebarPreferenceRequest): Promise<{
+    success: boolean;
+    statistics_sidebar_visible: boolean;
+}> {
+    return sendJson('/api/config/statistics-sidebar', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update statistics sidebar preference');
 }
 
 export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarPreferenceRequest): Promise<{

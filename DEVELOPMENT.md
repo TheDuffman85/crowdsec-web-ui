@@ -109,6 +109,10 @@ ESLint and other tools that still require the compiler API. This follows the
 
 The synthetic large-dataset workflow is documented separately in [LOAD_TESTING.md](LOAD_TESTING.md).
 
+### README screenshots
+
+With Chrome or Chromium installed, run `pnpm run screenshots:update` from the repository root. The script recreates the synthetic cache and statistics archive in its temporary database directory, runs the local demo, and writes the PNGs to `screenshots/`. For a custom browser path, output directory, or ports, copy `screenshots/.env.example` to `screenshots/.env` and set the relevant overrides.
+
 ## Build and Image Metadata
 
 These values apply when building a local production bundle or container image.

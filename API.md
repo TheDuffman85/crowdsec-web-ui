@@ -137,6 +137,7 @@ User management rejects changes to the signed-in user's own account and to OIDC 
 | GET | `/api/instances` | Configured instance identities, LAPI and synchronization status, metrics endpoint identities, per-instance overrides, effective manual decision scenarios (`manual_decision_scenarios`), and aggregate availability. |
 | PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. With dashboard authentication it is saved for the signed-in user; otherwise for the instance. |
 | PUT | `/api/config/allowlists-sidebar` | Save the allowlists sidebar preference. Body: `{ "visible": true }`. With dashboard authentication it is saved for the signed-in user; otherwise for the instance. Editable in read-only mode. |
+| PUT | `/api/config/statistics-sidebar` | Save the statistics sidebar preference. Body: `{ "visible": true }`. With dashboard authentication it is saved for the signed-in user; otherwise for the instance. Editable in read-only mode. |
 | PUT | `/api/config/refresh-interval` | Update the refresh interval. Body: `{ "interval": "manual" \| "0" \| "5s" \| "30s" \| "1m" \| "5m" }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when `crowdsec.sync.refreshInterval` is set. |
 | PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when `crowdsec.sync.manualRefreshEnabled` is set. |
 | PUT | `/api/config/manual-decision-scenarios` | Replace the scenarios added in Settings. Body: `{ "scenarios": ["custom/scanner"] }`. Entries must look like `author/name`; `manual/web-ui` and configured scenarios are ignored; at most 100. They are offered for every instance on top of the configured list. Blocked in read-only mode. |
@@ -195,6 +196,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 | GET | `/api/decisions` | List decisions. Without `page`, returns an array. With `page`, returns a paginated response. Active decisions are returned by default. |
 | GET | `/api/decisions/facets` | Return one bounded quick-filter facet across the complete effective decision result set. |
 | POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Returns `409` when a target instance allowlists the value, unless `bypass_allowlist: true` is sent. Blocked in read-only mode. |
+| POST | `/api/decisions/bulk-add` | Add the same manual decision for up to 500 IPs or ranges in one LAPI request per target instance. Body: `{ "values": ["1.2.3.4", "198.51.100.0/24"], "duration": "4h" }` plus the optional fields of `POST /api/decisions` except `ip`. Duplicates are ignored. Allowlisted values are skipped instead of refusing the request: the response lists them in `allowlisted` (each with its matching instances) next to `added`, `results`, `succeeded`, and `failed`; resend them with `bypass_allowlist: true` to add them anyway. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
 | DELETE | `/api/instances/:instanceId/decisions/:id` | Delete one decision from a specific instance and its local cache. Blocked in read-only mode. |
@@ -316,6 +318,20 @@ Supported dashboard filters: `instance`, `q`, `decision_q`, `country`, `scenario
 - `decision_q` uses decision structured-search semantics and controls the filtered active-decision count and decision history. When omitted, it falls back to `q` for compatibility.
 - The browser sends separate alert and decision queries from the same persisted Quick Filter state. Filtered Dashboard counts therefore match the corresponding paginated list totals, including default active-only and duplicate-hiding behavior on Decisions.
 - The legacy scalar filters remain supported. If both a scalar filter and `q` are supplied, both must match.
+
+## Long-term Statistics
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/statistics` | Return archived totals, period comparisons, activity series, rankings, and coverage for the selected scope. |
+| GET | `/api/statistics/details` | Return the IPs, ranges, or machines behind a finding. Accepts the same filters as `/api/statistics`. |
+| PUT | `/api/config/statistics` | Update any of `enabled`, `retentionDays`, `jobInterval`, and `jobTimeBudget`. Returns `{ "success": true, "statistics": { ... } }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when a changed field is set by the application configuration. |
+
+- `from` and `to` are inclusive UTC dates in `YYYY-MM-DD` format. They default to 29 days ago and today, respectively. The range can span up to 3,650 days. The API accepts an end date up to one day ahead of the server's UTC date for clock skew.
+- `instance` defaults to `all` and accepts a configured instance ID. `simulation` accepts `live` (default), `simulated`, or `all`. When simulations are disabled, the API uses `live`. `limit` accepts `10` (default), `20`, or `50`.
+- Optional filters include `ip` (an IP address or range), `machine` (a JSON array containing the instance ID and machine ID), `scenario`, `country` (two-letter code), `network` (AS name), and `target`.
+- Finding details require `kind=ips`, `kind=returned`, or `kind=machines`. Use `network` to scope IP results to an AS, `history=1` to include bans before the selected range for returned IPs, or `machines` with a JSON array of 1–25 machine keys. IP and range lists accept a `size` of 1–500 and default to 25.
+- Both read endpoints return `400` for invalid filters and `503` with `retryAfterMs` when the archive is unavailable. `GET /api/config` includes the statistics settings, managed fields, and collection status in its `statistics` object.
 
 ## CrowdSec Metrics
 

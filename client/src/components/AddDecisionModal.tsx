@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { AlertCircle, ShieldCheck } from 'lucide-react';
 import { DEFAULT_MANUAL_DECISION_SCENARIO } from '../../../shared/contracts';
-import { addDecision, checkAllowlist } from '../lib/api';
+import { addDecision, addDecisions, checkAllowlist } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import type {
     AddDecisionRequest,
@@ -9,21 +9,36 @@ import type {
     AllowlistedDecisionError,
     AllowlistMatch,
     ApiPermissionError,
+    BulkAddDecisionRequest,
+    BulkAddDecisionResponse,
     InstanceOperationResult,
     InstanceSummary,
     MultiInstanceOperationResponse,
 } from '../types';
 import { Modal } from './ui/Modal';
 
+interface AddedDecisions {
+    values: string[];
+    instanceIds: string[];
+}
+
+type BulkTarget = Pick<BulkAddDecisionRequest, 'scope' | 'instance_id'>;
+type BulkBatch = BulkTarget & { values: string[] };
+type SkippedBatch = BulkTarget & { entries: BulkAddDecisionResponse['allowlisted'] };
+
 interface AddDecisionModalProps {
+    /** In bulk mode (`values` set), `ip` is ignored. */
     initialDecision: AddDecisionRequest;
+    /** Adds the same decision for each of these values instead of the single `ip`. */
+    values?: string[];
     instances: InstanceSummary[];
     multipleInstances: boolean;
     currentInstanceId?: string;
     currentInstanceName?: string;
     defaultAllInstances: boolean;
     onClose: () => void;
-    onDecisionAdded: () => Promise<void>;
+    /** Receives the values and instances confirmed by each successful request. */
+    onDecisionAdded: (added: AddedDecisions[]) => Promise<void>;
 }
 
 const DECISION_TYPES: Array<{ value: NonNullable<AddDecisionRequest['type']>; labelKey: string }> = [
@@ -60,6 +75,7 @@ interface ErrorInfo {
 
 export function AddDecisionModal({
     initialDecision,
+    values,
     instances,
     multipleInstances,
     currentInstanceId,
@@ -76,6 +92,22 @@ export function AddDecisionModal({
     const [retryInstances, setRetryInstances] = useState<InstanceOperationResult[]>([]);
     const [allowlistCheck, setAllowlistCheck] = useState<AllowlistCheckState | null>(null);
     const [bypassAllowlist, setBypassAllowlist] = useState(false);
+    const bulk = values !== undefined;
+    const [bulkRetries, setBulkRetries] = useState<BulkBatch[]>([]);
+    const [bulkSkipped, setBulkSkipped] = useState<SkippedBatch[]>([]);
+    const [bulkAdded, setBulkAdded] = useState<Set<string>>(() => new Set());
+    const bulkAllowlisted = new Map<string, Map<string, AllowlistMatch>>();
+    for (const { entries } of bulkSkipped) {
+        for (const entry of entries) {
+            const matches = bulkAllowlisted.get(entry.value) ?? new Map<string, AllowlistMatch>();
+            for (const match of entry.allowlisted) matches.set(match.instance_id, match);
+            bulkAllowlisted.set(entry.value, matches);
+        }
+    }
+    const bulkValues = bulkRetries.length > 0
+        ? [...new Set(bulkRetries.flatMap((batch) => batch.values))]
+        : bulkSkipped.length > 0 ? [...bulkAllowlisted.keys()] : values ?? [];
+    const retrying = bulk ? bulkRetries.length > 0 : retryInstances.length > 0;
 
     const targetInstances = !multipleInstances || allInstances
         ? instances
@@ -97,7 +129,9 @@ export function AddDecisionModal({
     const allowlistMatches = allowlistCheck?.value === decisionValue && allowlistCheck.scope === allowlistScope
         ? allowlistCheck.matches
         : [];
-    const blockedByAllowlist = allowlistMatches.length > 0 && !bypassAllowlist;
+    const blockedByAllowlist = bulk
+        ? !retrying && bulkSkipped.length > 0 && !bypassAllowlist
+        : allowlistMatches.length > 0 && !bypassAllowlist;
 
     // Warn before submitting; the server repeats the check and refuses without a bypass.
     useEffect(() => {
@@ -130,6 +164,76 @@ export function AddDecisionModal({
         if ('ip' in change) setBypassAllowlist(false);
     };
 
+    const reportError = (error: unknown) => {
+        console.error('Failed to add decision', error);
+        const apiError = error as Partial<ApiPermissionError> | undefined;
+        setErrorInfo({
+            message: typeof apiError?.message === 'string' ? apiError.message : t('pages.decisions.addFailed'),
+            helpLink: typeof apiError?.helpLink === 'string' ? apiError.helpLink : undefined,
+            helpText: typeof apiError?.helpText === 'string' ? apiError.helpText : undefined,
+        });
+    };
+
+    const failureMessage = (results: InstanceOperationResult[]) => {
+        const succeededNames = results.filter((result) => result.success).map((result) => result.instance_name);
+        const failedNames = results.filter((result) => !result.success).map((result) => result.instance_name);
+        return `${succeededNames.length > 0 ? `Succeeded: ${succeededNames.join(', ')}. ` : ''}Failed: ${failedNames.join(', ')}.`;
+    };
+
+    const submitBulk = async (settings: Omit<AddDecisionRequest, 'ip'>) => {
+        const target: BulkTarget = !multipleInstances ? {}
+            : allInstances ? { scope: 'all' }
+                : { scope: 'instance', instance_id: currentInstanceId };
+        const batches = retrying ? bulkRetries
+            : bulkSkipped.length > 0
+                ? bulkSkipped.map(({ entries, ...scope }) => ({ ...scope, values: entries.map(({ value }) => value) }))
+                : [{ ...target, values: bulkValues }];
+        setInProgress(true);
+        setErrorInfo(null);
+        try {
+            const outcomes = await Promise.allSettled(batches.map((batch) => addDecisions({ ...settings, ...batch })));
+            const added: AddedDecisions[] = [];
+            const failed: BulkBatch[] = [];
+            const skipped = retrying ? [...bulkSkipped] : [];
+            const errors: string[] = [];
+            for (const [index, outcome] of outcomes.entries()) {
+                const batch = batches[index];
+                if (outcome.status === 'rejected') {
+                    if (batches.length === 1 && !retrying && bulkSkipped.length === 0) throw outcome.reason;
+                    failed.push(batch);
+                    errors.push(outcome.reason instanceof Error ? outcome.reason.message : t('pages.decisions.addFailed'));
+                    continue;
+                }
+                const response = outcome.value;
+                const succeeded = response.results.filter((result) => result.success);
+                const failures = response.results.filter((result) => !result.success);
+                if (response.added.length > 0 && succeeded.length > 0) {
+                    added.push({ values: response.added, instanceIds: succeeded.map((result) => result.instance_id) });
+                }
+                if (failures.length > 0) {
+                    for (const { instance_id } of failures) failed.push({ scope: 'instance', instance_id, values: response.added });
+                    errors.push(failureMessage(response.results));
+                }
+                if (response.allowlisted.length > 0) {
+                    skipped.push({ scope: batch.scope, instance_id: batch.instance_id, entries: response.allowlisted });
+                }
+            }
+            setBulkRetries(failed);
+            setBulkSkipped(skipped);
+            if (failed.length > 0) setErrorInfo({ message: errors.join(' ') });
+            else if (skipped.length > 0) setBypassAllowlist(false);
+            if (added.length > 0) {
+                setBulkAdded((current) => new Set([...current, ...added.flatMap((entry) => entry.values)]));
+                await onDecisionAdded(added);
+            }
+            if (failed.length === 0 && skipped.length === 0) onClose();
+        } catch (error) {
+            reportError(error);
+        } finally {
+            setInProgress(false);
+        }
+    };
+
     const submit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         const payload: AddDecisionRequest = {
@@ -137,6 +241,11 @@ export function AddDecisionModal({
             scenario: selectedScenario,
             ...(bypassAllowlist ? { bypass_allowlist: true } : {}),
         };
+        if (bulk) {
+            const { ip: _ip, ...settings } = payload;
+            await submitBulk(settings);
+            return;
+        }
         const request: AddDecisionRequest = !multipleInstances
             ? payload
             : allInstances
@@ -167,41 +276,45 @@ export function AddDecisionModal({
                 : await addDecision(request) as MultiInstanceOperationResponse | undefined;
 
             if (response && Array.isArray(response.results)) {
+                const instanceIds = response.results.filter((result) => result.success).map((result) => result.instance_id);
                 const failedInstances = response.results.filter((result) => !result.success);
                 if (failedInstances.length > 0) {
-                    const succeededNames = response.results.filter((result) => result.success).map((result) => result.instance_name);
-                    const failedNames = failedInstances.map((result) => result.instance_name);
                     setRetryInstances(failedInstances);
-                    setErrorInfo({
-                        message: `${succeededNames.length > 0 ? `Succeeded: ${succeededNames.join(', ')}. ` : ''}Failed: ${failedNames.join(', ')}.`,
-                    });
-                    await onDecisionAdded();
-                    return;
+                    setErrorInfo({ message: failureMessage(response.results) });
                 }
+                if (instanceIds.length > 0) await onDecisionAdded([{ values: [decisionValue], instanceIds }]);
+                if (failedInstances.length > 0) return;
+            } else {
+                // A successful legacy single-instance response has no results array.
+                await onDecisionAdded([{ values: [decisionValue], instanceIds: targetInstances.map((instance) => instance.id) }]);
             }
 
-            await onDecisionAdded();
             onClose();
         } catch (error) {
             if (isAllowlistedDecisionError(error)) {
                 setAllowlistCheck({ value: decisionValue, scope: allowlistScope, matches: error.allowlisted });
                 return;
             }
-            console.error('Failed to add decision', error);
-            const apiError = error as Partial<ApiPermissionError> | undefined;
-            setErrorInfo({
-                message: typeof apiError?.message === 'string' ? apiError.message : t('pages.decisions.addFailed'),
-                helpLink: typeof apiError?.helpLink === 'string' ? apiError.helpLink : undefined,
-                helpText: typeof apiError?.helpText === 'string' ? apiError.helpText : undefined,
-            });
+            reportError(error);
         } finally {
             setInProgress(false);
         }
     };
 
     return (
-        <Modal isOpen onClose={close} title={t('pages.decisions.addManualDecision')} maxWidth="max-w-md">
+        <Modal isOpen onClose={close} title={t(bulk ? 'pages.decisions.addManualDecisions' : 'pages.decisions.addManualDecision')} maxWidth="max-w-md">
             <form onSubmit={submit} className="space-y-4">
+                {bulk ? (
+                    <div>
+                        <p className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.bulkValues', { count: bulkValues.length })}</p>
+                        <ul className="max-h-32 overflow-y-auto rounded-md border border-gray-300 bg-gray-50 px-3 py-2 font-mono text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-900/40 dark:text-gray-100">
+                            {bulkValues.map((value) => <li key={value} className="break-all">{value}</li>)}
+                        </ul>
+                        {bulkAdded.size > 0 && (
+                            <p role="status" className="mt-1 text-xs text-green-700 dark:text-green-400">{t('pages.decisions.bulkAdded', { count: bulkAdded.size })}</p>
+                        )}
+                    </div>
+                ) : (
                 <div>
                     <label htmlFor="add-decision-ip" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.source')}</label>
                     <input
@@ -215,6 +328,7 @@ export function AddDecisionModal({
                         onChange={(event) => updateDecision({ ip: event.target.value })}
                     />
                 </div>
+                )}
                 <div>
                     <label htmlFor="add-decision-type" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.type')}</label>
                     <select
@@ -276,7 +390,7 @@ export function AddDecisionModal({
                             <input
                                 type="checkbox"
                                 checked={allInstances}
-                                disabled={inProgress || !currentInstanceId}
+                                disabled={inProgress || !currentInstanceId || (bulk && (retrying || bulkSkipped.length > 0))}
                                 onChange={(event) => {
                                     setAllInstances(event.target.checked);
                                     setRetryInstances([]);
@@ -296,6 +410,35 @@ export function AddDecisionModal({
                                 {t('pages.decisions.targetInstances', { names: targetInstances.map((instance) => instance.name).join(', ') })}
                             </p>
                         )}
+                    </div>
+                )}
+                {bulk && !retrying && bulkAllowlisted.size > 0 && (
+                    <div role="alert" className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
+                        <ShieldCheck size={16} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
+                        <div className="min-w-0 space-y-2 text-sm">
+                            <p className="font-medium">{t('pages.decisions.bulkAllowlistedTitle', { count: bulkAllowlisted.size })}</p>
+                            <ul className="max-h-32 list-disc space-y-1 overflow-y-auto pl-4 text-xs break-words">
+                                {[...bulkAllowlisted].map(([value, matches]) => (
+                                    <li key={value}>
+                                        <span className="font-mono">{value}</span>
+                                        {': '}
+                                        {[...matches.values()].map((match) => (multipleInstances
+                                            ? t('pages.decisions.allowlistedOn', { instance: match.instance_name, reason: match.reason || t('pages.decisions.allowlistedNoReason') })
+                                            : match.reason || t('pages.decisions.allowlistedNoReason'))).join('; ')}
+                                    </li>
+                                ))}
+                            </ul>
+                            <p className="text-xs">{t('pages.decisions.bulkAllowlistedHint')}</p>
+                            <label className="flex items-center gap-2 font-medium">
+                                <input
+                                    type="checkbox"
+                                    checked={bypassAllowlist}
+                                    disabled={inProgress}
+                                    onChange={(event) => setBypassAllowlist(event.target.checked)}
+                                />
+                                {t('pages.decisions.bypassAllowlist')}
+                            </label>
+                        </div>
                     </div>
                 )}
                 {allowlistMatches.length > 0 && (
@@ -346,7 +489,7 @@ export function AddDecisionModal({
                         {t('common.cancel')}
                     </button>
                     <button type="submit" disabled={inProgress || blockedByAllowlist} className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50">
-                        {inProgress ? t('pages.decisions.adding') : retryInstances.length > 0 ? 'Retry failed instances' : t('pages.decisions.addDecision')}
+                        {inProgress ? t('pages.decisions.adding') : retrying ? 'Retry failed instances' : bulk ? t('pages.decisions.addDecisionsCount', { count: bulkValues.length }) : t('pages.decisions.addDecision')}
                     </button>
                 </div>
             </form>

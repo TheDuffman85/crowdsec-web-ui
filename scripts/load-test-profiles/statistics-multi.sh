@@ -1,0 +1,21 @@
+# Long-term statistics across three instances with a small cache and archive.
+: "${LOADTEST_PROFILE_DESCRIPTION:=Statistics across three instances: Primary 6k, Secondary 4k, and Edge 2k shaped alerts in the cache, 90 days of statistics history at about 200, 130, and 70 alerts per day, sharing one attacker pool, and collection enabled.}"
+: "${LOADTEST_MULTI_INSTANCE:=true}"
+: "${LOADTEST_ALERTS:=6000}"
+: "${LOADTEST_DECISIONS:=6000}"
+: "${LOADTEST_BLOCKLIST_DECISIONS:=1000}"
+: "${LOADTEST_SECONDARY_ALERTS:=4000}"
+: "${LOADTEST_SECONDARY_DECISIONS:=4000}"
+: "${LOADTEST_SECONDARY_BLOCKLIST_DECISIONS:=500}"
+: "${LOADTEST_EDGE_ALERTS:=2000}"
+: "${LOADTEST_EDGE_DECISIONS:=2000}"
+: "${LOADTEST_EDGE_BLOCKLIST_DECISIONS:=250}"
+: "${LOADTEST_STATISTICS:=true}"
+: "${LOADTEST_STATISTICS_HISTORY_DAYS:=90}"
+# Fixed instead of following the cache, so a short lookback from .env cannot inflate the archive.
+: "${LOADTEST_STATISTICS_DAILY_ALERTS:=200}"
+: "${LOADTEST_REFRESH_DECISION_ORIGINS:=crowdsec}"
+# One alert per instance every five minutes stays close to the seeded daily rate.
+: "${LOADTEST_REFRESH_ALERTS:=1}"
+: "${LOADTEST_REFRESH_DECISIONS:=1}"
+: "${CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL:=5m}"

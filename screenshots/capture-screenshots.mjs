@@ -14,6 +14,7 @@ const userDataDir = join(tmpdir(), `crowdsec-web-ui-screenshots-chrome-${Date.no
 const remotePort = Number.parseInt(process.env.CROWDSEC_SCREENSHOT_CHROME_PORT || "9224", 10);
 const demoUsername = process.env.CROWDSEC_SCREENSHOT_USERNAME || "admin";
 const demoPassword = process.env.CROWDSEC_SCREENSHOT_PASSWORD || "Screenshot123";
+const viewport = { width: 1843, height: 1136, deviceScaleFactor: 1, mobile: false };
 
 mkdirSync(screenshotDir, { recursive: true });
 
@@ -124,12 +125,7 @@ async function createPage() {
   await cdp.ready();
   await cdp.send("Page.enable");
   await cdp.send("Runtime.enable");
-  await cdp.send("Emulation.setDeviceMetricsOverride", {
-    width: 1843,
-    height: 1136,
-    deviceScaleFactor: 1,
-    mobile: false,
-  });
+  await cdp.send("Emulation.setDeviceMetricsOverride", viewport);
   await cdp.send("Emulation.setEmulatedMedia", {
     media: "screen",
     features: [{ name: "prefers-color-scheme", value: "light" }],
@@ -343,6 +339,12 @@ async function main() {
       await screenshot(cdp, "dashboard.png");
 
       await screenshot(cdp, "update_available.png");
+
+      await cdp.send("Emulation.setDeviceMetricsOverride", { ...viewport, height: 1512 });
+      await navigate(cdp, "/statistics?instance=primary&range=7");
+      await waitForText(cdp, "Activity History");
+      await screenshot(cdp, "statistics.png");
+      await cdp.send("Emulation.setDeviceMetricsOverride", viewport);
 
       await navigate(cdp, "/alerts?instance=all");
       await screenshot(cdp, "multi_instance.png");

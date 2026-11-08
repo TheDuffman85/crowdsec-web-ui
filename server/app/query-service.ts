@@ -68,6 +68,7 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     attackLocationResolver,
     addDashboardAttackLocation,
     addDashboardAlert,
+    addDashboardAlertBuckets,
     addDashboardDecision,
     addDashboardDecisionCountry,
     addIpCondition,
@@ -88,6 +89,7 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     dashboardBuckets,
     dashboardCountryList,
     dashboardIpList,
+    dashboardMachineList,
     dashboardWorldMapData,
     database,
     decisionFieldCondition,
@@ -2700,6 +2702,7 @@ function createEmptyDashboardStatsResponse(options: { pending?: boolean } = {}):
     filteredTotals: totals,
     globalTotal: 0,
     topTargets: [],
+    topMachines: [],
     topCountries: [],
     allCountries: [],
     attackLocations: [],
@@ -3050,8 +3053,10 @@ async function buildDashboardStatsResponse(
     })()
     : null;
 
+  // The filtered accumulator also feeds the chart series: both used to
+  // receive exactly the same alerts and bucket keys. The slider only reads
+  // its history buckets, so it skips the top-list maps.
   const filteredAlertAccumulator = createDashboardStatsAccumulator();
-  const chartAlertAccumulator = createDashboardStatsAccumulator();
   const sliderAlertAccumulator = createDashboardStatsAccumulator();
   const alertCountryByIp = new Map<string, string>();
   const filteredAlertIps = new Set<string>();
@@ -3099,7 +3104,7 @@ async function buildDashboardStatsResponse(
       ? dateTimeKey ?? resolveDashboardBucketKey(alert.createdAt)
       : '';
     if (matchesSlider) {
-      addDashboardAlert(sliderAlertAccumulator, alert, filters, bucketKey);
+      addDashboardAlertBuckets(sliderAlertAccumulator, alert, filters, bucketKey);
       if (alert.ip) {
         sliderAlertIps.add(alert.ip);
       }
@@ -3108,7 +3113,6 @@ async function buildDashboardStatsResponse(
     if (matchesFiltered) {
       addDashboardAlert(filteredAlertAccumulator, alert, filters, bucketKey);
       addDashboardAttackLocation(filteredAlertAccumulator.attackLocations, alert);
-      addDashboardAlert(chartAlertAccumulator, alert, filters, bucketKey);
       if (alert.ip) {
         filteredAlertIps.add(alert.ip);
       }
@@ -3354,6 +3358,7 @@ async function buildDashboardStatsResponse(
     },
     globalTotal,
     topTargets: topDashboardEntries(filteredAlertAccumulator.targets),
+    topMachines: dashboardMachineList(filteredAlertAccumulator.machines, 10),
     topCountries: dashboardCountryList(filteredAlertAccumulator.countries, 10),
     allCountries: dashboardWorldMapData(filteredAlertAccumulator.countries, filteredDecisionAccumulator.countries),
     attackLocations,
@@ -3361,8 +3366,8 @@ async function buildDashboardStatsResponse(
     topAS: topDashboardEntries(filteredAlertAccumulator.asNames),
     topIPs: dashboardIpList(filteredAlertAccumulator.ips, 10),
     series: {
-      alertsHistory: dashboardBuckets(chartAlertAccumulator.liveAlertBuckets, filters, lookbackDays),
-      simulatedAlertsHistory: dashboardBuckets(chartAlertAccumulator.simulatedAlertBuckets, filters, lookbackDays),
+      alertsHistory: dashboardBuckets(filteredAlertAccumulator.liveAlertBuckets, filters, lookbackDays),
+      simulatedAlertsHistory: dashboardBuckets(filteredAlertAccumulator.simulatedAlertBuckets, filters, lookbackDays),
       decisionsHistory: dashboardBuckets(chartDecisionAccumulator.liveDecisionBuckets, filters, lookbackDays),
       simulatedDecisionsHistory: dashboardBuckets(chartDecisionAccumulator.simulatedDecisionBuckets, filters, lookbackDays),
       activeDecisionsHistory: dashboardBuckets(chartDecisionAccumulator.activeLiveDecisionBuckets, filters, lookbackDays),

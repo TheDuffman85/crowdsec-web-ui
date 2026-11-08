@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   addDecision,
+  addDecisions,
   checkAllowlist,
   bulkDeleteAlerts,
   bulkDeleteNotifications,
@@ -28,6 +29,7 @@ import {
   fetchDecisions,
   fetchDecisionsPaginated,
   fetchDecisionsForStats,
+  fetchFacet,
   fetchNotifications,
   fetchNotificationsPaginated,
   fetchNotificationSettings,
@@ -114,6 +116,53 @@ describe('api helpers', () => {
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/api/notifications?page=4&page_size=20');
   });
 
+  test('facet requests use default pagination and omit empty search options', async () => {
+    const payload = { field: 'scenario', values: [], offset: 0, has_more: false };
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => Response.json(payload));
+    mockFetch(fetchMock);
+
+    await expect(fetchFacet('alerts', 'scenario')).resolves.toEqual(payload);
+    await expect(fetchFacet('decisions', 'scenario', {}, { search: '', searchValues: [] })).resolves.toEqual(payload);
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/alerts/facets?field=scenario&offset=0&limit=10',
+      '/api/decisions/facets?field=scenario&offset=0&limit=10',
+    ]);
+  });
+
+  test('facet requests encode search values, populated filters and pagination, and forward cancellation', async () => {
+    const signal = new AbortController().signal;
+    const payload = { field: 'scenario', values: [{ value: 'crowdsecurity/ssh-bf', count: 3 }], offset: 20, has_more: true };
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => Response.json(payload));
+    mockFetch(fetchMock);
+
+    await expect(fetchFacet('alerts', 'scenario', { country: 'DE', target: '' }, {
+      search: 'ssh & http',
+      searchValues: ['crowdsecurity/ssh-bf', 'custom/http'],
+      offset: 20,
+      limit: 25,
+      signal,
+    })).resolves.toEqual(payload);
+
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      field: 'scenario',
+      offset: '20',
+      limit: '25',
+      search: 'ssh & http',
+      search_values: JSON.stringify(['crowdsecurity/ssh-bf', 'custom/http']),
+      country: 'DE',
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(signal);
+  });
+
+  test('facet requests report failures for the requested page', async () => {
+    mockFetch(vi.fn(async () => new Response(null, { status: 500 })));
+
+    await expect(fetchFacet('alerts', 'scenario')).rejects.toThrow('Failed to fetch alerts facets');
+    await expect(fetchFacet('decisions', 'scenario')).rejects.toThrow('Failed to fetch decisions facets');
+  });
+
   test('uses instance-aware resource paths and bulk reference payloads', async () => {
     const fetchMock = vi.fn(async (
       _input: Parameters<typeof fetch>[0],
@@ -189,6 +238,61 @@ describe('api helpers', () => {
     mockFetch(vi.fn(async () => Response.json(payload, { status: 502 })));
 
     await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual(payload);
+  });
+
+  test.each([200, 502])('bulk add returns per-instance outcomes for HTTP %i', async (status) => {
+    const payload = {
+      results: [{ instance_id: 'offline', instance_name: 'Offline', success: false, error: 'unreachable' }],
+      succeeded: 0,
+      failed: 1,
+      added: [],
+      allowlisted: [],
+    };
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => Response.json(payload, { status }));
+    mockFetch(fetchMock);
+    const request = { values: ['1.2.3.4', '10.0.0.0/24'], duration: '4h', bypass_allowlist: true };
+
+    await expect(addDecisions(request)).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith('/api/decisions/bulk-add', expect.objectContaining({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    }));
+  });
+
+  test.each([
+    ['invalid JSON', 'not-json'],
+    ['null', 'null'],
+    ['a primitive', '"unavailable"'],
+    ['missing results', '{"error":"unavailable"}'],
+    ['non-array results', '{"results":{}}'],
+  ])('bulk add rejects HTTP errors containing %s', async (_description, body) => {
+    mockFetch(vi.fn(async () => new Response(body, { status: 500 })));
+
+    await expect(addDecisions({ values: ['1.2.3.4'] })).rejects.toThrow('Failed to add decisions');
+  });
+
+  test('bulk add surfaces write permission guidance', async () => {
+    mockFetch(vi.fn(async () => new Response(null, { status: 403 })));
+
+    await expect(addDecisions({ values: ['1.2.3.4'] })).rejects.toMatchObject({
+      message: 'Permission denied.',
+      helpText: 'Trusted IPs for Write Operations',
+    });
+  });
+
+  test('bulk add invalidates cached decisions so the next read includes new entries', async () => {
+    const decision = { id: 1, value: '1.2.3.4' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json([]))
+      .mockResolvedValueOnce(Response.json({ results: [], succeeded: 1, failed: 0, added: ['1.2.3.4'], allowlisted: [] }))
+      .mockResolvedValueOnce(Response.json([decision]));
+    mockFetch(fetchMock);
+
+    await expect(fetchDecisions()).resolves.toEqual([]);
+    await addDecisions({ values: ['1.2.3.4'] });
+    await expect(fetchDecisions()).resolves.toEqual([decision]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   test('fetchDashboardStats handles empty filters and explicit request init', async () => {

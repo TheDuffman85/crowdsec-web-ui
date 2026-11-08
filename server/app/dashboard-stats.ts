@@ -5,6 +5,7 @@ import type {
   DashboardStatsBucket,
   DashboardWorldMapDatum,
 } from '../../shared/contracts';
+import { normalizeMachineId } from '../../shared/machine';
 import { matchesIpSearchValue } from '../../shared/search';
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from '../utils/date-time';
 import {
@@ -33,6 +34,7 @@ export function createDashboardStatsAccumulator(): DashboardStatsAccumulator {
     asNames: new Map(),
     ips: new Map(),
     targets: new Map(),
+    machines: new Map(),
     liveAlertBuckets: new Map(),
     simulatedAlertBuckets: new Map(),
   };
@@ -132,7 +134,12 @@ export function matchesDashboardDateRange(
   return true;
 }
 
-export function addDashboardAlert(
+/**
+ * Counts an alert only in the history buckets and totals. Use it for
+ * accumulators whose top lists are never read (the date slider), so a
+ * Dashboard build does not fill those maps for every alert a second time.
+ */
+export function addDashboardAlertBuckets(
   accumulator: DashboardStatsAccumulator,
   alert: DashboardAlertStatsRecord,
   filters: DashboardStatsFilters,
@@ -148,8 +155,18 @@ export function addDashboardAlert(
   } else {
     accumulator.liveAlerts += 1;
   }
+}
 
-  if (alert.country && alert.country !== 'Unknown') {
+export function addDashboardAlert(
+  accumulator: DashboardStatsAccumulator,
+  alert: DashboardAlertStatsRecord,
+  filters: DashboardStatsFilters,
+  bucketKey = getDashboardBucketKey(alert.createdAt, filters),
+): void {
+  addDashboardAlertBuckets(accumulator, alert, filters, bucketKey);
+
+  // Country codes are stored uppercased, so CrowdSec's "Unknown" arrives as UNKNOWN.
+  if (alert.country && alert.country.toUpperCase() !== 'UNKNOWN') {
     const current = accumulator.countries.get(alert.country) || { count: 0, liveCount: 0, simulatedCount: 0 };
     current.count += 1;
     if (alert.simulated) {
@@ -177,6 +194,21 @@ export function addDashboardAlert(
 
   if (alert.target && alert.target !== 'Unknown' && alert.target !== 'N/A') {
     incrementCount(accumulator.targets, alert.target);
+  }
+
+  // Rank by the same value the `machine` Quick Filter facet uses (the
+  // normalized machine ID, falling back to the resolved name) so card rows and
+  // stored selections refer to the same machine. `machine` is resolved at
+  // index time (alias, then ID) and is shown as the label.
+  const machineKey = normalizeMachineId(alert.machineId) || alert.machine;
+  if (machineKey) {
+    const current = accumulator.machines.get(machineKey);
+    if (current) {
+      current.count += 1;
+      if (alert.machine) current.label = alert.machine;
+    } else {
+      accumulator.machines.set(machineKey, { count: 1, label: alert.machine || machineKey });
+    }
   }
 }
 
@@ -286,6 +318,20 @@ export function dashboardCountryList(
       value: code,
       count: summary.count,
       countryCode: code,
+    }));
+}
+
+export function dashboardMachineList(
+  machines: DashboardStatsAccumulator['machines'],
+  limit: number,
+): DashboardStatListItem[] {
+  return Array.from(machines.entries())
+    .sort((left, right) => right[1].count - left[1].count)
+    .slice(0, limit)
+    .map(([machineId, summary]) => ({
+      label: summary.label,
+      value: machineId,
+      count: summary.count,
     }));
 }
 

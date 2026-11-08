@@ -4,6 +4,7 @@ import type { CrowdsecDatabase } from '../database';
 
 const METRICS_SIDEBAR_VISIBLE_META_KEY = 'metrics_sidebar_visible';
 const ALLOWLISTS_SIDEBAR_VISIBLE_META_KEY = 'allowlists_sidebar_visible';
+const STATISTICS_SIDEBAR_VISIBLE_META_KEY = 'statistics_sidebar_visible';
 const MANUAL_DECISION_SCENARIOS_META_KEY = 'manual_decision_scenarios';
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 
@@ -37,6 +38,19 @@ export function loadAllowlistsSidebarVisible(database: CrowdsecDatabase): boolea
 
 export function saveAllowlistsSidebarVisible(database: CrowdsecDatabase, visible: boolean): void {
   database.setMeta(ALLOWLISTS_SIDEBAR_VISIBLE_META_KEY, visible ? 'true' : 'false');
+}
+
+export function loadStatisticsSidebarVisible(database: CrowdsecDatabase): boolean {
+  try {
+    return database.getMeta(STATISTICS_SIDEBAR_VISIBLE_META_KEY)?.value !== 'false';
+  } catch (error) {
+    console.error('Error loading statistics sidebar preference from database:', error);
+    return true;
+  }
+}
+
+export function saveStatisticsSidebarVisible(database: CrowdsecDatabase, visible: boolean): void {
+  database.setMeta(STATISTICS_SIDEBAR_VISIBLE_META_KEY, visible ? 'true' : 'false');
 }
 
 export function loadManualDecisionScenarios(database: CrowdsecDatabase): string[] {
