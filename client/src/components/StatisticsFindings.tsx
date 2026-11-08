@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertCircle, ArrowUpRight, ChevronRight, ExternalLink, Gavel, Info, ListChecks } from 'lucide-react';
+import { AlertCircle, ChevronRight, ExternalLink, Filter, Gavel, Info, ListChecks, type LucideIcon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Badge } from './ui/Badge';
+import { ClickableTableRow } from './ui/ClickableTableRow';
 import { CountryFlag } from './CountryFlag';
 import { PeriodChangeRow } from './PeriodChange';
 import { usePeriodChange } from '../lib/periodChange';
@@ -50,7 +51,7 @@ interface DetailContext {
 }
 
 const LISTED = 3;
-const linkClass = 'font-medium text-primary-600 hover:text-primary-700 hover:underline dark:text-primary-400 dark:hover:text-primary-300';
+const linkClass = 'cursor-pointer font-medium text-primary-600 hover:text-primary-700 hover:underline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:text-primary-300';
 const headerCell = 'whitespace-nowrap px-3 py-2 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400';
 const cell = 'px-3 py-2 align-top';
 const formatNumber = (value: number) => value.toLocaleString();
@@ -63,9 +64,25 @@ export function DecisionIconButton({ label, onClick, className = '' }: { label: 
       onClick={onClick}
       title={label}
       aria-label={label}
-      className={`rounded-full p-2 text-primary-600 transition-colors hover:bg-primary-50 hover:text-primary-900 dark:text-primary-400 dark:hover:bg-primary-900/20 dark:hover:text-primary-300 ${className}`}
+      className={`cursor-pointer rounded-full p-2 text-primary-600 transition-colors hover:bg-primary-50 hover:text-primary-900 focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-900/20 dark:hover:text-primary-300 ${className}`}
     >
       <Gavel size={16} aria-hidden="true" />
+    </button>
+  );
+}
+
+/** Finding toolbar actions share dimensions, icon placement and focus treatment. */
+function FindingActionButton({ icon: Icon, primary = false, onClick, children }: { icon: LucideIcon; primary?: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-primary-500 ${primary
+        ? 'border-transparent bg-primary-600 text-white hover:bg-primary-700'
+        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'}`}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      {children}
     </button>
   );
 }
@@ -82,14 +99,9 @@ function BanAllButton({ values, draft, range = false, context }: { values: strin
   const pending = values.filter((value) => !context.decided.has(value)).slice(0, BULK_ADD_DECISIONS_MAX);
   if (pending.length < 2) return null;
   return (
-    <button
-      type="button"
-      onClick={() => context.onBanAll(pending, draft, range)}
-      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-primary-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-primary-700"
-    >
-      <Gavel size={14} aria-hidden="true" />
+    <FindingActionButton icon={Gavel} primary onClick={() => context.onBanAll(pending, draft, range)}>
       {t(range ? 'pages.statistics.blockAllRanges' : 'pages.statistics.banAll', { count: pending.length })}
-    </button>
+    </FindingActionButton>
   );
 }
 
@@ -120,13 +132,13 @@ function ShowMore({ shown, total, loading, onMore }: { shown: number; total: num
   );
 }
 
-function Table({ title, bulk, head, children, footer }: { title?: string; bulk?: ReactNode; head: ReactNode; children: ReactNode; footer?: ReactNode }) {
+function Table({ title, actions, bulk, head, children, footer }: { title?: string; actions?: ReactNode; bulk?: ReactNode; head: ReactNode; children: ReactNode; footer?: ReactNode }) {
   return (
     <div className="space-y-2">
-      {(title || bulk) && (
+      {(title || actions || bulk) && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           {title ? <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{title}</p> : <span />}
-          {bulk}
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{actions}{bulk}</div>
         </div>
       )}
       <div className="overflow-x-auto rounded-md border border-gray-100 dark:border-gray-700/60">
@@ -140,11 +152,12 @@ function Table({ title, bulk, head, children, footer }: { title?: string; bulk?:
   );
 }
 
-function IPTable({ title, rows, draft, returned = false, context, footer }: { title?: string; rows: StatisticsDetailIP[]; draft: DecisionDraft; returned?: boolean; context: DetailContext; footer?: ReactNode }) {
+function IPTable({ title, actions, rows, draft, returned = false, context, footer }: { title?: string; actions?: ReactNode; rows: StatisticsDetailIP[]; draft: DecisionDraft; returned?: boolean; context: DetailContext; footer?: ReactNode }) {
   const { t, language } = useI18n();
+  const selectedIP = new URLSearchParams(context.query).get('ip');
   const right = `${headerCell} text-right`;
   return (
-    <Table title={title} footer={footer} bulk={context.canBan && <BanAllButton values={rows.map((row) => row.ip)} draft={draft} context={context} />} head={<>
+    <Table title={title} actions={actions} footer={footer} bulk={context.canBan && <BanAllButton values={rows.map((row) => row.ip)} draft={draft} context={context} />} head={<>
       <th className={headerCell}>{t('pages.dashboard.ip')}</th>
       <th className={right}>{t('pages.statistics.alerts')}</th>
       <th className={right}>{t('pages.statistics.bans')}</th>
@@ -156,9 +169,9 @@ function IPTable({ title, rows, draft, returned = false, context, footer }: { ti
         const country = row.country && row.country !== 'Unknown' ? getCountryName(row.country, language) ?? row.country : '';
         const asn = row.asn && row.asn !== '0' ? (/^AS/i.test(row.asn) ? row.asn : `AS${row.asn}`) : '';
         return (
-          <tr key={row.ip}>
+          <ClickableTableRow key={row.ip} aria-label={row.ip} selected={selectedIP === row.ip} onSelect={() => context.onFilter({ ip: row.ip })}>
             <td className={`${cell} min-w-56`}>
-              <button type="button" className={`${linkClass} break-all text-left`} onClick={() => context.onFilter({ ip: row.ip })}>{row.ip}</button>
+              <span className="break-all font-medium text-gray-900 dark:text-gray-100">{row.ip}</span>
               <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                 {country && <CountryFlag code={row.country} />}
                 <span className="truncate">{[country, asn, row.network].filter(Boolean).join(' · ')}</span>
@@ -171,19 +184,20 @@ function IPTable({ title, rows, draft, returned = false, context, footer }: { ti
               {returned ? (row.bannedBefore ? t('pages.statistics.bannedBeforeRange') : row.firstBan ? context.formatDay(row.firstBan) : '—') : context.formatTimestamp(row.lastActivity)}
             </td>
             {context.canBan && <ActionsCell><BanButton value={row.ip} draft={draft} context={context} /></ActionsCell>}
-          </tr>
+          </ClickableTableRow>
         );
       })}
     </Table>
   );
 }
 
-function DetailBody({ detail, context }: { detail: FindingDetail; context: DetailContext }) {
+function DetailBody({ detail, context, actions }: { detail: FindingDetail; context: DetailContext; actions?: ReactNode }) {
   const { t } = useI18n();
   const [state, setState] = useState<{ data: StatisticsDetails | null; error: boolean; url?: string }>({ data: null, error: false });
   const [size, setSize] = useState(STATISTICS_DETAIL_PAGE);
   const [attempt, setAttempt] = useState(0);
   const periodChange = usePeriodChange();
+  const actionBar = actions && <div className="flex justify-end">{actions}</div>;
   const parameters = new URLSearchParams(context.query);
   if (detail.kind === 'ips') {
     parameters.set('kind', 'ips');
@@ -212,39 +226,39 @@ function DetailBody({ detail, context }: { detail: FindingDetail; context: Detai
 
   if (detail.kind === 'scanners') {
     return (
-      <Table bulk={context.canBan && <BanAllButton values={detail.rows.map((row) => row.value)} draft={detail.decision} context={context} />} head={<>
+      <Table actions={actions} bulk={context.canBan && <BanAllButton values={detail.rows.map((row) => row.value)} draft={detail.decision} context={context} />} head={<>
         <th className={headerCell}>{t('pages.dashboard.ip')}</th>
         <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
         <th className={headerCell}>{t('pages.statistics.targetedMachines')}</th>
         {context.canBan && <ActionsHeader />}
       </>}>
         {detail.rows.map((row) => (
-          <tr key={row.value}>
-            <td className={cell}><button type="button" className={`${linkClass} break-all text-left`} onClick={() => context.onFilter({ ip: row.value })}>{row.label}</button></td>
+          <ClickableTableRow key={row.value} aria-label={row.label} selected={parameters.get('ip') === row.value} onSelect={() => context.onFilter({ ip: row.value })}>
+            <td className={`${cell} break-all font-medium text-gray-900 dark:text-gray-100`}>{row.label}</td>
             <td className={`${cell} text-right font-semibold tabular-nums text-gray-900 dark:text-gray-100`}>{formatNumber(row.alerts)}</td>
             <td className={`${cell} text-xs text-gray-600 dark:text-gray-300`}>
               {t('pages.statistics.machineCount', { count: formatNumber(row.machines) })}: {row.targetedMachines.map((machine) => machine.label).join(', ')}
             </td>
             {context.canBan && <ActionsCell><BanButton value={row.value} draft={detail.decision} context={context} /></ActionsCell>}
-          </tr>
+          </ClickableTableRow>
         ))}
       </Table>
     );
   }
   if (state.error) {
     return (
-      <p className="text-sm text-amber-700 dark:text-amber-300">
+      <>{actionBar}<p className="text-sm text-amber-700 dark:text-amber-300">
         {t('pages.statistics.detailsError')}{' '}
         <button type="button" className={linkClass} onClick={() => { setState({ data: null, error: false }); setAttempt((value) => value + 1); }}>{t('pages.statistics.retry')}</button>
-      </p>
+      </p></>
     );
   }
   const data = state.data;
-  if (!data || data.kind !== detail.kind) return <p role="status" className="text-sm text-gray-500 dark:text-gray-400">{t('app.loading')}</p>;
+  if (!data || data.kind !== detail.kind) return <>{actionBar}<p role="status" className="text-sm text-gray-500 dark:text-gray-400">{t('app.loading')}</p></>;
 
   if (data.kind === 'machines') {
     return (
-      <div className="grid gap-3 lg:grid-cols-2">
+      <>{actionBar}<div className="grid gap-3 lg:grid-cols-2">
         {data.machines.map((machine) => (
           <div key={machine.value} className="rounded-md border border-gray-100 p-3 text-sm dark:border-gray-700/60">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -272,7 +286,10 @@ function DetailBody({ detail, context }: { detail: FindingDetail; context: Detai
               <div className="mt-3 flex flex-wrap gap-1">
                 {machine.ips.map((row) => (
                   <button key={row.ip} type="button" onClick={() => context.onFilter({ ip: row.ip })}
-                    className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700">
+                    aria-pressed={parameters.get('ip') === row.ip}
+                    className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-xs focus-visible:outline-2 focus-visible:outline-primary-500 ${parameters.get('ip') === row.ip
+                      ? 'bg-primary-50 text-primary-800 dark:bg-primary-900/40 dark:text-primary-100'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'}`}>
                     {row.ip}<span className="tabular-nums text-gray-500 dark:text-gray-400">{formatNumber(row.alerts)}</span>
                   </button>
                 ))}
@@ -280,11 +297,11 @@ function DetailBody({ detail, context }: { detail: FindingDetail; context: Detai
             )}
           </div>
         ))}
-      </div>
+      </div></>
     );
   }
   if (detail.kind === 'machines') return null;
-  if (!data.ips.length && !(data.kind === 'ips' && data.ranges.length)) return <p className="text-sm text-gray-500 dark:text-gray-400">{t('common.noDataAvailable')}</p>;
+  if (!data.ips.length && !(data.kind === 'ips' && data.ranges.length)) return <>{actionBar}<p className="text-sm text-gray-500 dark:text-gray-400">{t('common.noDataAvailable')}</p></>;
   const more = (shown: number, total: number) => (
     <ShowMore shown={shown} total={total} loading={state.url !== url} onMore={() => setSize((value) => Math.min(value + STATISTICS_DETAIL_PAGE, STATISTICS_DETAIL_MAX))} />
   );
@@ -292,7 +309,7 @@ function DetailBody({ detail, context }: { detail: FindingDetail; context: Detai
     <div className="space-y-3">
       {data.kind === 'ips' && data.ranges.length > 0 && (
         <>
-          <Table title={t('pages.statistics.addressRanges')} footer={more(data.ranges.length, data.rangeTotal)} bulk={context.canBan && <BanAllButton values={data.ranges.map((range) => range.range)} draft={detail.decision} range context={context} />} head={<>
+          <Table title={t('pages.statistics.addressRanges')} actions={actions} footer={more(data.ranges.length, data.rangeTotal)} bulk={context.canBan && <BanAllButton values={data.ranges.map((range) => range.range)} draft={detail.decision} range context={context} />} head={<>
             <th className={headerCell}>{t('pages.statistics.addressRange')}</th>
             <th className={`${headerCell} text-right`}>{t('pages.statistics.uniqueIPs')}</th>
             <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
@@ -310,6 +327,7 @@ function DetailBody({ detail, context }: { detail: FindingDetail; context: Detai
         </>
       )}
       {data.ips.length > 0 && <IPTable title={data.kind === 'ips' && data.ranges.length > 0 ? t('pages.statistics.topAddresses') : undefined}
+        actions={data.kind === 'ips' && data.ranges.length > 0 ? undefined : actions}
         rows={data.ips} draft={detail.decision} returned={data.kind === 'returned'} context={context} footer={more(data.ips.length, data.total)} />}
     </div>
   );
@@ -322,25 +340,17 @@ function FindingItem({ finding, context }: { finding: Finding; context: DetailCo
   const detailId = `finding-${finding.key.replace(/[^\w-]/g, '_')}`;
   return (
     <li className="rounded-lg border border-gray-100 text-sm dark:border-gray-700/60">
-      <div className="flex items-start gap-3 p-3">
+      <button
+        type="button"
+        aria-expanded={finding.detail ? open : undefined}
+        aria-controls={finding.detail ? detailId : undefined}
+        onClick={() => finding.detail ? setOpen((value) => !value) : finding.action?.onSelect()}
+        className="flex w-full cursor-pointer items-start gap-3 rounded-lg p-3 text-left transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700/50"
+      >
         <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${finding.severity === 'warning' ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}`} aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <p className="break-words text-gray-800 dark:text-gray-200">{finding.text}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            {finding.detail && (
-              <button type="button" aria-expanded={open} aria-controls={detailId} onClick={() => setOpen((value) => !value)} className={`${linkClass} inline-flex items-center gap-1`}>
-                <ChevronRight className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
-                {t(open ? 'pages.statistics.hideDetails' : 'pages.statistics.showDetails')}
-              </button>
-            )}
-            {finding.action && (
-              <button type="button" className={`${linkClass} inline-flex items-center gap-1`} onClick={finding.action.onSelect}>
-                {finding.action.label}<ArrowUpRight className="h-3 w-3" aria-hidden="true" />
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+        <span className="min-w-0 flex-1 break-words text-gray-800 dark:text-gray-200">{finding.text}</span>
+        {finding.detail && <ChevronRight className={`mt-0.5 h-4 w-4 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true" />}
+      </button>
       {open && finding.detail && (
         <div id={detailId} className="space-y-3 border-t border-gray-100 px-3 pb-3 pt-3 sm:pl-10 dark:border-gray-700/60">
           {finding.help && (
@@ -349,7 +359,9 @@ function FindingItem({ finding, context }: { finding: Finding; context: DetailCo
               {finding.help.href && <>{' '}<a href={finding.help.href} target="_blank" rel="noopener noreferrer" className={`${linkClass} inline-flex items-center gap-0.5`}>{t('common.learnMore')}<ExternalLink className="h-3 w-3" aria-hidden="true" /></a></>}
             </p>
           )}
-          <DetailBody detail={finding.detail} context={context} />
+          <DetailBody detail={finding.detail} context={context} actions={finding.action && (
+            <FindingActionButton icon={Filter} onClick={finding.action.onSelect}>{finding.action.label}</FindingActionButton>
+          )} />
         </div>
       )}
     </li>

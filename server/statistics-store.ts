@@ -24,7 +24,7 @@ export function decodeStatisticsObservation(payload: string): Observation {
     ip: value[4], country: value[5], asn: value[6], network: value[7], machineId: value[8], machineName: value[9],
     scenario: value[10], simulated: value[11] };
   if (observation.kind === 'alert') Object.assign(observation, { events: value[12], target: value[13] });
-  else Object.assign(observation, { alertAt: value[12], alertSimulated: value[13], type: value[14], origin: value[15], alertIdentity: value[16] });
+  else Object.assign(observation, { alertAt: value[12], alertSimulated: value[13], type: value[14], origin: value[15], alertIdentity: value[16], target: value[17] });
   return observation;
 }
 
@@ -116,6 +116,13 @@ export class StatisticsStore {
     if (!(this.db.prepare('PRAGMA table_info(cells)').all() as Array<{ name: string }>).some((column) => column.name === 'target')) {
       this.db.exec("ALTER TABLE cells ADD COLUMN target TEXT NOT NULL DEFAULT ''");
     }
+    const hourColumns = (this.db.prepare('PRAGMA table_info(hours)').all() as Array<{ name: string }>).map((column) => column.name);
+    for (const field of ['country', 'network', 'target']) {
+      if (!hourColumns.includes(field)) this.db.exec(`ALTER TABLE hours ADD COLUMN ${field} TEXT NOT NULL DEFAULT ''`);
+    }
+    // Existing hourly cells lack these dimensions. Use daily data for filtered
+    // charts until a whole requested day has the additional hourly dimensions.
+    if (!fresh && !hourColumns.includes('target')) this.db.prepare('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)').run('hourlyBreakdownsSince', new Date().toISOString());
   }
 
   /**
@@ -193,7 +200,7 @@ export class StatisticsStore {
       ON CONFLICT(kind, day, key) DO UPDATE SET count = count + excluded.count, events = events + excluded.events,
         first_at = min(first_at, excluded.first_at), last_at = max(last_at, excluded.last_at)`);
     const putMeta = this.db.prepare('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)');
-    const upsertHour = this.db.prepare(`INSERT INTO hours (kind, hour, key, instance, simulated, ip, machine, scenario, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+    const upsertHour = this.db.prepare(`INSERT INTO hours (kind, hour, key, instance, simulated, ip, machine, scenario, country, network, target, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(kind, hour, key) DO UPDATE SET count = count + 1`);
     const pruneHours = this.db.prepare('DELETE FROM hours WHERE kind = ? AND hour < ?');
     const firstHourlyDay = hourlyFloor(Date.parse(context.now));
@@ -214,7 +221,7 @@ export class StatisticsStore {
         if (o.kind === 'decision' && o.alertIdentity) {
           const parent = getParent.get(digest(JSON.stringify(o.alertIdentity)));
           if (parent) Object.assign(o, { ip: parent.ip, machineId: parent.machine_id, machineName: parent.machine_name,
-            scenario: parent.scenario, country: parent.country, asn: parent.asn, network: parent.network,
+            scenario: parent.scenario, country: parent.country, asn: parent.asn, network: parent.network, target: parent.target,
             alertAt: `${parent.day}T00:00:00.000Z`, alertSimulated: parent.simulated });
         }
         const ip = canonicalStatisticsSource(o.ip);
@@ -225,15 +232,15 @@ export class StatisticsStore {
           const dims = [kind, day(at), o.instance, o.simulated ? 1 : 0, o.alertSimulated ? 1 : 0,
             ip, machine, machineId, text(o.machineName) || machineId, text(o.scenario), text(o.country),
             o.asn == null ? '' : String(o.asn), text(o.network), kind === 'alert' ? '' : text(o.type) || 'ban', kind === 'alert' ? '' : text(o.origin)];
-          const target = kind === 'alert' ? text(o.target) : '';
-          // Keep legacy keys for observations without a target, including decisions.
+          const target = text(o.target);
+          // Keep legacy keys for observations without a target.
           const key = digest(JSON.stringify(target ? [...dims, target] : dims));
           const events = kind === 'alert' && Number.isSafeInteger(o.events) && Number(o.events) >= 0 ? Number(o.events) : 0;
           const [cellKind, cellDay, ...rest] = dims;
           upsert.run(cellKind, cellDay, key, ...rest, target, 1, events, at, at);
           // Only the chart uses hours, so they keep just the series dimensions.
           if (kind !== 'ban' && cellDay >= firstHourlyDay) {
-            const hourDims = [kind, at.slice(0, 13), o.instance, o.simulated ? 1 : 0, ip, machine, text(o.scenario)];
+            const hourDims = [kind, at.slice(0, 13), o.instance, o.simulated ? 1 : 0, ip, machine, text(o.scenario), text(o.country), text(o.network), target];
             upsertHour.run(kind, hourDims[1], digest(JSON.stringify(hourDims)), ...hourDims.slice(2));
           }
           return { day: cellDay as string, key };
@@ -385,6 +392,9 @@ export class StatisticsStore {
     if (f.ip) { scope.push('ip = ?'); scopeParams.push(canonicalStatisticsSource(f.ip)); }
     if (f.machine) { scope.push('machine = ?'); scopeParams.push(f.machine); }
     if (f.scenario) { scope.push('scenario = ?'); scopeParams.push(f.scenario); }
+    if (f.country) { scope.push('upper(country) = ?'); scopeParams.push(f.country.toUpperCase()); }
+    if (f.network) { scope.push('network = ?'); scopeParams.push(f.network); }
+    if (f.target) { scope.push('target = ?'); scopeParams.push(f.target); }
     // Bans belong to the mode of the alert that caused them.
     const banFilter = f.simulation === 'all' ? '' : ` AND alert_simulated = ${f.simulation === 'simulated' ? 1 : 0}`;
     const days = Math.round((Date.parse(f.to) - Date.parse(f.from)) / 86_400_000) + 1;
@@ -523,8 +533,10 @@ export class StatisticsStore {
     for (let stamp = Date.parse(f.from); stamp <= Date.parse(f.to); stamp += 86_400_000) dates.push(new Date(stamp).toISOString().slice(0, 10));
     // Ranges within the kept hourly days are charted by hour.
     const hourlySince = this.metadata('hourlySince');
+    const hourlyBreakdownsSince = (f.country || f.network || f.target) && this.metadata('hourlyBreakdownsSince');
     const granularity = dates.length <= STATISTICS_HOURLY_DAYS && f.from >= hourlyFloor(now) && f.from <= day(new Date(now).toISOString())
       && (!hourlySince || hourlySince <= `${f.from}T00:00:00.000Z`)
+      && (!hourlyBreakdownsSince || hourlyBreakdownsSince <= `${f.from}T00:00:00.000Z`)
       && this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'hours'").get() ? 'hour' : 'day';
     const series: StoredStatistics['series'] = [];
     if (granularity === 'hour') {
@@ -579,7 +591,7 @@ export class StatisticsStore {
     // A machine that stops reporting entirely may have a broken agent or
     // acquisition. With an IP or scenario filter, silence is expected.
     const active = new Set(currentMachines.map((r) => r.value as string));
-    const quietMachines = f.ip || f.scenario ? [] : [...previousMachines]
+    const quietMachines = f.ip || f.scenario || f.country || f.network || f.target ? [] : [...previousMachines]
       .filter(([value]) => value && !active.has(value))
       .map(([value, { label, n }]) => ({ value, label: label || value, previous: n }))
       .sort((a, b) => b.previous - a.previous || a.value.localeCompare(b.value)).slice(0, f.limit);

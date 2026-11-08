@@ -37,6 +37,35 @@ function fixture() {
 }
 
 describe('long-term statistics capture and aggregation', () => {
+  it('filters breakdowns across totals, comparisons, hourly charts and finding details', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    const at = '2026-01-31T10:00:00.000Z';
+    const source = (ip: string, cn: string, as_name: string) => ({ ip, cn, as_name });
+    f.alert(1, { created_at: at, target: 'web.example.com', source: source('1.2.3.4', 'DE', 'Cloud A') });
+    f.alert(2, { created_at: at, target: 'ssh.example.com', source: source('1.2.3.5', 'US', 'Cloud B') });
+    f.alert(3, { created_at: at, target: 'web.example.com', source: source('1.2.3.6', 'US', 'Cloud B') });
+    f.alert(4, { created_at: '2026-01-30T10:00:00.000Z', target: 'web.example.com', source: source('1.2.3.4', 'DE', 'Cloud A') });
+    f.decision(1, 1, { created_at: at }); f.decision(2, 2, { created_at: at });
+    f.decision(3, 4, { created_at: '2026-01-30T10:00:00.000Z' });
+    f.consolidate();
+    for (const [filter, alerts, bans] of [
+      [{ country: 'DE' }, 1, 1], [{ network: 'Cloud B' }, 2, 1], [{ target: 'web.example.com' }, 2, 1],
+      [{ country: 'US', network: 'Cloud B', target: 'web.example.com' }, 1, 0],
+    ] as const) {
+      const filters = { from: '2026-01-31', to: '2026-01-31', instance: 'default', simulation: 'all', limit: 10, ...filter } satisfies StatisticsFilters;
+      const result = f.query(filters);
+      expect(result.totals).toMatchObject({ alerts, bans });
+      expect(result.granularity).toBe('hour');
+      expect(result.series.reduce((sum, row) => sum + (row.alerts ?? 0), 0)).toBe(alerts);
+      expect(result.series.reduce((sum, row) => sum + (row.decisions ?? 0), 0)).toBe(bans);
+      expect(result.quietMachines).toEqual([]);
+      const details = f.store.details(filters, { kind: 'ips' }, 365, ['default'], Date.parse(f.context.now));
+      expect(details.kind === 'ips' && details.ips.reduce((sum, row) => sum + row.alerts, 0)).toBe(alerts);
+    }
+    expect(f.query({ from: '2026-01-31', to: '2026-01-31', instance: 'default', target: 'web.example.com' }).previousTotals).toMatchObject({ alerts: 1, bans: 1 });
+    expect(f.query({ target: 'missing.example.com' }).totals.alerts).toBe(0);
+  });
+
   it('archives distinct targets and ranks them within the selected scope, without counting bans as alerts', () => {
     const f = fixture(); configureStatisticsCapture(f.source.db, true);
     const common = { created_at: '2026-01-10T10:00:00.000Z', target: 'web.example.com' };
@@ -74,6 +103,7 @@ describe('long-term statistics capture and aggregation', () => {
     const legacy = { seq: 1, identity: 'legacy', day: '2026-01-10', payload: JSON.stringify([1, 'a', '2026-01-10T10:00:00.000Z', 'default', '1.2.3.4', '', '', '', '', '', 'ssh', 0, 20]) };
     first.consolidate([legacy], context);
     first.db.exec('ALTER TABLE cells DROP COLUMN target');
+    for (const field of ['country', 'network', 'target']) first.db.exec(`ALTER TABLE hours DROP COLUMN ${field}`);
     first.close();
     const upgraded = new StatisticsStore(file);
     cleanups.push(() => upgraded.close());
@@ -81,6 +111,9 @@ describe('long-term statistics capture and aggregation', () => {
     const result = upgraded.query({ from: '2026-01-01', to: '2026-01-31', instance: 'all', simulation: 'all', limit: 10 }, 365, ['default'], Date.parse(context.now));
     expect(result.totals).toMatchObject({ alerts: 2, events: 40 });
     expect(result.targets).toEqual([{ label: 'web.example.com', count: 1, uniqueIPs: 1 }]);
+    expect(upgraded.metadata('hourlyBreakdownsSince')).toBeTruthy();
+    const filtered = upgraded.query({ from: '2026-01-31', to: '2026-01-31', instance: 'all', simulation: 'all', limit: 10, target: 'web.example.com' }, 365, ['default'], Date.parse(context.now));
+    expect(filtered.granularity).toBe('day');
   });
 
   it('captures exact IP/machine/scenario relationships and distinct expired bans', () => {

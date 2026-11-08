@@ -29,7 +29,7 @@ const alertPayload = (row: string) => `json_array(1, 'a',
 const decisionPayload = (row: string) => `json_array(1, 'd',
   ${row}.created_at, ${row}.instance_id, a.source_ip, a.country, a.source_as_number,
   a.as_name, a.machine_id, a.machine, a.scenario, ${row}.simulated,
-  a.created_at, a.simulated, COALESCE(${row}.type, 'ban'), ${row}.origin, ${alertIdentity('a')}
+  a.created_at, a.simulated, COALESCE(${row}.type, 'ban'), ${row}.origin, ${alertIdentity('a')}, a.target
 )`;
 
 export function configureStatisticsCapture(db: any, enabled: boolean): void {

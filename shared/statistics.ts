@@ -55,6 +55,9 @@ export interface StatisticsFilters {
   ip?: string;
   machine?: string;
   scenario?: string;
+  country?: string;
+  network?: string;
+  target?: string;
 }
 
 export interface StatisticsRanking {

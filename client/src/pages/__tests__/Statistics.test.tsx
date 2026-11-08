@@ -51,9 +51,9 @@ describe('Statistics page', () => {
     expect(within(topTargets as HTMLElement).getByText('9')).toBeInTheDocument();
     expect(within(topTargets as HTMLElement).getByText('75.0%')).toBeInTheDocument();
     expect(within(topTargets as HTMLElement).getByText('1 IPs')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '192.0.2.7' })).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: '192.0.2.7' })).toBeInTheDocument();
     // Like on the Alerts page, the ban action has its own column.
-    const topIps = screen.getByRole('button', { name: '192.0.2.7' }).closest('table')!;
+    const topIps = screen.getByRole('row', { name: '192.0.2.7' }).closest('table')!;
     expect(within(topIps).getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
     expect(within(topIps).getByRole('button', { name: 'Ban' }).closest('td')).toBe(within(topIps).getAllByRole('cell').at(-1));
     // With one instance, Top Machines does not name it, like the rest of the app.
@@ -63,22 +63,88 @@ describe('Statistics page', () => {
     expect(sessionFetch).toHaveBeenCalledWith(expect.stringContaining('/api/statistics?'), expect.anything());
   });
 
-  test('keeps ranking limits and attacker/machine filters in the URL and builds UTC investigation links', async () => {
+  test('keeps ranking limits and attacker filters in the URL and builds UTC investigation links', async () => {
     mount();
-    fireEvent.click(await screen.findByRole('button', { name: '192.0.2.7' }));
+    const attacker = await screen.findByRole('row', { name: '192.0.2.7' });
+    fireEvent.click(within(attacker).getAllByRole('cell')[1]);
     await screen.findByRole('link', { name: 'View Alerts' });
     expect(screen.getByTestId('location').textContent).toContain('ip=192.0.2.7');
     fireEvent.change(screen.getByRole('combobox', { name: 'Rankings' }), { target: { value: '50' } });
     await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('limit=50'));
-    await screen.findByRole('button', { name: '192.0.2.7' });
+    await screen.findByRole('row', { name: '192.0.2.7' });
     const link = screen.getByRole('link', { name: 'View Alerts' });
     const target = new URL(link.getAttribute('href')!, 'http://localhost');
     expect(target.pathname).toBe('/alerts');
     expect(target.searchParams.get('q')).toContain('date>=2026-10-09T00:00:00Z AND date<2026-11-08T00:00:00Z');
     expect(target.searchParams.get('q')).toContain('ip="192.0.2.7"');
     expect(target.searchParams.get('simulation')).toBe('live');
-    fireEvent.click(screen.getAllByRole('button', { name: 'Server one' })[0]);
-    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('machine='));
+  });
+
+  test.each(['Enter', ' '])('opens ranking rows with the %j key', async (key) => {
+    mount();
+    const attacker = await screen.findByRole('row', { name: '192.0.2.7' });
+    expect(attacker).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(attacker, { key });
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('ip=192.0.2.7'));
+    const scenario = await screen.findByRole('row', { name: 'ssh' });
+    fireEvent.keyDown(scenario, { key });
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('scenario=ssh'));
+  });
+
+  test.each([
+    ['ip', '192.0.2.7', '192.0.2.7'],
+    ['machine', 'Server one', '["default","m-1"]'],
+    ['scenario', 'ssh', 'ssh'],
+  ])('toggles and highlights the %s row like the breakdown cards', async (field, label, value) => {
+    vi.mocked(sessionFetch).mockImplementation(async () => {
+      const data = payload();
+      return Response.json({ ...data, machines: [...data.machines, { ...data.machines[0], value: '["default","m-2"]', label: 'Server two' }] } satisfies StatisticsResponse);
+    });
+    mount();
+    let row = await screen.findByRole('row', { name: label });
+    expect(row).toHaveAttribute('aria-selected', 'false');
+    fireEvent.click(within(row).getAllByRole('cell')[1]);
+    await waitFor(() => expect(new URLSearchParams(screen.getByTestId('location').textContent!.split('?')[1]).get(field)).toBe(value));
+    row = await screen.findByRole('row', { name: label });
+    expect(row).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(row, { key: ' ' });
+    await waitFor(() => expect(new URLSearchParams(screen.getByTestId('location').textContent!.split('?')[1]).has(field)).toBe(false));
+    expect(await screen.findByRole('row', { name: label })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  test.each([
+    ['Top Targets', 'web.example.com', 'target', 'web.example.com', 'Clear Target'],
+    ['Top Countries', 'Germany', 'country', 'DE', 'Clear Country'],
+    ['Top AS', 'Example Cloud', 'network', 'Example Cloud', 'Clear AS'],
+  ])('filters Statistics from %s and clears or toggles the selection', async (title, label, field, value, clearLabel) => {
+    vi.mocked(sessionFetch).mockImplementation(async () => Response.json({ ...payload(), countries: [{ label: 'DE', count: 12, uniqueIPs: 1 }], networks: [{ label: 'Example Cloud', count: 12, uniqueIPs: 1 }] } satisfies StatisticsResponse));
+    mount();
+    const card = (await screen.findByRole('heading', { name: title })).closest('.rounded-xl') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: new RegExp(label) }));
+    await waitFor(() => expect(new URLSearchParams(screen.getByTestId('location').textContent!.split('?')[1]).get(field)).toBe(value));
+    await screen.findByRole('link', { name: 'View Alerts' });
+    expect(new URLSearchParams(String(vi.mocked(sessionFetch).mock.calls.at(-1)?.[0]).split('?')[1]).get(field)).toBe(value);
+    const alerts = new URL(screen.getByRole('link', { name: 'View Alerts' }).getAttribute('href')!, 'http://localhost');
+    expect(alerts.searchParams.get('q')).toContain(`${field === 'network' ? 'as' : field}=${JSON.stringify(value)}`);
+    fireEvent.click(screen.getByRole('button', { name: clearLabel }));
+    await waitFor(() => expect(new URLSearchParams(screen.getByTestId('location').textContent!.split('?')[1]).has(field)).toBe(false));
+    const currentRow = async () => within((await screen.findByRole('heading', { name: title })).closest('.rounded-xl') as HTMLElement).getByRole('button', { name: new RegExp(label) });
+    let row = await currentRow();
+    fireEvent.keyDown(row, { key: 'Enter' });
+    await waitFor(() => expect(new URLSearchParams(screen.getByTestId('location').textContent!.split('?')[1]).get(field)).toBe(value));
+    row = await currentRow();
+    fireEvent.keyDown(row, { key: ' ' });
+    await waitFor(() => expect(new URLSearchParams(screen.getByTestId('location').textContent!.split('?')[1]).has(field)).toBe(false));
+  });
+
+  test('keeps machine counts without machine links and the ban action independent of the attacker row', async () => {
+    mount();
+    const attacker = await screen.findByRole('row', { name: '192.0.2.7' });
+    expect(within(attacker).getAllByRole('cell')[3]).toHaveTextContent(/^1$/);
+    expect(within(attacker).queryByText('Server one')).not.toBeInTheDocument();
+    fireEvent.click(within(attacker).getByRole('button', { name: 'Ban' }));
+    expect(await screen.findByLabelText('IP / Range')).toHaveValue('192.0.2.7');
+    expect(screen.getByTestId('location').textContent).not.toContain('ip=');
   });
 
   test('turns the statistics into findings and compares tiles only with a complete preceding period', async () => {
@@ -109,8 +175,12 @@ describe('Statistics page', () => {
     expect(screen.getByText('75%')).toBeInTheDocument();
     expect(screen.getByText('+25 pp')).toBeInTheDocument();
     expect(screen.getByText('25 not seen before')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Web/ })).toBeDisabled();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Show scenario' })[0]);
+    expect(screen.getByRole('button', { name: /^Web:/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Show scenario' })).not.toBeInTheDocument();
+    const scenario = screen.getByRole('row', { name: 'crowdsecurity/http-probing' });
+    fireEvent.click(within(scenario).getByRole('link'));
+    expect(screen.getByTestId('location').textContent).not.toContain('scenario=');
+    fireEvent.click(within(scenario).getAllByRole('cell')[1]);
     await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('scenario=crowdsecurity%2Fhttp-probing'));
     const link = await screen.findByRole('link', { name: 'View Alerts' });
     expect(new URL(link.getAttribute('href')!, 'http://localhost').searchParams.get('q')).toContain('scenario="crowdsecurity/http-probing"');
@@ -142,8 +212,19 @@ describe('Statistics page', () => {
     expect(screen.queryByText(/without a single ban/)).not.toBeInTheDocument();
 
     const returned = screen.getByText(/1 IPs attacked again/).closest('li')!;
-    fireEvent.click(within(returned).getByRole('button', { name: 'Show details' }));
+    const summary = within(returned).getByRole('button', { name: /IPs attacked again/ });
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    expect(detailUrls).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Show details' })).not.toBeInTheDocument();
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute('aria-expanded', 'true');
     expect(await within(returned).findByText('203.0.113.9')).toBeInTheDocument();
+    expect(document.getElementById(summary.getAttribute('aria-controls')!)).toContainElement(within(returned).getByText('203.0.113.9'));
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    expect(within(returned).queryByText('203.0.113.9')).not.toBeInTheDocument();
+    fireEvent.click(summary);
+    await within(returned).findByText('203.0.113.9');
     expect(within(returned).getByRole('link', { name: 'Learn more' })).toHaveAttribute('href', expect.stringContaining('#duration_expr'));
     // The preceding period is incomplete, so earlier bans are not searched.
     expect(new URLSearchParams(detailUrls[0].split('?')[1]).get('history')).toBeNull();
@@ -155,11 +236,34 @@ describe('Statistics page', () => {
     expect(addDecision).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.9', duration: '7d', reason: 'Returned after ban' }));
 
     const network = screen.getByText(/Example Cloud accounts for 60%/).closest('li')!;
-    fireEvent.click(within(network).getByRole('button', { name: 'Show details' }));
+    fireEvent.click(within(network).getByRole('button', { name: /Example Cloud accounts for/ }));
     fireEvent.click(await within(network).findByRole('button', { name: 'Block range' }));
     expect(await screen.findByLabelText('IP / Range')).toHaveValue('198.51.100.0/24');
     expect(screen.getByLabelText('Duration')).toHaveValue('24h');
     expect(new URLSearchParams(detailUrls.at(-1)!.split('?')[1]).get('network')).toBe('Example Cloud');
+  });
+
+  test('places the scenario button beside bulk actions in an expanded finding', async () => {
+    const data = payload();
+    vi.mocked(sessionFetch).mockImplementation(async (url) => {
+      if (String(url).includes('/api/statistics/details')) return Response.json({
+        kind: 'ips', ranges: [], rangeTotal: 0, total: 2,
+        ips: ['203.0.113.9', '203.0.113.10'].map((ip) => ({ ip, alerts: 7, bans: 0, machines: 1, activeDays: 1, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z' })),
+      });
+      return Response.json({ ...data, scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 14, uniqueIPs: 2, machines: 1, bans: 0, bannedIPs: 0, previous: null }] } satisfies StatisticsResponse);
+    });
+    mount();
+    const summary = await screen.findByRole('button', { name: /AppSec.*blocked/ });
+    expect(summary).toHaveClass('cursor-pointer');
+    fireEvent.click(summary);
+    const finding = summary.closest('li')!;
+    const bulk = await within(finding).findByRole('button', { name: 'Ban all (2)' });
+    const scenario = within(finding).getByRole('button', { name: 'Show scenario' });
+    expect(scenario.parentElement).toBe(bulk.parentElement);
+    expect(scenario).toHaveClass('border', 'rounded-md');
+    expect(within(finding).queryByRole('link', { name: 'Show scenario' })).not.toBeInTheDocument();
+    fireEvent.click(scenario);
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('scenario=crowdsecurity%2Fvpatch-env-access'));
   });
 
   test('bans every listed IP of a finding at once and offers to bypass the allowlist for skipped ones', async () => {
@@ -180,7 +284,7 @@ describe('Statistics page', () => {
     });
     mount();
     const returned = (await screen.findByText(/3 IPs attacked again/)).closest('li')!;
-    fireEvent.click(within(returned).getByRole('button', { name: 'Show details' }));
+    fireEvent.click(within(returned).getByRole('button', { name: /IPs attacked again/ }));
     expect(await within(returned).findByText('Showing 3 of 30')).toBeInTheDocument();
     fireEvent.click(await within(returned).findByRole('button', { name: 'Ban all (3)' }));
     expect(await screen.findByText('Values (3)')).toBeInTheDocument();
@@ -227,6 +331,11 @@ describe('Statistics page', () => {
     expect(within(increase).getByText('+418%')).toBeInTheDocument();
     expect(within(increase).getByText('Edge')).toBeInTheDocument();
     expect(within(increase).getByText(/^366 → 1\D?896$/)).toBeInTheDocument();
+    fireEvent.click(increase);
+    const selectedIncrease = await screen.findByRole('button', { name: /^proxy-02: 366 alerts in the preceding period/ });
+    expect(selectedIncrease).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(selectedIncrease);
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('machine='));
     const quiet = screen.getByRole('button', { name: 'dev-bastion: 120 alerts in the preceding period, 0 in the selected period' });
     expect(quiet).toBeDisabled();
     expect(within(quiet).getByText('−100%')).toBeInTheDocument();
@@ -309,7 +418,7 @@ describe('Statistics selection', () => {
     vi.mocked(sessionFetch).mockResolvedValueOnce(Response.json({ error: 'Unavailable' }, { status: 503 }));
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
-    expect(await screen.findByRole('button', { name: '192.0.2.7' })).toBeInTheDocument();
+    expect(await screen.findByRole('row', { name: '192.0.2.7' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

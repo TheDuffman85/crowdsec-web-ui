@@ -8,6 +8,7 @@ import {
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
+import { ClickableTableRow } from '../components/ui/ClickableTableRow';
 import { StatCard } from '../components/StatCard';
 import { ScenarioName } from '../components/ScenarioName';
 import { CountryFlag } from '../components/CountryFlag';
@@ -89,7 +90,7 @@ const PROFILE_DOCS = 'https://docs.crowdsec.net/docs/local_api/profiles/format';
 // Shared with the Settings page so form controls look the same everywhere.
 const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400';
 const inputClass = 'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:[color-scheme:dark]';
-const linkClass = 'font-medium text-primary-600 hover:text-primary-700 hover:underline dark:text-primary-400 dark:hover:text-primary-300';
+const linkClass = 'cursor-pointer font-medium text-primary-600 hover:text-primary-700 hover:underline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:text-primary-300';
 // Same axis styling as the dashboard activity chart.
 const axisProps = { stroke: '#888888', fontSize: 12, tickLine: false, axisLine: false } as const;
 
@@ -199,7 +200,7 @@ function SegmentedControl({ label, options }: { label: string; options: Array<{ 
           type="button"
           onClick={option.onSelect}
           aria-pressed={option.selected}
-          className={`shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-all ${option.selected
+          className={`shrink-0 cursor-pointer whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-all focus-visible:outline-2 focus-visible:outline-primary-500 ${option.selected
             ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
             : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'}`}
         >
@@ -214,7 +215,7 @@ function FilterChip({ label, clearLabel, onClear }: { label: string; clearLabel:
   return (
     <span className="inline-flex max-w-full items-center gap-1 rounded-full border border-primary-200 bg-primary-50 py-1 pl-3 pr-1 text-sm font-medium text-primary-800 dark:border-primary-800 dark:bg-primary-900/40 dark:text-primary-100">
       <span className="truncate">{label}</span>
-      <button type="button" aria-label={clearLabel} onClick={onClear} className="rounded-full p-0.5 hover:bg-primary-100 focus-visible:outline-2 focus-visible:outline-primary-500 dark:hover:bg-primary-800/60">
+      <button type="button" aria-label={clearLabel} onClick={onClear} className="cursor-pointer rounded-full p-0.5 hover:bg-primary-100 focus-visible:outline-2 focus-visible:outline-primary-500 dark:hover:bg-primary-800/60">
         <X className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
     </span>
@@ -252,10 +253,16 @@ export function Statistics() {
   const ip = params.get('ip');
   const machine = params.get('machine');
   const scenario = params.get('scenario');
+  const country = params.get('country');
+  const network = params.get('network');
+  const target = params.get('target');
   const query = new URLSearchParams({ from, to, instance, simulation, limit });
   if (ip) query.set('ip', ip);
   if (machine) query.set('machine', machine);
   if (scenario) query.set('scenario', scenario);
+  if (country) query.set('country', country);
+  if (network) query.set('network', network);
+  if (target) query.set('target', target);
   const queryString = query.toString();
   const requestKey = `${queryString}:${reload}:${archiveChange}`;
   const current = result?.key === requestKey;
@@ -267,6 +274,16 @@ export function Statistics() {
     setParams((previous) => {
       const next = new URLSearchParams(previous);
       for (const [key, value] of Object.entries(values)) { if (value === null) next.delete(key); else next.set(key, value); }
+      return next;
+    });
+  };
+  const toggleFilters = (values: Record<string, string | null>) => {
+    setParams((previous) => {
+      const next = new URLSearchParams(previous);
+      for (const [key, value] of Object.entries(values)) {
+        if (value === null || previous.get(key) === value) next.delete(key);
+        else next.set(key, value);
+      }
       return next;
     });
   };
@@ -343,6 +360,9 @@ export function Statistics() {
   const search: string[] = [`date>=${from}T00:00:00Z`, `date<${end}T00:00:00Z`];
   if (ip) search.push(`ip=${JSON.stringify(ip)}`);
   if (scenario) search.push(`scenario=${JSON.stringify(scenario)}`);
+  if (country) search.push(`country=${JSON.stringify(country)}`);
+  if (network) search.push(`as=${JSON.stringify(network)}`);
+  if (target) search.push(`target=${JSON.stringify(target)}`);
   if (machine) {
     try { const key = JSON.parse(machine) as string[]; related.set('instance', key[0]); search.push(`machine=${JSON.stringify(key[1])}`); } catch { /* The API reports invalid URL filters. */ }
   }
@@ -401,15 +421,9 @@ export function Statistics() {
                   const countryName = row.country && row.country !== 'Unknown' ? getCountryName(row.country, language) ?? row.country : t('pages.statistics.unknown');
                   const asn = row.asn && row.asn !== '0' ? (/^AS/i.test(row.asn) ? row.asn : `AS${row.asn}`) : '';
                   return (
-                    <tr key={row.value} className="group transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <ClickableTableRow key={row.value} aria-label={row.label} selected={(attackers ? ip : machine) === row.value} onSelect={() => toggleFilters({ [attackers ? 'ip' : 'machine']: row.value })}>
                       <td className={`${cell} min-w-64`}>
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 break-all text-left font-medium text-gray-900 hover:text-primary-600 dark:text-gray-100 dark:hover:text-primary-400"
-                          onClick={() => update({ [attackers ? 'ip' : 'machine']: row.value })}
-                        >
-                          {row.label}<ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />
-                        </button>
+                        <span className="break-all font-medium text-gray-900 dark:text-gray-100">{row.label}</span>
                         {row.returnedAfterBan && <Badge variant="danger" className="ml-2 align-middle">{t('pages.statistics.returnedAfterBan')}</Badge>}
                         {/* Like the rest of the app, instances are only named when several are configured. */}
                         {(attackers || instances.length > 1) && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
@@ -426,16 +440,7 @@ export function Statistics() {
                       <td className={`${cell} text-right font-semibold tabular-nums text-gray-900 dark:text-gray-100`}>{formatNumber(row.alerts)}</td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
                       <td className={cell}>
-                        {attackers ? <>
-                          <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{formatNumber(row.machines)}</span>
-                          {row.targetedMachines.length > 0 && (
-                            <div className="mt-1 flex flex-col items-start gap-0.5 text-xs">
-                              {row.targetedMachines.map((target) => (
-                                <button key={target.value} type="button" className={`${linkClass} max-w-48 truncate text-left`} onClick={() => update({ machine: target.value })}>{target.label}</button>
-                              ))}
-                            </div>
-                          )}
-                        </> : <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{formatNumber(row.uniqueIPs)}</span>}
+                        <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{formatNumber(attackers ? row.machines : row.uniqueIPs)}</span>
                       </td>
                       <td className={`${cell} whitespace-nowrap`}>
                         <span className="font-medium text-gray-900 dark:text-gray-100">{t('pages.statistics.activeDays', { count: row.activeDays })}</span>
@@ -459,7 +464,7 @@ export function Statistics() {
                             )}
                         </td>
                       )}
-                    </tr>
+                    </ClickableTableRow>
                   );
                 })}
               </tbody>
@@ -471,12 +476,14 @@ export function Statistics() {
   };
 
   // Distinct IPs tell one noisy host apart from many hosts, such as a botnet.
-  const breakdown = (title: string, icon: LucideIcon, entries: Array<{ label: string; count: number; uniqueIPs?: number }>, total: number, kind?: 'country') => (
+  const breakdown = (title: string, icon: LucideIcon, entries: Array<{ label: string; count: number; uniqueIPs?: number }>, total: number, kind: 'country' | 'network' | 'target') => (
     <StatCard
       key={title}
       title={title}
       icon={icon}
       total={total}
+      selectedValue={params.get(kind)}
+      onSelect={(item) => toggleFilters({ [kind]: item.value })}
       items={entries.map((entry) => ({
         ...entry,
         label: kind === 'country' && entry.label !== 'Unknown' ? getCountryName(entry.label, language) ?? entry.label : unknown(entry.label),
@@ -574,7 +581,7 @@ export function Statistics() {
   const findingContext = {
     query: queryString, canBan, decided, formatTimestamp, machineName: (value: string) => machineName(value),
     formatDay: (day: string) => formatDay(day),
-    onFilter: update,
+    onFilter: toggleFilters,
     onBan: (value: string, draft: DecisionDraft, range: boolean) => setPendingDecision({ value, reason: draft.reason, duration: range ? draft.rangeDuration || draft.duration : draft.duration }),
     onBanAll: (values: string[], draft: DecisionDraft, range: boolean) => setPendingDecision({ value: '', values, reason: draft.reason, duration: range ? draft.rangeDuration || draft.duration : draft.duration }),
   };
@@ -603,15 +610,12 @@ export function Statistics() {
                   const share = banCoverage(row.bannedIPs, row.uniqueIPs);
                   const change = row.previous === null || row.previous === 0 ? null : Math.round((row.count - row.previous) / row.previous * 100);
                   return (
-                    <tr key={row.label} className="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                    <ClickableTableRow key={row.label} aria-label={row.label} selected={scenario === row.label} onSelect={() => toggleFilters({ scenario: row.label })}>
                       <td className={`${cell} min-w-64`}>
                         <div className="flex items-start gap-2">
                           <ScenarioName name={row.label} showLink className="min-w-0" />
                           {row.previous === 0 && <Badge variant="info" className="shrink-0">{t('pages.statistics.new')}</Badge>}
                         </div>
-                        <button type="button" className={`${linkClass} mt-1 inline-flex items-center gap-1 text-xs`} onClick={() => update({ scenario: row.label })}>
-                          {t('pages.statistics.showScenario')}<ArrowUpRight className="h-3 w-3" aria-hidden="true" />
-                        </button>
                       </td>
                       <td className={`${cell} text-right`}>
                         <span className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">{formatNumber(row.count)}</span>
@@ -621,7 +625,7 @@ export function Statistics() {
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.machines)}</td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
                       <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && row.count >= FINDINGS.unbannedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{share === null ? '—' : `${share}%`}</td>
-                    </tr>
+                    </ClickableTableRow>
                   );
                 })}
               </tbody>
@@ -674,12 +678,15 @@ export function Statistics() {
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             {t('pages.statistics.rangeHint')}
           </p>
-          {(ip || machine || scenario) && (
+          {(ip || machine || scenario || country || network || target) && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-gray-100 pt-4 text-sm dark:border-gray-700/50">
               <div className="flex flex-wrap gap-2">
                 {ip && <FilterChip label={ip} clearLabel={t('pages.statistics.clearIP')} onClear={() => update({ ip: null })} />}
                 {machine && <FilterChip label={data?.machines.find((m) => m.value === machine)?.label || t('tableColumns.machine')} clearLabel={t('pages.statistics.clearMachine')} onClear={() => update({ machine: null })} />}
                 {scenario && <FilterChip label={scenario} clearLabel={t('pages.statistics.clearScenario')} onClear={() => update({ scenario: null })} />}
+                {country && <FilterChip label={getCountryName(country, language) ?? country} clearLabel={t('components.quickFilters.clearSection', { field: t('tableColumns.country') })} onClear={() => update({ country: null })} />}
+                {network && <FilterChip label={network} clearLabel={t('components.quickFilters.clearSection', { field: t('tableColumns.as') })} onClear={() => update({ network: null })} />}
+                {target && <FilterChip label={target} clearLabel={t('components.quickFilters.clearSection', { field: t('tableColumns.target') })} onClear={() => update({ target: null })} />}
               </div>
               <Link className={`${linkClass} inline-flex items-center gap-1`} to={`/alerts?${related}`}>
                 {t('pages.dashboard.viewAlerts')}
@@ -771,9 +778,9 @@ export function Statistics() {
 
         <div className="space-y-6">
           <div className="grid min-w-0 items-start gap-6 md:grid-cols-2 xl:grid-cols-3">
-            {breakdown(t('pages.dashboard.topTargets'), Target, data.targets, data.totals.alerts)}
+            {breakdown(t('pages.dashboard.topTargets'), Target, data.targets, data.totals.alerts, 'target')}
             {breakdown(t('pages.dashboard.topCountries'), Globe, data.countries, data.totals.alerts, 'country')}
-            {breakdown(t('pages.dashboard.topAs'), Network, data.networks, data.totals.alerts)}
+            {breakdown(t('pages.dashboard.topAs'), Network, data.networks, data.totals.alerts, 'network')}
           </div>
           {hasMultipleMachines && <Card>
             <CardHeader>
@@ -800,10 +807,13 @@ export function Statistics() {
                                 key={row.value}
                                 type="button"
                                 disabled={quiet}
-                                onClick={() => update({ machine: row.value })}
+                                onClick={() => toggleFilters({ machine: row.value })}
                                 title={label}
                                 aria-label={label}
-                                className="block w-full rounded-lg border border-transparent p-2 text-left transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-gray-700/50 dark:disabled:hover:bg-transparent"
+                                aria-pressed={machine === row.value}
+                                className={`block w-full cursor-pointer rounded-lg border p-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-primary-500 disabled:cursor-default disabled:hover:bg-transparent dark:disabled:hover:bg-transparent ${machine === row.value
+                                  ? 'border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900/40'
+                                  : 'border-transparent hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
                               >
                                 <PeriodChangeRow
                                   previous={row.previous}

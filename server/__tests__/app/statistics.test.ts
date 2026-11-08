@@ -97,6 +97,20 @@ describe('statistics API and worker lifecycle', () => {
     expect((await controller.fetch(request('config/statistics', { enabled: true }))).status).toBe(401);
   });
 
+  test('validates and forwards breakdown filters to statistics and details', async () => {
+    const { controller } = start();
+    const query = vi.spyOn(controller.statistics, 'query').mockResolvedValue({} as never);
+    const details = vi.spyOn(controller.statistics, 'details').mockResolvedValue({} as never);
+    const filters = 'country=de&network=Example%20Cloud&target=web.example.com';
+    expect((await controller.fetch(request(`statistics?${filters}`))).status).toBe(200);
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({ country: 'DE', network: 'Example Cloud', target: 'web.example.com' }));
+    expect((await controller.fetch(request(`statistics/details?kind=ips&${filters}`))).status).toBe(200);
+    expect(details).toHaveBeenCalledWith(expect.objectContaining({ country: 'DE', network: 'Example Cloud', target: 'web.example.com' }), expect.anything());
+    for (const value of ['country=invalid', 'network=%20', `network=${'a'.repeat(257)}`, 'target=%20', `target=${'a'.repeat(257)}`]) {
+      expect((await controller.fetch(request(`statistics?${value}`))).status, value).toBe(400);
+    }
+  });
+
   test('persists settings and deduplication through restart and cache reconstruction', async () => {
     const first = start();
     const alert = sampleAlert({ machine_id: 'm-1' });

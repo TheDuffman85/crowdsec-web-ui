@@ -22,6 +22,8 @@ export function registerStatisticsRoutes(options: {
       simulation: (config.simulationsEnabled ? q.simulation || 'live' : 'live') as StatisticsFilters['simulation'],
       limit: Number(q.limit || 10) as StatisticsFilters['limit'], ...(q.ip ? { ip: q.ip } : {}), ...(q.machine ? { machine: q.machine } : {}),
       ...(q.scenario ? { scenario: q.scenario } : {}),
+      ...(q.country ? { country: q.country.toUpperCase() } : {}),
+      ...(q.network ? { network: q.network } : {}), ...(q.target ? { target: q.target } : {}),
     };
     if (!date(filters.from) || !date(filters.to) || filters.from > filters.to || filters.to > latestTo
       || Date.parse(filters.to) - Date.parse(filters.from) >= 3650 * 86_400_000) return 'Choose a valid UTC date range of at most 3650 days, ending no later than today';
@@ -30,6 +32,10 @@ export function registerStatisticsRoutes(options: {
     if (filters.ip && !canonicalStatisticsSource(filters.ip)) return 'ip must be an IPv4 or IPv6 address or range';
     if (filters.scenario !== undefined && (filters.scenario.length > 256 || !filters.scenario.trim())) return 'Invalid scenario';
     if (filters.machine && !isMachineKey(filters.machine)) return 'Invalid machine identity';
+    if (filters.country && !/^[A-Z]{2}$/.test(filters.country)) return 'Invalid country';
+    for (const field of ['network', 'target'] as const) {
+      if (q[field] !== undefined && (!q[field].trim() || q[field].length > 256)) return `Invalid ${field}`;
+    }
     return filters;
   };
   const isMachineKey = (value: unknown): boolean => {
