@@ -78,6 +78,29 @@ describe('Statistics page', () => {
     expect(sessionFetch).toHaveBeenCalledWith(expect.stringContaining('/api/statistics?'), expect.anything());
   });
 
+  test('resizes the columns of a table, keeps the widths per table and resets them', async () => {
+    mount();
+    const topIps = (await screen.findByRole('row', { name: '192.0.2.7' })).closest('table')!;
+    const topScenarios = screen.getByRole('row', { name: 'ssh' }).closest('table')!;
+    // Like on the Alerts page, the table scrolls sideways with fading edges, and the Actions column keeps its size.
+    expect(topIps.closest('[data-horizontal-scroller]')).not.toBeNull();
+    expect(within(topIps).queryByRole('separator', { name: 'Resize Actions column' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset widths' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(within(topIps).getByRole('separator', { name: 'Resize IP column' }), { key: 'ArrowRight' });
+
+    expect(topIps).toHaveAttribute('data-column-widths', 'fixed');
+    expect(topScenarios).not.toHaveAttribute('data-column-widths');
+    const stored = JSON.parse(localStorage.getItem('crowdsec-web-ui:statistics-attackers:table-column-widths')!) as Record<string, number>;
+    expect(stored.ip).toBe(stored.alerts + 16);
+    expect(Array.from(topIps.querySelectorAll('col'), (col) => col.style.width).at(-1)).toBe('128px');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset widths' }));
+    expect(topIps).not.toHaveAttribute('data-column-widths');
+    expect(localStorage.getItem('crowdsec-web-ui:statistics-attackers:table-column-widths')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset widths' })).not.toBeInTheDocument();
+  });
+
   test('keeps ranking limits and attacker filters in the URL and builds UTC investigation links', async () => {
     mount(<DateTimeContext.Provider value={createDateTimeContextValue({ ...DEFAULT_DATE_TIME_SETTINGS, timeZone: 'Europe/Berlin' })}><Statistics /></DateTimeContext.Provider>);
     const attacker = await screen.findByRole('row', { name: '192.0.2.7' });

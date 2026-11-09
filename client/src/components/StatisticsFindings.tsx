@@ -3,6 +3,8 @@ import { AlertCircle, ChevronRight, ExternalLink, Filter, Gavel, Info, ListCheck
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Badge } from './ui/Badge';
 import { ClickableTableRow } from './ui/ClickableTableRow';
+import { ResetColumnWidthsButton, ResizableTable } from './ui/ResizableTable';
+import { useResizableTable, type ResizableTableColumn } from '../lib/useResizableTable';
 import { CountryFlag } from './CountryFlag';
 import { RemediationPills } from './RemediationPills';
 import { PeriodChangeRow } from './PeriodChange';
@@ -55,6 +57,9 @@ const SEVERITY_ORDER = { warning: 0, info: 1 };
 const linkClass = 'cursor-pointer font-medium text-primary-600 hover:text-primary-700 hover:underline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:text-primary-300';
 const headerCell = 'whitespace-nowrap px-3 py-2 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400';
 const cell = 'px-3 py-2 align-top';
+const rightHeaderCell = `${headerCell} text-right`;
+// Fits the ban button. Once the widths are fixed, the decision badge wraps instead.
+const ACTIONS_COLUMN_WIDTH = 112;
 const formatNumber = (value: number) => value.toLocaleString();
 
 /** The add-decision row action of the Alerts table. */
@@ -88,9 +93,15 @@ function FindingActionButton({ icon: Icon, primary = false, onClick, children }:
   );
 }
 
+/** Replaces the ban button once a decision was added. Wraps when the column widths are fixed, since the Actions column is sized for the button. */
+export function DecisionAddedBadge() {
+  const { t } = useI18n();
+  return <Badge variant="success" className="[table[data-column-widths=fixed]_&]:whitespace-normal">{t('pages.statistics.decisionAdded')}</Badge>;
+}
+
 function BanButton({ value, draft, range = false, context }: { value: string; draft: DecisionDraft; range?: boolean; context: DetailContext }) {
   const { t } = useI18n();
-  if (context.decided.has(value)) return <Badge variant="success">{t('pages.statistics.decisionAdded')}</Badge>;
+  if (context.decided.has(value)) return <DecisionAddedBadge />;
   return <DecisionIconButton label={t(range ? 'pages.statistics.blockRange' : 'pages.statistics.ban')} onClick={() => context.onBan(value, draft, range)} className="-my-2" />;
 }
 
@@ -107,9 +118,8 @@ function BanAllButton({ values, draft, range = false, context }: { values: strin
 }
 
 /** The Actions column, like on the Alerts and Decisions pages. */
-function ActionsHeader() {
-  const { t } = useI18n();
-  return <th className={`${headerCell} text-right ${STICKY_ACTIONS_HEADER_CLASS_NAME}`}>{t('tableColumns.actions')}</th>;
+function actionsColumn(label: string): ResizableTableColumn {
+  return { id: 'actions', label, className: `${headerCell} text-right ${STICKY_ACTIONS_HEADER_CLASS_NAME}`, fixedWidth: ACTIONS_COLUMN_WIDTH };
 }
 
 function ActionsCell({ children }: { children: ReactNode }) {
@@ -133,20 +143,20 @@ function ShowMore({ shown, total, loading, onMore }: { shown: number; total: num
   );
 }
 
-function Table({ title, actions, bulk, head, children, footer }: { title?: string; actions?: ReactNode; bulk?: ReactNode; head: ReactNode; children: ReactNode; footer?: ReactNode }) {
+/** Column widths are shared by the tables of one kind across findings, by `widthsKey`. */
+function Table({ title, actions, bulk, widthsKey, columns, children, footer }: { title?: string; actions?: ReactNode; bulk?: ReactNode; widthsKey: `statistics-${string}`; columns: ResizableTableColumn[]; children: ReactNode; footer?: ReactNode }) {
+  const table = useResizableTable(widthsKey, columns);
+  const reset = <ResetColumnWidthsButton table={table} />;
   return (
     <div className="space-y-2">
-      {(title || actions || bulk) && (
+      {(title || actions || bulk || table.columnWidths.hasCustomWidths) && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           {title ? <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{title}</p> : <span />}
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{actions}{bulk}</div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{reset}{actions}{bulk}</div>
         </div>
       )}
-      <div className="overflow-x-auto rounded-md border border-gray-100 dark:border-gray-700/60">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-50 dark:bg-gray-900/50"><tr>{head}</tr></thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">{children}</tbody>
-        </table>
+      <div className="overflow-clip rounded-md border border-gray-100 dark:border-gray-700/60">
+        <ResizableTable table={table} bodyClassName="divide-y divide-gray-100 dark:divide-gray-700/60">{children}</ResizableTable>
       </div>
       {footer}
     </div>
@@ -156,16 +166,15 @@ function Table({ title, actions, bulk, head, children, footer }: { title?: strin
 function IPTable({ title, actions, rows, draft, returned = false, context, footer }: { title?: string; actions?: ReactNode; rows: StatisticsDetailIP[]; draft: DecisionDraft; returned?: boolean; context: DetailContext; footer?: ReactNode }) {
   const { t, language } = useI18n();
   const selectedIP = new URLSearchParams(context.query).get('ip');
-  const right = `${headerCell} text-right`;
   return (
-    <Table title={title} actions={actions} footer={footer} bulk={context.canBan && <BanAllButton values={rows.map((row) => row.ip)} draft={draft} context={context} />} head={<>
-      <th className={headerCell}>{t('pages.dashboard.ip')}</th>
-      <th className={right}>{t('pages.statistics.alerts')}</th>
-      <th className={right}>{t('pages.statistics.remediations')}</th>
-      <th className={right}>{t('pages.dashboard.machines')}</th>
-      <th className={headerCell}>{t(returned ? 'pages.statistics.firstRemediation' : 'pages.statistics.lastSeen')}</th>
-      {context.canBan && <ActionsHeader />}
-    </>}>
+    <Table title={title} actions={actions} footer={footer} bulk={context.canBan && <BanAllButton values={rows.map((row) => row.ip)} draft={draft} context={context} />} widthsKey="statistics-finding-ips" columns={[
+      { id: 'ip', label: t('pages.dashboard.ip'), className: headerCell },
+      { id: 'alerts', label: t('pages.statistics.alerts'), className: rightHeaderCell },
+      { id: 'remediations', label: t('pages.statistics.remediations'), className: rightHeaderCell },
+      { id: 'machines', label: t('pages.dashboard.machines'), className: rightHeaderCell },
+      { id: 'activity', label: t(returned ? 'pages.statistics.firstRemediation' : 'pages.statistics.lastSeen'), className: headerCell },
+      ...(context.canBan ? [actionsColumn(t('tableColumns.actions'))] : []),
+    ]}>
       {rows.map((row) => {
         const country = row.country && row.country !== 'Unknown' ? getCountryName(row.country, language) ?? row.country : '';
         const asn = row.asn && row.asn !== '0' ? (/^AS/i.test(row.asn) ? row.asn : `AS${row.asn}`) : '';
@@ -228,12 +237,12 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
 
   if (detail.kind === 'scanners') {
     return (
-      <Table actions={actions} bulk={context.canBan && <BanAllButton values={detail.rows.map((row) => row.value)} draft={detail.decision} context={context} />} head={<>
-        <th className={headerCell}>{t('pages.dashboard.ip')}</th>
-        <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
-        <th className={headerCell}>{t('pages.statistics.targetedMachines')}</th>
-        {context.canBan && <ActionsHeader />}
-      </>}>
+      <Table actions={actions} bulk={context.canBan && <BanAllButton values={detail.rows.map((row) => row.value)} draft={detail.decision} context={context} />} widthsKey="statistics-finding-scanners" columns={[
+        { id: 'ip', label: t('pages.dashboard.ip'), className: headerCell },
+        { id: 'alerts', label: t('pages.statistics.alerts'), className: rightHeaderCell },
+        { id: 'targetedMachines', label: t('pages.statistics.targetedMachines'), className: headerCell },
+        ...(context.canBan ? [actionsColumn(t('tableColumns.actions'))] : []),
+      ]}>
         {detail.rows.map((row) => (
           <ClickableTableRow key={row.value} aria-label={row.label} selected={parameters.get('ip') === row.value} onSelect={() => context.onFilter({ ip: row.value })}>
             <td className={`${cell} break-all font-medium text-gray-900 dark:text-gray-100`}>{row.label}</td>
@@ -311,12 +320,12 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
     <div className="space-y-3">
       {data.kind === 'ips' && data.ranges.length > 0 && (
         <>
-          <Table title={t('pages.statistics.addressRanges')} actions={actions} footer={more(data.ranges.length, data.rangeTotal)} bulk={context.canBan && <BanAllButton values={data.ranges.map((range) => range.range)} draft={detail.decision} range context={context} />} head={<>
-            <th className={headerCell}>{t('pages.statistics.addressRange')}</th>
-            <th className={`${headerCell} text-right`}>{t('pages.statistics.uniqueIPs')}</th>
-            <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
-            {context.canBan && <ActionsHeader />}
-          </>}>
+          <Table title={t('pages.statistics.addressRanges')} actions={actions} footer={more(data.ranges.length, data.rangeTotal)} bulk={context.canBan && <BanAllButton values={data.ranges.map((range) => range.range)} draft={detail.decision} range context={context} />} widthsKey="statistics-finding-ranges" columns={[
+            { id: 'range', label: t('pages.statistics.addressRange'), className: headerCell },
+            { id: 'uniqueIPs', label: t('pages.statistics.uniqueIPs'), className: rightHeaderCell },
+            { id: 'alerts', label: t('pages.statistics.alerts'), className: rightHeaderCell },
+            ...(context.canBan ? [actionsColumn(t('tableColumns.actions'))] : []),
+          ]}>
             {data.ranges.map((range) => (
               <tr key={range.range}>
                 <td className={`${cell} font-mono text-xs text-gray-900 dark:text-gray-100`}>{range.range}</td>
@@ -378,7 +387,8 @@ export function StatisticsFindings({ findings, context }: { findings: Finding[];
   const shown = expanded ? ordered : ordered.slice(0, LISTED);
   const extraCount = findings.length - LISTED;
   return (
-    <Card>
+    // Clipping without overflow-hidden lets the scrollbars of the detail tables stick to the page.
+    <Card className="overflow-clip">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ListChecks className="h-5 w-5 shrink-0 text-primary-600 dark:text-primary-400" aria-hidden="true" />

@@ -14,6 +14,9 @@ export const STICKY_ACTIONS_NESTED_CELL_CLASS_NAME = STICKY_ACTIONS_EXPIRED_CELL
 
 export type TableColumnWidths = Record<string, number>;
 
+/** Names the table whose column widths are stored, like the tables of the Statistics page that have no column preferences. */
+export type TableColumnWidthsKey = TableColumnPreferenceTable | `statistics-${string}`;
+
 export const MIN_TABLE_COLUMN_WIDTH = 72;
 export const MAX_TABLE_COLUMN_WIDTH = 960;
 
@@ -88,7 +91,7 @@ export function clampTableColumnWidth(width: number): number {
     return Math.round(Math.min(MAX_TABLE_COLUMN_WIDTH, Math.max(MIN_TABLE_COLUMN_WIDTH, width)));
 }
 
-export function loadStoredTableColumnWidths(table: TableColumnPreferenceTable): TableColumnWidths {
+export function loadStoredTableColumnWidths(table: TableColumnWidthsKey): TableColumnWidths {
     if (typeof window === 'undefined') {
         return {};
     }
@@ -111,7 +114,7 @@ export function loadStoredTableColumnWidths(table: TableColumnPreferenceTable): 
     }
 }
 
-export function saveStoredTableColumnWidths(table: TableColumnPreferenceTable, widths: TableColumnWidths): void {
+export function saveStoredTableColumnWidths(table: TableColumnWidthsKey, widths: TableColumnWidths): void {
     if (typeof window === 'undefined') {
         return;
     }
@@ -188,7 +191,7 @@ function getColumnOrderStorageKey(table: TableColumnPreferenceTable): string {
     return `crowdsec-web-ui:${table}:table-column-order`;
 }
 
-function getColumnWidthsStorageKey(table: TableColumnPreferenceTable): string {
+function getColumnWidthsStorageKey(table: TableColumnWidthsKey): string {
     return `crowdsec-web-ui:${table}:table-column-widths`;
 }
 

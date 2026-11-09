@@ -9,6 +9,8 @@ import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, X
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { ClickableTableRow } from '../components/ui/ClickableTableRow';
+import { ResetColumnWidthsButton, ResizableTable } from '../components/ui/ResizableTable';
+import { useResizableTable, type ResizableTableColumn, type ResizableTableController } from '../lib/useResizableTable';
 import { StatCard } from '../components/StatCard';
 import { ScenarioName } from '../components/ScenarioName';
 import { CountryFlag } from '../components/CountryFlag';
@@ -18,7 +20,7 @@ import { PeriodChangeRow } from '../components/PeriodChange';
 import { RemediationPills } from '../components/RemediationPills';
 import { useRemediationTypeLabel } from '../lib/remediationTypes';
 import { usePeriodChange } from '../lib/periodChange';
-import { DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
+import { DecisionAddedBadge, DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
 import { fetchConfig } from '../lib/api';
 import { sessionFetch } from '../lib/sessionFetch';
 import { apiUrl } from '../lib/basePath';
@@ -36,6 +38,11 @@ import {
 } from '../../../shared/statistics';
 
 const HOUR = 3_600_000;
+
+const TABLE_HEADER_CELL = 'whitespace-nowrap px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 first:pl-6 last:pr-6';
+const TABLE_RIGHT_HEADER_CELL = `${TABLE_HEADER_CELL} text-right`;
+// Fits the ban button. Once the widths are fixed, the decision badge wraps instead.
+const ACTIONS_COLUMN_WIDTH = 128;
 
 /**
  * The hour containing `stamp` as an hour-precision search value (`YYYY-MM-DDTHH`) in `timeZone`,
@@ -489,25 +496,13 @@ export function Statistics() {
     const attackers = kind === 'attackers';
     const actions = attackers && canBan;
     const title = t(attackers ? 'pages.dashboard.topIps' : 'pages.dashboard.topMachines');
-    const headerCell = 'whitespace-nowrap px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 first:pl-6 last:pr-6';
+    const table = attackers ? attackerTable : machineTable;
     const cell = 'px-4 py-4 align-top first:pl-6 last:pr-6';
     return (
-      <Card className="flex flex-col">
-        <SectionHeader icon={attackers ? Crosshair : Server} title={title} description={rangeLabel} />
+      <Card className="flex flex-col overflow-clip">
+        <SectionHeader icon={attackers ? Crosshair : Server} title={title} description={rangeLabel} actions={resetWidths(table)} />
         {rows.length === 0 ? <CardContent><EmptyState>{t('common.noDataAvailable')}</EmptyState></CardContent> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-900/50">
-                <tr>
-                  <th className={headerCell}>{t(attackers ? 'pages.dashboard.ip' : 'tableColumns.machine')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.remediations')}</th>
-                  <th className={headerCell}>{t(attackers ? 'pages.dashboard.machines' : 'pages.statistics.uniqueIPs')}</th>
-                  <th className={headerCell}>{t('pages.statistics.activity')}</th>
-                  {actions && <th className={`${headerCell} text-right ${STICKY_ACTIONS_HEADER_CLASS_NAME}`}>{t('tableColumns.actions')}</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          <ResizableTable table={table} bodyClassName="divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => {
                   const countryName = row.country && row.country !== 'Unknown' ? getCountryName(row.country, language) ?? row.country : t('pages.statistics.unknown');
                   const asn = row.asn && row.asn !== '0' ? (/^AS/i.test(row.asn) ? row.asn : `AS${row.asn}`) : '';
@@ -537,7 +532,7 @@ export function Statistics() {
                       {actions && (
                         <td className={`${cell} whitespace-nowrap text-right ${STICKY_ACTIONS_CELL_CLASS_NAME}`}>
                           {decided.has(row.value)
-                            ? <Badge variant="success">{t('pages.statistics.decisionAdded')}</Badge>
+                            ? <DecisionAddedBadge />
                             : (
                               <DecisionIconButton
                                 label={t('pages.statistics.ban')}
@@ -550,9 +545,7 @@ export function Statistics() {
                     </ClickableTableRow>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
+          </ResizableTable>
         )}
       </Card>
     );
@@ -602,6 +595,26 @@ export function Statistics() {
   const machineName = (value: string, label?: string) => label || (() => { try { return (JSON.parse(value) as string[])[1]; } catch { return value; } })();
 
   const canBan = config?.permissions?.can_manage_enforcement !== false;
+  const rankingColumns = (attackers: boolean): ResizableTableColumn[] => [
+    { id: attackers ? 'ip' : 'machine', label: t(attackers ? 'pages.dashboard.ip' : 'tableColumns.machine'), className: TABLE_HEADER_CELL },
+    { id: 'alerts', label: t('pages.statistics.alerts'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'remediations', label: t('pages.statistics.remediations'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: attackers ? 'machines' : 'uniqueIPs', label: t(attackers ? 'pages.dashboard.machines' : 'pages.statistics.uniqueIPs'), className: TABLE_HEADER_CELL },
+    { id: 'activity', label: t('pages.statistics.activity'), className: TABLE_HEADER_CELL },
+    ...(attackers && canBan ? [{ id: 'actions', label: t('tableColumns.actions'), className: `${TABLE_RIGHT_HEADER_CELL} ${STICKY_ACTIONS_HEADER_CLASS_NAME}`, fixedWidth: ACTIONS_COLUMN_WIDTH }] : []),
+  ];
+  const attackerTable = useResizableTable('statistics-attackers', rankingColumns(true));
+  const machineTable = useResizableTable('statistics-machines', rankingColumns(false));
+  const scenarioTableWidths = useResizableTable('statistics-scenarios', [
+    { id: 'scenario', label: t('tableColumns.scenario'), className: TABLE_HEADER_CELL },
+    { id: 'alerts', label: t('pages.statistics.alerts'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'uniqueIPs', label: t('pages.statistics.uniqueIPs'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'machines', label: t('pages.dashboard.machines'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'remediations', label: t('pages.statistics.remediations'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'coverage', label: t('pages.statistics.remediationCoverage'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'activity', label: t('pages.statistics.activity'), className: TABLE_HEADER_CELL },
+  ]);
+  const resetWidths = (table: ResizableTableController) => table.columnWidths.hasCustomWidths && <ResetColumnWidthsButton table={table} />;
   const [pendingDecision, setPendingDecision] = useState<{ value: string; values?: string[]; reason: string; duration: string } | null>(null);
   const [decidedByValue, setDecidedByValue] = useState<Map<string, Set<string>>>(() => new Map());
   const visibleInstanceIds = instance === 'all' ? instances.map(({ id }) => id) : [instance];
@@ -676,26 +689,12 @@ export function Statistics() {
   };
 
   const scenarioTable = (rows: StatisticsScenario[]) => {
-    const headerCell = 'whitespace-nowrap px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 first:pl-6 last:pr-6';
     const cell = 'px-4 py-3 align-top first:pl-6 last:pr-6';
     return (
-      <Card className="flex flex-col">
-        <SectionHeader icon={ShieldAlert} title={t('pages.dashboard.topScenarios')} description={t('pages.statistics.scenariosHelp')} />
+      <Card className="flex flex-col overflow-clip">
+        <SectionHeader icon={ShieldAlert} title={t('pages.dashboard.topScenarios')} description={t('pages.statistics.scenariosHelp')} actions={resetWidths(scenarioTableWidths)} />
         {rows.length === 0 ? <CardContent><EmptyState>{t('common.noDataAvailable')}</EmptyState></CardContent> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-900/50">
-                <tr>
-                  <th className={headerCell}>{t('tableColumns.scenario')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.uniqueIPs')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.dashboard.machines')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.remediations')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.remediationCoverage')}</th>
-                  <th className={headerCell}>{t('pages.statistics.activity')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          <ResizableTable table={scenarioTableWidths} bodyClassName="divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => {
                   const share = remediationCoverage(row.remediatedIPs, row.uniqueIPs);
                   const change = row.previous === null || row.previous === 0 ? null : Math.round((row.count - row.previous) / row.previous * 100);
@@ -719,9 +718,7 @@ export function Statistics() {
                     </ClickableTableRow>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
+          </ResizableTable>
         )}
       </Card>
     );
