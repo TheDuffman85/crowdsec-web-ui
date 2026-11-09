@@ -47,9 +47,6 @@ A self-hosted web UI for investigating alerts, managing decisions, tracking long
   <a href="screenshots/dashboard.png"><img src="screenshots/dashboard.png" alt="Dashboard" width="48%"></a>
   <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
 </p>
-<p align="center">
-  <a href="screenshots/statistics.png"><img src="screenshots/statistics.png" alt="Long-term statistics with findings, period comparisons, and an activity chart" width="65%"></a>
-</p>
 <p>
   <a href="screenshots/multi_instance.png"><img src="screenshots/multi_instance.png" alt="Combined multi-instance alerts" width="48%"></a>
   <a href="screenshots/alerts.png"><img src="screenshots/alerts.png" alt="Alerts" width="48%"></a>
@@ -73,6 +70,9 @@ A self-hosted web UI for investigating alerts, managing decisions, tracking long
 <p>
   <a href="screenshots/allowlists.png"><img src="screenshots/allowlists.png" alt="Allowlists" width="48%"></a>
   <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
+</p>
+<p align="center">
+  <a href="screenshots/statistics.png"><img src="screenshots/statistics.png" alt="Long-term statistics with findings, period comparisons, and an activity chart" width="65%"></a>
 </p>
 
 ## Quick Start
@@ -215,7 +215,7 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 - `CONFIG_AUTH_OIDC_CLIENT_ID` parses YAML scalars as strings, preserving numeric identifiers and leading zeros. For example, `CONFIG_AUTH_OIDC_CLIENT_ID=123456789012345678901` keeps every digit; YAML-quoted values also work. In `config.yaml` or whole-section `CONFIG_AUTH` overrides, quote numeric client IDs (for example `clientId: "123456789012345678901"`).
 - Arrays use zero-based contiguous indexes: `CONFIG_AUTH_OIDC_ADMIN_GROUPS_0`, `CONFIG_INSTANCES_0_ID`, `CONFIG_INSTANCES_0_METRICS_0_URL`.
 - OIDC role groups require YAML arrays (for example `CONFIG_AUTH_OIDC_ADMIN_GROUPS='[crowdsec_admins]'` and `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS='[crowdsec_users]'`) or indexed variables, even for a single group.
-- Whole sections accept YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_AUDIT`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
+- Whole sections accept YAML through `CONFIG_STATISTICS`, `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_AUDIT`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
 - `CONFIG_INSTANCE_*` addresses instance `0`: `CONFIG_INSTANCE_NAME` equals `CONFIG_INSTANCES_0_NAME`. Metrics index `0` may also be omitted: `CONFIG_INSTANCES_0_METRICS_URL` equals `CONFIG_INSTANCES_0_METRICS_0_URL`, and `CONFIG_INSTANCE_METRICS_URL` applies both shorthands. Do not set equivalent forms together.
 - Secrets accept a direct string or exactly one `env: NAME` / `file: PATH` reference. Secret overrides also accept `_FILE`.
 - Initial direct secret overrides are stored as environment references, never plaintext. Persisted secret references still require their environment variable.
@@ -591,7 +591,7 @@ When `auth.passwordLogin.enabled` is set, it overrides the Settings value and th
 
 ### Personal settings
 
-Every user has a **Settings → Profile** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys and, while OIDC is configured, their [linked SSO identity](#linking-local-and-sso-sign-in). The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
+Every user has a **Settings → Profile** tab with their language, font, and Statistics, Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys and, while OIDC is configured, their [linked SSO identity](#linking-local-and-sso-sign-in). The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
 
 ### Users
 
@@ -643,7 +643,7 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 - Saved Settings override YAML. Scopes must include `openid`; add provider-specific scopes such as `groups` only when required.
 - Admin-group matches have full access; read-only-group matches can view data and keep permitted preferences; unmatched users follow `auth.oidc.unmatchedRole` (`deny` by default).
 - Set an unmatched fallback role only when every user who can sign in should receive it.
-- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **Profile** (language, font, and Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
+- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **Profile** (language, font, and Statistics, Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
 - Identities use stable issuer and subject claims. Username collisions with local accounts remain separate.
 - Sessions have a 24-hour absolute lifetime. OIDC-only users cannot add local passkeys; password-backed local accounts retain passkey support.
 - Existing OIDC rows migrate on their next successful SSO login.
@@ -1010,16 +1010,17 @@ Rules run against locally cached CrowdSec data, create in-app notifications, rec
 
 ### Rules
 
-Every rule has a name, severity (`info`, `warning`, `critical`), incident deduplication, and destination channels. Alert rules filter scenario, target, and simulation state; the scenario filter can include or exclude matching names. `IP Ban` and `New Alert/Decision` also accept exact IP/CIDR filters. `Window Minutes` sets the rolling lookback for each rule evaluation; `Alert Spike` also compares it with the preceding period of equal length. It does not set how often rules are evaluated.
+Every rule has a name, severity (`info`, `warning`, `critical`), incident deduplication, and destination channels. Alert rules filter scenario, target, and simulation state; the scenario filter can include or exclude matching names. `IP Ban` and `New Alert/Decision` also accept exact IP/CIDR filters, and `IP Ban` can include or exclude country codes. `Window Minutes` sets the rolling lookback for each rule evaluation; `Alert Spike` also compares it with the preceding period of equal length. It does not set how often rules are evaluated.
 
 | Rule type | Behavior |
 | --- | --- |
 | `Alert Spike` | Compares the current window with the previous window and triggers when percentage increase and minimum alert count are exceeded. |
 | `Alert Threshold` | Triggers when matching alerts in the configured time window reach the threshold. |
 | `New Alert/Decision` | Creates one notification for every matching alert, decision, or both within the lookback window. Includes record ID, timestamps, scenario, target, source/value, and related alert/decision details. Stable per-record deduplication prevents repeats. |
-| `IP Ban` | Triggers once for each active ban decision in the configured window, supports exact IP/CIDR filters, and deduplicates duplicate active decision rows for the same ban. |
+| `IP Ban` | Triggers once for each active ban decision in the configured window, supports exact IP/CIDR and country filters, and deduplicates duplicate active decision rows for the same ban. |
 | `Recent CVE` | Extracts CVE IDs from matching alerts and checks publication age before notifying. |
 | `LAPI Availability` | Triggers when CrowdSec LAPI stays unavailable past the outage threshold, with optional recovery notifications. |
+| `CrowdSec Update` | Reads the CrowdSec version from each configured Prometheus endpoint and triggers when a newer stable CrowdSec release is available. |
 | `Application Update` | Uses the built-in update check and triggers when a newer CrowdSec Web UI version is available. |
 
 #### Multi-instance behavior
