@@ -78,6 +78,21 @@ export function configureStatisticsCapture(db: any, enabled: boolean): void {
 
 const BACKFILL_DONE = 'done';
 
+/**
+ * Forgets every captured observation: pending ones are dropped and all cached
+ * rows become uncaptured again, so enabled collection backfills them anew.
+ */
+export function resetStatisticsCapture(db: any): void {
+  db.transaction(() => {
+    db.exec('DELETE FROM statistics_outbox');
+    for (const table of ['alerts', 'decisions']) {
+      // The update triggers only fire for uncaptured rows, so this emits nothing.
+      db.exec(`UPDATE ${table} SET statistics_captured = 0 WHERE statistics_captured != 0`);
+      db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)').run(`statistics_backfill_${table}`, '0');
+    }
+  })();
+}
+
 export interface StatisticsOutboxRow { seq: number; identity: string; day: string; payload: string }
 
 export function readStatisticsBatch(db: any, backfill: boolean, limit = 500): {

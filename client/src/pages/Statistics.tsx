@@ -9,14 +9,18 @@ import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, X
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { ClickableTableRow } from '../components/ui/ClickableTableRow';
+import { ResetColumnWidthsButton, ResizableTable } from '../components/ui/ResizableTable';
+import { useResizableTable, type ResizableTableColumn, type ResizableTableController } from '../lib/useResizableTable';
 import { StatCard } from '../components/StatCard';
 import { ScenarioName } from '../components/ScenarioName';
 import { CountryFlag } from '../components/CountryFlag';
 import { InstanceIcon } from '../components/InstanceIcon';
 import { AddDecisionModal } from '../components/AddDecisionModal';
 import { PeriodChangeRow } from '../components/PeriodChange';
+import { RemediationPills } from '../components/RemediationPills';
+import { useRemediationTypeLabel } from '../lib/remediationTypes';
 import { usePeriodChange } from '../lib/periodChange';
-import { DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
+import { DecisionAddedBadge, DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
 import { fetchConfig } from '../lib/api';
 import { sessionFetch } from '../lib/sessionFetch';
 import { apiUrl } from '../lib/basePath';
@@ -29,15 +33,21 @@ import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { formatCustomDate } from '../../../shared/date-format';
 import type { ConfigResponse, FacetField } from '../types';
 import type { SearchDateRange } from '../../../shared/search';
-import type { StatisticsRanking, StatisticsResponse, StatisticsScenario } from '../../../shared/statistics';
+import {
+  addStatisticsDays, statisticsDay, statisticsDayStart, type StatisticsRanking, type StatisticsResponse, type StatisticsScenario,
+} from '../../../shared/statistics';
 
-const DAY = 86_400_000;
-const isoDay = (stamp: number) => new Date(stamp).toISOString().slice(0, 10);
+const HOUR = 3_600_000;
+
+const TABLE_HEADER_CELL = 'whitespace-nowrap px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 first:pl-6 last:pr-6';
+const TABLE_RIGHT_HEADER_CELL = `${TABLE_HEADER_CELL} text-right`;
+// Fits the ban button. Once the widths are fixed, the decision badge wraps instead.
+const ACTIONS_COLUMN_WIDTH = 128;
 
 /**
  * The hour containing `stamp` as an hour-precision search value (`YYYY-MM-DDTHH`) in `timeZone`,
- * the format the Alerts and Decisions quick filters use. Returns null in zones whose offset is
- * not a whole hour, where a local hour does not line up with a UTC day boundary.
+ * the format the Alerts and Decisions quick filters use. Returns null when `stamp` is not a whole
+ * hour there, as when the statistics day starts at a different offset than `timeZone` uses.
  */
 function searchHour(stamp: number, timeZone: string | null): string | null {
   try {
@@ -52,12 +62,17 @@ function searchHour(stamp: number, timeZone: string | null): string | null {
   }
 }
 
-/** The Statistics UTC day range as a quick-filter date range for the Alerts and Decisions pages. */
-function quickFilterDateRange(from: string, to: string, timeZone: string | null): SearchDateRange {
-  const start = searchHour(Date.parse(`${from}T00:00:00Z`), timeZone);
+/**
+ * The Statistics day range (days of `statisticsZone`) as a quick-filter date range for the Alerts
+ * and Decisions pages, which use `timeZone`.
+ */
+function quickFilterDateRange(from: string, to: string, statisticsZone: string, timeZone: string | null): SearchDateRange {
+  const startStamp = statisticsDayStart(from, statisticsZone);
+  const endStamp = statisticsDayStart(addStatisticsDays(to, 1), statisticsZone);
+  const start = searchHour(startStamp, timeZone);
   // An hour-precision `date<=` includes the whole hour, so the last hour of the day ends the range.
-  const end = searchHour(Date.parse(`${to}T23:00:00Z`), timeZone);
-  return start && end ? { start, end } : { start: `${from}T00:00:00Z`, end: `${to}T23:59:59.999Z` };
+  const end = searchHour(endStamp - HOUR, timeZone);
+  return start && end ? { start, end } : { start: new Date(startStamp).toISOString(), end: new Date(endStamp - 1).toISOString() };
 }
 const isIsoDay = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value));
 
@@ -68,10 +83,9 @@ const SIMULATION_MODES = ['live', 'simulated', 'all'];
 const LIMITS = ['10', '20', '50'];
 const isPreset = (value: unknown): value is Preset => PRESETS.includes(value as Preset);
 const presetRange = (preset: Preset, today: string) => {
-  const end = Date.parse(today);
   if (preset === 'today') return { from: today, to: today };
-  if (preset === 'yesterday') return { from: isoDay(end - DAY), to: isoDay(end - DAY) };
-  return { from: isoDay(end - (Number(preset) - 1) * DAY), to: today };
+  if (preset === 'yesterday') return { from: addStatisticsDays(today, -1), to: addStatisticsDays(today, -1) };
+  return { from: addStatisticsDays(today, -(Number(preset) - 1)), to: today };
 };
 
 // The last selection is remembered in this browser. Presets are stored by name so they stay relative to today.
@@ -93,13 +107,13 @@ function readStoredSelection(): StoredSelection {
   }
 }
 const formatNumber = (value: number) => value.toLocaleString();
-/** Share of alerting IPs that were banned, in whole percent, or null without single IPs. */
-const banCoverage = (bannedIPs: number, uniqueIPs: number) => (uniqueIPs > 0 ? Math.round(bannedIPs / uniqueIPs * 100) : null);
+/** Share of alerting IPs with a remediation, in whole percent, or null without single IPs. */
+const remediationCoverage = (remediatedIPs: number, uniqueIPs: number) => (uniqueIPs > 0 ? Math.round(remediatedIPs / uniqueIPs * 100) : null);
 
 // Thresholds for findings. They favour few, clear signals over many weak ones.
 const FINDINGS = {
-  /** A scenario with at least this many alerts and no ban at all. */
-  unbannedScenarioAlerts: 10,
+  /** A scenario with at least this many alerts and no remediation at all. */
+  unremediatedScenarioAlerts: 10,
   /** One AS with at least this share of all alerts, from at least this many IPs. */
   networkShare: 0.2,
   networkIPs: 5,
@@ -108,10 +122,10 @@ const FINDINGS = {
   spikeFactor: 2,
   /** A ranked IP that attacked at least this many machines. */
   wideScannerMachines: 3,
-  /** A scenario blocked in-band by AppSec with at least this many alerts and no ban. */
+  /** A scenario blocked in-band by AppSec with at least this many alerts and no remediation. */
   inBandAlerts: 10,
 } as const;
-// AppSec (WAF) rules block the request itself; bans only follow from scenarios.
+// AppSec (WAF) rules block the request itself; remediations only follow from scenarios.
 const isInBandScenario = (label: string) => /(^|\/)(vpatch-|appsec)/i.test(label);
 const PROFILE_DOCS = 'https://docs.crowdsec.net/docs/local_api/profiles/format';
 
@@ -261,7 +275,11 @@ export function Statistics() {
   const [configError, setConfigError] = useState('');
   const [reload, setReload] = useState(0);
   const [archiveChange, setArchiveChange] = useState(0);
-  const [today, setToday] = useState(() => isoDay(Date.now()));
+  const [now, setNow] = useState(() => Date.now());
+  // Days are those of the statistics time zone, known once the configuration has loaded.
+  const statisticsZone = config?.statistics?.timeZone ?? (configError ? 'UTC' : null);
+  const timeZone = statisticsZone ?? 'UTC';
+  const today = statisticsDay(now, timeZone);
   const [stored] = useState(readStoredSelection);
   // The URL wins over the stored selection, so links keep working.
   const urlPreset = params.get('range');
@@ -328,6 +346,7 @@ export function Statistics() {
     }
   }, [instance, machine, setParams]);
   useEffect(() => {
+    if (!statisticsZone) return;
     const abort = new AbortController();
     void sessionFetch(`${apiUrl('/api/statistics')}?${queryString}`, { signal: abort.signal }).then(async (response) => {
       if (!response.ok) {
@@ -340,7 +359,7 @@ export function Statistics() {
       if (!abort.signal.aborted) setResult({ key: requestKey, queryString, data: null, error: e instanceof Error ? e.message : t('pages.statistics.loadError'), retryable: true });
     });
     return () => abort.abort();
-  }, [queryString, requestKey, t]);
+  }, [queryString, requestKey, statisticsZone, t]);
   const refreshArchive = useEffectEvent((statistics: ConfigResponse['statistics']) => {
     if (!statistics) return;
     const retentionDays = statistics.settings.retentionDays;
@@ -377,7 +396,7 @@ export function Statistics() {
     };
     const poll = () => {
       if (document.visibilityState === 'hidden') return;
-      setToday(isoDay(Date.now()));
+      setNow(Date.now());
       void loadConfig(true);
     };
     void loadConfig(false);
@@ -388,7 +407,7 @@ export function Statistics() {
 
   const configuration = config?.statistics ?? data?.configuration;
   const instances = config?.instances || [];
-  // Statistics are bucketed by UTC day, so days are always formatted in UTC.
+  // Days are calendar dates, so they are formatted as such, independent of any time zone.
   const formatDay = (day: string, compact = false) => {
     const date = new Date(`${day}T00:00:00Z`);
     if (!Number.isFinite(date.getTime())) return day;
@@ -397,12 +416,12 @@ export function Statistics() {
       ? { month: 'short', day: 'numeric', timeZone: 'UTC' }
       : { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
-  // Timestamps use the configured date and time format, but stay in UTC like the rest of the page.
-  const formatTimestamp = (value: string | null | undefined) => (value ? formatDateTimeValue(value, { ...dateTime, timeZone: 'UTC' }) : '—');
+  // Timestamps use the configured date and time format in the time zone of the statistics days.
+  const formatTimestamp = (value: string | null | undefined) => (value ? formatDateTimeValue(value, { ...dateTime, timeZone }) : '—');
   /** Chart ticks for hourly series; across two days they also name the day. */
   const formatHour = (value: string, withDay: boolean) => {
-    const time = formatTimeValue(value, { ...dateTime, timeZone: 'UTC' }, { hour: '2-digit', minute: '2-digit' });
-    return withDay ? `${formatDay(value.slice(0, 10), true)} ${time}` : time;
+    const time = formatTimeValue(value, { ...dateTime, timeZone }, { hour: '2-digit', minute: '2-digit' });
+    return withDay ? `${formatDay(statisticsDay(value, timeZone), true)} ${time}` : time;
   };
   const unknown = (label: string) => (label === 'Unknown' ? t('pages.statistics.unknown') : label);
 
@@ -424,7 +443,7 @@ export function Statistics() {
   }
   const relatedQuickFilters: StoredQuickFilters = {
     selections: relatedSelections,
-    dateRange: quickFilterDateRange(from, to, dateTime.timeZone || getBrowserTimeZone()),
+    dateRange: quickFilterDateRange(from, to, timeZone, dateTime.timeZone || getBrowserTimeZone()),
     simulation: simulationsEnabled ? simulation as QuickFilterSimulationValue : 'all',
   };
   const relatedHref = (page: 'alerts' | 'decisions') => {
@@ -440,7 +459,7 @@ export function Statistics() {
   const selectRange = (values: { range: Preset } | { from: string; to: string }) => update('range' in values
     ? { range: values.range, from: null, to: null }
     : { range: null, from: values.from, to: values.to });
-  const rangeLabel = `${formatDay(from)} – ${formatDay(to)} (UTC)`;
+  const rangeLabel = `${formatDay(from)} – ${formatDay(to)}`;
   const instanceName = (id?: string) => instances.find((candidate) => candidate.id === id)?.name || id || '';
   const instanceIcon = (id?: string) => {
     const index = instances.findIndex((candidate) => candidate.id === id);
@@ -477,25 +496,13 @@ export function Statistics() {
     const attackers = kind === 'attackers';
     const actions = attackers && canBan;
     const title = t(attackers ? 'pages.dashboard.topIps' : 'pages.dashboard.topMachines');
-    const headerCell = 'whitespace-nowrap px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 first:pl-6 last:pr-6';
+    const table = attackers ? attackerTable : machineTable;
     const cell = 'px-4 py-4 align-top first:pl-6 last:pr-6';
     return (
-      <Card className="flex flex-col">
-        <SectionHeader icon={attackers ? Crosshair : Server} title={title} description={rangeLabel} />
+      <Card className="flex flex-col overflow-clip">
+        <SectionHeader icon={attackers ? Crosshair : Server} title={title} description={rangeLabel} actions={resetWidths(table)} />
         {rows.length === 0 ? <CardContent><EmptyState>{t('common.noDataAvailable')}</EmptyState></CardContent> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-900/50">
-                <tr>
-                  <th className={headerCell}>{t(attackers ? 'pages.dashboard.ip' : 'tableColumns.machine')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.bans')}</th>
-                  <th className={headerCell}>{t(attackers ? 'pages.dashboard.machines' : 'pages.statistics.uniqueIPs')}</th>
-                  <th className={headerCell}>{t('pages.statistics.activity')}</th>
-                  {actions && <th className={`${headerCell} text-right ${STICKY_ACTIONS_HEADER_CLASS_NAME}`}>{t('tableColumns.actions')}</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          <ResizableTable table={table} bodyClassName="divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => {
                   const countryName = row.country && row.country !== 'Unknown' ? getCountryName(row.country, language) ?? row.country : t('pages.statistics.unknown');
                   const asn = row.asn && row.asn !== '0' ? (/^AS/i.test(row.asn) ? row.asn : `AS${row.asn}`) : '';
@@ -503,7 +510,7 @@ export function Statistics() {
                     <ClickableTableRow key={row.value} aria-label={row.label} selected={(attackers ? ip : machine) === row.value} onSelect={() => toggleFilters({ [attackers ? 'ip' : 'machine']: row.value })}>
                       <td className={`${cell} min-w-64`}>
                         <span className="break-all font-medium text-gray-900 dark:text-gray-100">{row.label}</span>
-                        {row.returnedAfterBan && <Badge variant="danger" className="ml-2 align-middle">{t('pages.statistics.returnedAfterBan')}</Badge>}
+                        {row.returnedAfterRemediation && <Badge variant="danger" className="ml-2 align-middle">{t('pages.statistics.returnedAfterRemediation')}</Badge>}
                         {/* Like the rest of the app, instances are only named when several are configured. */}
                         {(attackers || instances.length > 1) && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                           {attackers ? <>
@@ -517,7 +524,7 @@ export function Statistics() {
                         {scenarioChips(row.scenarios)}
                       </td>
                       <td className={`${cell} text-right font-semibold tabular-nums text-gray-900 dark:text-gray-100`}>{formatNumber(row.alerts)}</td>
-                      <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
+                      <td className={`${cell} text-right`}><RemediationPills types={row.remediationTypes} /></td>
                       <td className={cell}>
                         <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{formatNumber(attackers ? row.machines : row.uniqueIPs)}</span>
                       </td>
@@ -525,11 +532,11 @@ export function Statistics() {
                       {actions && (
                         <td className={`${cell} whitespace-nowrap text-right ${STICKY_ACTIONS_CELL_CLASS_NAME}`}>
                           {decided.has(row.value)
-                            ? <Badge variant="success">{t('pages.statistics.decisionAdded')}</Badge>
+                            ? <DecisionAddedBadge />
                             : (
                               <DecisionIconButton
                                 label={t('pages.statistics.ban')}
-                                onClick={() => setPendingDecision({ value: row.value, reason: row.scenarios[0]?.label && row.scenarios[0].label !== 'Unknown' ? row.scenarios[0].label : 'manual', duration: row.returnedAfterBan ? '7d' : '4h' })}
+                                onClick={() => setPendingDecision({ value: row.value, reason: row.scenarios[0]?.label && row.scenarios[0].label !== 'Unknown' ? row.scenarios[0].label : 'manual', duration: row.returnedAfterRemediation ? '7d' : '4h' })}
                                 className="-my-2"
                               />
                             )}
@@ -538,9 +545,7 @@ export function Statistics() {
                     </ClickableTableRow>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
+          </ResizableTable>
         )}
       </Card>
     );
@@ -583,12 +588,33 @@ export function Statistics() {
   // Ranges within the last two days are charted by hour.
   const hourly = data?.granularity === 'hour';
   const compared = data && !data.coverage.comparisonPartial ? data.previousTotals : null;
-  const coverage = data ? banCoverage(data.totals.bannedIPs, data.totals.uniqueIPs) : null;
-  const previousCoverage = compared ? banCoverage(compared.bannedIPs, compared.uniqueIPs) : null;
+  const coverage = data ? remediationCoverage(data.totals.remediatedIPs, data.totals.uniqueIPs) : null;
+  const previousCoverage = compared ? remediationCoverage(compared.remediatedIPs, compared.uniqueIPs) : null;
   const delta = (current: number, previous: number | undefined, better: TileDelta['better']): TileDelta | null => (compared && previous !== undefined ? { current, previous, better } : null);
+  const decisionTypeLabel = useRemediationTypeLabel();
   const machineName = (value: string, label?: string) => label || (() => { try { return (JSON.parse(value) as string[])[1]; } catch { return value; } })();
 
   const canBan = config?.permissions?.can_manage_enforcement !== false;
+  const rankingColumns = (attackers: boolean): ResizableTableColumn[] => [
+    { id: attackers ? 'ip' : 'machine', label: t(attackers ? 'pages.dashboard.ip' : 'tableColumns.machine'), className: TABLE_HEADER_CELL },
+    { id: 'alerts', label: t('pages.statistics.alerts'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'remediations', label: t('pages.statistics.remediations'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: attackers ? 'machines' : 'uniqueIPs', label: t(attackers ? 'pages.dashboard.machines' : 'pages.statistics.uniqueIPs'), className: TABLE_HEADER_CELL },
+    { id: 'activity', label: t('pages.statistics.activity'), className: TABLE_HEADER_CELL },
+    ...(attackers && canBan ? [{ id: 'actions', label: t('tableColumns.actions'), className: `${TABLE_RIGHT_HEADER_CELL} ${STICKY_ACTIONS_HEADER_CLASS_NAME}`, fixedWidth: ACTIONS_COLUMN_WIDTH }] : []),
+  ];
+  const attackerTable = useResizableTable('statistics-attackers', rankingColumns(true));
+  const machineTable = useResizableTable('statistics-machines', rankingColumns(false));
+  const scenarioTableWidths = useResizableTable('statistics-scenarios', [
+    { id: 'scenario', label: t('tableColumns.scenario'), className: TABLE_HEADER_CELL },
+    { id: 'alerts', label: t('pages.statistics.alerts'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'uniqueIPs', label: t('pages.statistics.uniqueIPs'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'machines', label: t('pages.dashboard.machines'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'remediations', label: t('pages.statistics.remediations'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'coverage', label: t('pages.statistics.remediationCoverage'), className: TABLE_RIGHT_HEADER_CELL },
+    { id: 'activity', label: t('pages.statistics.activity'), className: TABLE_HEADER_CELL },
+  ]);
+  const resetWidths = (table: ResizableTableController) => table.columnWidths.hasCustomWidths && <ResetColumnWidthsButton table={table} />;
   const [pendingDecision, setPendingDecision] = useState<{ value: string; values?: string[]; reason: string; duration: string } | null>(null);
   const [decidedByValue, setDecidedByValue] = useState<Map<string, Set<string>>>(() => new Map());
   const visibleInstanceIds = instance === 'all' ? instances.map(({ id }) => id) : [instance];
@@ -604,19 +630,19 @@ export function Statistics() {
     data.quietMachines.forEach((row) => findings.push({ key: `quiet-${row.value}`, severity: 'warning',
       text: t('pages.statistics.findingQuietMachine', { machine: machineName(row.value, row.label), count: formatNumber(row.previous) }),
       detail: { kind: 'machines', machines: [row.value] } }));
-    // Alerts that never lead to a ban point at a profile or remediation gap.
-    const unbanned = data.scenarios.filter((row) => row.bans === 0);
-    unbanned.filter((row) => !isInBandScenario(row.label) && row.count >= FINDINGS.unbannedScenarioAlerts).forEach((row) => findings.push({
-      key: `unbanned-${row.label}`, severity: 'warning',
-      text: t('pages.statistics.findingUnbannedScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
-      help: { text: t('pages.statistics.findingUnbannedScenarioHelp'), href: PROFILE_DOCS },
+    // Alerts that never lead to a remediation point at a profile gap.
+    const unremediated = data.scenarios.filter((row) => row.remediations === 0);
+    unremediated.filter((row) => !isInBandScenario(row.label) && row.count >= FINDINGS.unremediatedScenarioAlerts).forEach((row) => findings.push({
+      key: `unremediated-${row.label}`, severity: 'warning',
+      text: t('pages.statistics.findingUnremediatedScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
+      help: { text: t('pages.statistics.findingUnremediatedScenarioHelp'), href: PROFILE_DOCS },
       action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
       detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
     }));
-    if (data.totals.returnedAfterBan > 0) {
+    if (data.totals.returnedAfterRemediation > 0) {
       findings.push({ key: 'returned', severity: 'warning',
-        text: t('pages.statistics.findingReturnedAfterBan', { count: formatNumber(data.totals.returnedAfterBan) }),
-        help: { text: t('pages.statistics.findingReturnedAfterBanHelp'), href: `${PROFILE_DOCS}#duration_expr` },
+        text: t('pages.statistics.findingReturnedAfterRemediation', { count: formatNumber(data.totals.returnedAfterRemediation) }),
+        help: { text: t('pages.statistics.findingReturnedAfterRemediationHelp'), href: `${PROFILE_DOCS}#duration_expr` },
         detail: { kind: 'returned', history: compare, decision: { reason: t('pages.statistics.reasonReturned'), duration: '7d' } } });
     }
     if (compare) {
@@ -627,7 +653,7 @@ export function Statistics() {
         detail: { kind: 'machines', machines: [row.value] },
       }));
     }
-    unbanned.filter((row) => isInBandScenario(row.label) && row.count >= FINDINGS.inBandAlerts).forEach((row) => findings.push({
+    unremediated.filter((row) => isInBandScenario(row.label) && row.count >= FINDINGS.inBandAlerts).forEach((row) => findings.push({
       key: `inband-${row.label}`, severity: 'info',
       text: t('pages.statistics.findingInBandScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
       help: { text: t('pages.statistics.findingInBandScenarioHelp') },
@@ -663,28 +689,14 @@ export function Statistics() {
   };
 
   const scenarioTable = (rows: StatisticsScenario[]) => {
-    const headerCell = 'whitespace-nowrap px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 first:pl-6 last:pr-6';
     const cell = 'px-4 py-3 align-top first:pl-6 last:pr-6';
     return (
-      <Card className="flex flex-col">
-        <SectionHeader icon={ShieldAlert} title={t('pages.dashboard.topScenarios')} description={t('pages.statistics.scenariosHelp')} />
+      <Card className="flex flex-col overflow-clip">
+        <SectionHeader icon={ShieldAlert} title={t('pages.dashboard.topScenarios')} description={t('pages.statistics.scenariosHelp')} actions={resetWidths(scenarioTableWidths)} />
         {rows.length === 0 ? <CardContent><EmptyState>{t('common.noDataAvailable')}</EmptyState></CardContent> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-900/50">
-                <tr>
-                  <th className={headerCell}>{t('tableColumns.scenario')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.uniqueIPs')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.dashboard.machines')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.bans')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.banCoverage')}</th>
-                  <th className={headerCell}>{t('pages.statistics.activity')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          <ResizableTable table={scenarioTableWidths} bodyClassName="divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => {
-                  const share = banCoverage(row.bannedIPs, row.uniqueIPs);
+                  const share = remediationCoverage(row.remediatedIPs, row.uniqueIPs);
                   const change = row.previous === null || row.previous === 0 ? null : Math.round((row.count - row.previous) / row.previous * 100);
                   return (
                     <ClickableTableRow key={row.label} aria-label={row.label} selected={scenario === row.label} onSelect={() => toggleFilters({ scenario: row.label })}>
@@ -700,15 +712,13 @@ export function Statistics() {
                       </td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.uniqueIPs)}</td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.machines)}</td>
-                      <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
-                      <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && row.count >= FINDINGS.unbannedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{share === null ? '—' : `${share}%`}</td>
+                      <td className={`${cell} text-right`}><RemediationPills types={row.remediationTypes} /></td>
+                      <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && row.count >= FINDINGS.unremediatedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{share === null ? '—' : `${share}%`}</td>
                       <td className={`${cell} whitespace-nowrap`}>{activity(row)}</td>
                     </ClickableTableRow>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
+          </ResizableTable>
         )}
       </Card>
     );
@@ -730,11 +740,11 @@ export function Statistics() {
           />
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="space-y-1.5">
-              <label htmlFor="statistics-from" className={labelClass}>{t('pages.statistics.from')} (UTC)</label>
+              <label htmlFor="statistics-from" className={labelClass}>{t('pages.statistics.from')}</label>
               <input id="statistics-from" type="date" max={to} value={from} className={inputClass} onChange={(e) => { if (e.target.value) selectRange({ from: e.target.value, to }); }} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="statistics-to" className={labelClass}>{t('pages.statistics.to')} (UTC)</label>
+              <label htmlFor="statistics-to" className={labelClass}>{t('pages.statistics.to')}</label>
               <input id="statistics-to" type="date" min={from} max={today} value={to} className={inputClass} onChange={(e) => { if (e.target.value) selectRange({ from, to: e.target.value }); }} />
             </div>
             {simulationsEnabled && <div className="space-y-1.5">
@@ -754,7 +764,7 @@ export function Statistics() {
           </div>
           <p className="flex items-start gap-1.5 text-xs leading-5 text-gray-500 dark:text-gray-400">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            {t('pages.statistics.rangeHint')}
+            {t('pages.statistics.rangeHint', { timeZone })}
           </p>
           {(ip || machine || scenario || country || network || target) && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-gray-100 pt-4 text-sm dark:border-gray-700/50">
@@ -783,7 +793,7 @@ export function Statistics() {
         {configuration && (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-500 sm:px-6 dark:border-gray-700/50 dark:bg-gray-900/40 dark:text-gray-400">
             <span className="inline-flex items-center gap-1.5"><Database className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.retainedDays', { count: configuration.settings.retentionDays })}</span>
-            <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.lastUpdate')}: {formatTimestamp(configuration.status.lastSuccess)} UTC</span>
+            <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.lastUpdate')}: {formatTimestamp(configuration.status.lastSuccess)}</span>
             <span>{t('pages.statistics.backlog')}: <span className="tabular-nums">{formatNumber(configuration.status.backlog)}</span></span>
             {configuration.status.backfillPending && <Badge variant="info">{t('pages.statistics.backfilling')}</Badge>}
             {!configuration.settings.enabled && <Badge>{t('common.disabled')}</Badge>}
@@ -795,7 +805,7 @@ export function Statistics() {
         <Notice tone="warning">
           <p>{t('pages.statistics.partial')}</p>
           <p className="mt-1 text-xs opacity-80">
-            {t('pages.statistics.coverage')}: {data.coverage.from ? formatDay(data.coverage.from.slice(0, 10)) : '—'} – {formatTimestamp(data.coverage.through)} UTC
+            {t('pages.statistics.coverage')}: {data.coverage.from ? formatDay(statisticsDay(data.coverage.from, timeZone)) : '—'} – {formatTimestamp(data.coverage.through)}
           </p>
         </Notice>
       )}
@@ -828,19 +838,20 @@ export function Statistics() {
           <SummaryTile icon={Users} title={t('pages.statistics.uniqueIPs')} value={data.totals.uniqueIPs} deltaLabel={t('pages.statistics.vsPrevious')}
             hint={data.totals.newIPs === null ? undefined : t('pages.statistics.newIPs', { count: formatNumber(data.totals.newIPs) })}
             delta={delta(data.totals.uniqueIPs, compared?.uniqueIPs, 'down')} />
-          <SummaryTile icon={Gavel} tone="decision" title={t('pages.statistics.bans')} value={data.totals.bans} deltaLabel={t('pages.statistics.vsPrevious')}
-            delta={delta(data.totals.bans, compared?.bans, 'neutral')} />
-          <SummaryTile icon={ShieldCheck} tone="decision" title={t('pages.statistics.banCoverage')} value={coverage === null ? '—' : `${coverage}%`} deltaLabel={t('pages.statistics.vsPrevious')}
-            hint={t('pages.statistics.bannedIPs', { banned: formatNumber(data.totals.bannedIPs), total: formatNumber(data.totals.uniqueIPs) })}
+          <SummaryTile icon={Gavel} tone="decision" title={t('pages.statistics.remediations')} value={data.totals.remediations} deltaLabel={t('pages.statistics.vsPrevious')}
+            hint={data.remediationTypes.map((row) => `${decisionTypeLabel(row.label)} ${formatNumber(row.count)}`).join(' · ') || undefined}
+            delta={delta(data.totals.remediations, compared?.remediations, 'neutral')} />
+          <SummaryTile icon={ShieldCheck} tone="decision" title={t('pages.statistics.remediationCoverage')} value={coverage === null ? '—' : `${coverage}%`} deltaLabel={t('pages.statistics.vsPrevious')}
+            hint={t('pages.statistics.remediatedIPs', { remediated: formatNumber(data.totals.remediatedIPs), total: formatNumber(data.totals.uniqueIPs) })}
             delta={coverage !== null && previousCoverage !== null ? { ...delta(coverage, previousCoverage, 'up')!, points: true } : null} />
           <SummaryTile icon={Repeat} title={t('pages.statistics.repeatAttackers')} value={data.totals.repeatAttackers} deltaLabel={t('pages.statistics.vsPrevious')}
             hint={t('pages.statistics.repeatAttackersHelp')} delta={delta(data.totals.repeatAttackers, compared?.repeatAttackers, 'down')} />
-          <SummaryTile icon={RotateCcw} tone="alert" title={t('pages.statistics.returnedAfterBan')} value={data.totals.returnedAfterBan} deltaLabel={t('pages.statistics.vsPrevious')}
-            hint={t('pages.statistics.returnedAfterBanHelp')} />
+          <SummaryTile icon={RotateCcw} tone="alert" title={t('pages.statistics.returnedAfterRemediation')} value={data.totals.returnedAfterRemediation} deltaLabel={t('pages.statistics.vsPrevious')}
+            hint={t('pages.statistics.returnedAfterRemediationHelp')} />
         </div>
 
         <Card>
-          <SectionHeader icon={TrendingUp} title={t('components.dashboardCharts.activityHistory')} description={t('pages.statistics.countingHelp')} />
+          <SectionHeader icon={TrendingUp} title={t('components.dashboardCharts.activityHistory')} description={t('pages.statistics.activityHistoryHelp')} />
           <CardContent>
             <div className="h-72 min-w-0" role="img" aria-label={t('components.dashboardCharts.activityHistory')}>
               <ResponsiveContainer width="100%" height="100%">
@@ -848,7 +859,7 @@ export function Statistics() {
                   <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
                   <XAxis dataKey="date" {...axisProps} tickFormatter={(value: string) => (hourly ? formatHour(value, from !== to) : formatDay(value, true))} minTickGap={hourly && from !== to ? 48 : 32} />
                   <YAxis {...axisProps} allowDecimals={false} width={48} tickFormatter={formatNumber} />
-                  <Tooltip content={<ChartTooltip formatLabel={(value) => (hourly ? `${formatTimestamp(String(value))} UTC` : formatDay(String(value)))} />} />
+                  <Tooltip content={<ChartTooltip formatLabel={(value) => (hourly ? formatTimestamp(String(value)) : formatDay(String(value)))} />} />
                   <Legend verticalAlign="top" height={36} iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 13 }} />
                   <Line type="monotone" dataKey="alerts" name={t('pages.statistics.alerts')} stroke={DASHBOARD_COLORS.liveAlerts} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />
                   <Line type="monotone" dataKey="decisions" name={t('pages.statistics.decisions')} stroke={DASHBOARD_COLORS.liveDecisions} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />

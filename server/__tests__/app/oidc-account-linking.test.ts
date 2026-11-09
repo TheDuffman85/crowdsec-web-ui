@@ -10,6 +10,7 @@ const CLIENT_ID = 'crowdsec-client';
 const BASE = 'https://ui.example.com/crowdsec';
 const PASSWORD = 'Password1';
 const ACCOUNT_COOKIE_PREFIX = 'crowdsec_web_ui_oidc_link_';
+const DENIED_LOGIN_URL = `${BASE}/login?oidcError=denied`;
 
 let signingKey: CryptoKey;
 let publicJwk: JWK;
@@ -516,7 +517,7 @@ describe('linking local and SSO sign-in', () => {
       const sso = browser();
       await ssoSignIn(sso);
 
-      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).status).toBe(403);
+      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).headers.get('location')).toBe(DENIED_LOGIN_URL);
       expect(await sso.me()).toBeNull();
       expect(await local.me()).toMatchObject({ role: 'admin' });
       await signedIn();
@@ -655,7 +656,7 @@ describe('linking local and SSO sign-in', () => {
       const local = await linkedAdmin();
       expect((await unlink(local)).status).toBe(400);
 
-      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).status).toBe(403);
+      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).headers.get('location')).toBe(DENIED_LOGIN_URL);
       expect((await unlink(local)).status).toBe(200);
       expect(database.getAuthUserById(adminId)).toMatchObject({ role: 'read-only', oidc_subject: null });
     });
@@ -666,7 +667,7 @@ describe('linking local and SSO sign-in', () => {
       addLinkedUser('denied');
       const stale = ssoSessionOf(addLinkedUser('stale', OTHER_ISSUER));
 
-      expect((await ssoSignIn(browser(), identity({ sub: 'denied-sub', groups: ['strangers'] }))).status).toBe(403);
+      expect((await ssoSignIn(browser(), identity({ sub: 'denied-sub', groups: ['strangers'] }))).headers.get('location')).toBe(DENIED_LOGIN_URL);
       expect((await stale.request(`/api/auth/users/${bossId}`, { method: 'DELETE' })).status).toBe(400);
     });
 
@@ -676,7 +677,7 @@ describe('linking local and SSO sign-in', () => {
       const ssoId = addSsoAccount();
       const stale = ssoSessionOf(addLinkedUser('stale', OTHER_ISSUER));
 
-      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).status).toBe(403);
+      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).headers.get('location')).toBe(DENIED_LOGIN_URL);
       expect(database.getAuthUserById(ssoId)?.role).toBe('read-only');
       expect((await stale.request(`/api/auth/users/${bossId}`, { method: 'DELETE' })).status).toBe(400);
 
@@ -687,7 +688,7 @@ describe('linking local and SSO sign-in', () => {
     test('denying an identity leaves the role of an account with a password alone', async () => {
       database.db.prepare('UPDATE auth_users SET auth_provider = ?, oidc_issuer = ?, oidc_subject = ? WHERE id = ?').run('oidc', ISSUER, 'alice-sub', adminId);
 
-      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).status).toBe(403);
+      expect((await ssoSignIn(browser(), identity({ groups: ['strangers'] }))).headers.get('location')).toBe(DENIED_LOGIN_URL);
       expect(database.getAuthUserById(adminId)?.role).toBe('admin');
     });
 

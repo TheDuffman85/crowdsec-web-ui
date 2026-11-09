@@ -1,4 +1,5 @@
 import { StatisticsSettings } from '../components/StatisticsSettings';
+import { DangerZoneSettings } from '../components/DangerZoneSettings';
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import i18next from "i18next";
 import QRCode from "qrcode";
@@ -1298,6 +1299,14 @@ export function Settings() {
                             renderManagedLock={renderManagedLock}
                             showToast={showToast}
                             disabled={!canManageSettings}
+                        />
+                    )}
+                    {config && (
+                        <DangerZoneSettings
+                            canDeleteCache={config.permissions?.can_manage_enforcement !== false}
+                            canDeleteStatistics={canManageSettings}
+                            showStatistics={Boolean(config.statistics)}
+                            showToast={showToast}
                         />
                     )}
                 </TabPanel>

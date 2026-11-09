@@ -22,16 +22,16 @@ vi.mock('recharts', () => ({
   CartesianGrid: () => null, XAxis: () => null, YAxis: () => null, Tooltip: () => null, Legend: () => null, Line: () => null, Bar: () => null,
 }));
 const i18n: I18nContextValue = { language: 'en', preference: 'en', browserLanguage: 'en', setLanguagePreference: () => {}, t: (key, values = {}) => Object.entries(values).reduce((message, [name, value]) => message.replaceAll(`{${name}}`, String(value)), (en as Record<string, string>)[key] || key) };
-const configuration: StatisticsConfiguration = { settings: { ...DEFAULT_STATISTICS_SETTINGS, enabled: true }, managed: {}, status: { running: false, lastSuccess: '2026-11-07T12:00:00Z', backlog: 0, backfillPending: false, error: null, revision: 1 } };
+const configuration: StatisticsConfiguration = { settings: { ...DEFAULT_STATISTICS_SETTINGS, enabled: true }, managed: {}, status: { running: false, lastSuccess: '2026-11-07T12:00:00Z', backlog: 0, backfillPending: false, error: null, revision: 1 }, timeZone: 'UTC' };
 function payload(): StatisticsResponse {
   return {
     filters: { from: '2026-10-09', to: '2026-11-07', instance: 'all', simulation: 'live', limit: 10 }, revision: 1, configuration,
     coverage: { from: '2026-11-01T00:00:00Z', through: '2026-11-07T12:00:00Z', partial: true, comparisonPartial: true },
-    totals: { alerts: 12, events: 48, uniqueIPs: 1, bans: 2, decisions: 3, repeatAttackers: 1, bannedIPs: 1, returnedAfterBan: 0, newIPs: null },
+    totals: { alerts: 12, events: 48, uniqueIPs: 1, remediations: 2, decisions: 3, repeatAttackers: 1, remediatedIPs: 1, returnedAfterRemediation: 0, newIPs: null },
     previousTotals: null, targets: [{ label: 'web.example.com', count: 9, uniqueIPs: 1 }],
-    attackers: [{ value: '192.0.2.7', label: '192.0.2.7', alerts: 12, events: 48, uniqueIPs: 1, bans: 2, machines: 1, activeDays: 3, firstActivity: '2026-11-01T10:00:00Z', lastActivity: '2026-11-07T11:00:00Z', country: 'DE', asn: '42', network: 'Example', scenarios: [{ label: 'ssh', count: 12 }], targetedMachines: [{ value: '["default","m-1"]', label: 'Server one', count: 12 }] }],
-    machines: [{ value: '["default","m-1"]', label: 'Server one', instance: 'default', machineId: 'm-1', alerts: 12, events: 48, uniqueIPs: 1, bans: 2, machines: 1, activeDays: 3, firstActivity: null, lastActivity: null, country: 'DE', asn: '42', network: 'Example', scenarios: [], targetedMachines: [] }],
-    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, bans: 2, bannedIPs: 1, activeDays: 3, firstActivity: '2026-11-05T08:00:00Z', lastActivity: '2026-11-07T09:30:00Z', previous: null }], countries: [], networks: [], decisionTypes: [], decisionOrigins: [], increases: [], decreases: [], quietMachines: [],
+    attackers: [{ value: '192.0.2.7', label: '192.0.2.7', alerts: 12, events: 48, uniqueIPs: 1, remediations: 2, remediationTypes: [{ label: 'ban', count: 1 }, { label: 'captcha', count: 1 }], machines: 1, activeDays: 3, firstActivity: '2026-11-01T10:00:00Z', lastActivity: '2026-11-07T11:00:00Z', country: 'DE', asn: '42', network: 'Example', scenarios: [{ label: 'ssh', count: 12 }], targetedMachines: [{ value: '["default","m-1"]', label: 'Server one', count: 12 }] }],
+    machines: [{ value: '["default","m-1"]', label: 'Server one', instance: 'default', machineId: 'm-1', alerts: 12, events: 48, uniqueIPs: 1, remediations: 2, remediationTypes: [{ label: 'ban', count: 2 }], machines: 1, activeDays: 3, firstActivity: null, lastActivity: null, country: 'DE', asn: '42', network: 'Example', scenarios: [], targetedMachines: [] }],
+    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, remediations: 2, remediatedIPs: 1, remediationTypes: [{ label: 'ban', count: 2 }], activeDays: 3, firstActivity: '2026-11-05T08:00:00Z', lastActivity: '2026-11-07T09:30:00Z', previous: null }], countries: [], networks: [], remediationTypes: [{ label: 'ban', count: 2 }, { label: 'captcha', count: 1 }, { label: 'throttle', count: 1 }], decisionTypes: [], decisionOrigins: [], increases: [], decreases: [], quietMachines: [],
   };
 }
 function Location() { const location = useLocation(); return <output data-testid="location">{location.pathname}{location.search}</output>; }
@@ -54,21 +54,51 @@ describe('Statistics page', () => {
     expect(within(topTargets as HTMLElement).getByText('75.0%')).toBeInTheDocument();
     expect(within(topTargets as HTMLElement).getByText('1 IPs')).toBeInTheDocument();
     expect(screen.getByRole('row', { name: '192.0.2.7' })).toBeInTheDocument();
+    // Remediations cover every decision type and name them on their tile.
+    expect(screen.getByText('Ban 2 · Captcha 1 · throttle 1')).toBeInTheDocument();
     // Like on the Alerts page, the ban action has its own column.
     const topIps = screen.getByRole('row', { name: '192.0.2.7' }).closest('table')!;
+    // Remediation columns show one pill per decision type.
+    const attacker = within(screen.getByRole('row', { name: '192.0.2.7' }));
+    expect(attacker.getByText('Ban 1')).toBeInTheDocument();
+    expect(attacker.getByText('Captcha 1')).toBeInTheDocument();
+    expect(within(screen.getByRole('row', { name: 'ssh' })).getByText('Ban 2')).toBeInTheDocument();
     expect(within(topIps).getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
     expect(within(topIps).getByRole('button', { name: 'Ban' }).closest('td')).toBe(within(topIps).getAllByRole('cell').at(-1));
     // Activity names its first and last timestamps, in Top IPs and Top Scenarios alike.
-    expect(within(topIps).getByRole('columnheader', { name: 'Activity (UTC)' })).toBeInTheDocument();
+    expect(within(topIps).getByRole('columnheader', { name: 'Activity' })).toBeInTheDocument();
     expect(within(topIps).getAllByRole('cell').at(-2)).toHaveTextContent('3 days activeFirst seen11/1/2026, 10:00:00 AMLast seen11/7/2026, 11:00:00 AM');
     const topScenarios = screen.getByRole('row', { name: 'ssh' }).closest('table')!;
-    expect(within(topScenarios).getAllByRole('columnheader').at(-1)).toHaveTextContent('Activity (UTC)');
+    expect(within(topScenarios).getAllByRole('columnheader').at(-1)).toHaveTextContent('Activity');
     expect(within(topScenarios).getAllByRole('cell').at(-1)).toHaveTextContent('3 days activeFirst seen11/5/2026, 8:00:00 AMLast seen11/7/2026, 9:30:00 AM');
     // With one instance, Top Machines does not name it, like the rest of the app.
     expect(screen.queryByText('Production')).not.toBeInTheDocument();
     expect(screen.getByText(/Counts reflect observed data/)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Machine Changes' })).not.toBeInTheDocument();
     expect(sessionFetch).toHaveBeenCalledWith(expect.stringContaining('/api/statistics?'), expect.anything());
+  });
+
+  test('resizes the columns of a table, keeps the widths per table and resets them', async () => {
+    mount();
+    const topIps = (await screen.findByRole('row', { name: '192.0.2.7' })).closest('table')!;
+    const topScenarios = screen.getByRole('row', { name: 'ssh' }).closest('table')!;
+    // Like on the Alerts page, the table scrolls sideways with fading edges, and the Actions column keeps its size.
+    expect(topIps.closest('[data-horizontal-scroller]')).not.toBeNull();
+    expect(within(topIps).queryByRole('separator', { name: 'Resize Actions column' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset widths' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(within(topIps).getByRole('separator', { name: 'Resize IP column' }), { key: 'ArrowRight' });
+
+    expect(topIps).toHaveAttribute('data-column-widths', 'fixed');
+    expect(topScenarios).not.toHaveAttribute('data-column-widths');
+    const stored = JSON.parse(localStorage.getItem('crowdsec-web-ui:statistics-attackers:table-column-widths')!) as Record<string, number>;
+    expect(stored.ip).toBe(stored.alerts + 16);
+    expect(Array.from(topIps.querySelectorAll('col'), (col) => col.style.width).at(-1)).toBe('128px');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset widths' }));
+    expect(topIps).not.toHaveAttribute('data-column-widths');
+    expect(localStorage.getItem('crowdsec-web-ui:statistics-attackers:table-column-widths')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset widths' })).not.toBeInTheDocument();
   });
 
   test('keeps ranking limits and attacker filters in the URL and builds UTC investigation links', async () => {
@@ -101,6 +131,20 @@ describe('Statistics page', () => {
       simulation: 'live',
     });
     expect(screen.getByTestId('location').textContent).toBe(`/alerts${target.search}`);
+  });
+
+  test('uses the days and timestamps of the statistics time zone', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue({ statistics: { ...configuration, timeZone: 'Europe/Berlin' }, lookback_days: 7, instances: [{ id: 'default', name: 'Production' }] } as ConfigResponse);
+    mount(<DateTimeContext.Provider value={createDateTimeContextValue({ ...DEFAULT_DATE_TIME_SETTINGS, timeZone: 'Europe/Berlin' })}><Statistics /></DateTimeContext.Provider>);
+    const attacker = await screen.findByRole('row', { name: '192.0.2.7' });
+    expect(screen.getByText(/Statistics use calendar days in Europe\/Berlin\. Dashboard totals/)).toBeInTheDocument();
+    expect(within(attacker).getAllByRole('cell').at(-2)).toHaveTextContent('First seen11/1/2026, 11:00:00 AMLast seen11/7/2026, 12:00:00 PM');
+    // The statistics request waits for the zone, so it is sent once.
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+    // Statistics days and the quick filters share the zone, so the range maps to whole local days.
+    fireEvent.click(within(attacker).getAllByRole('cell')[1]);
+    const link = new URL((await screen.findByRole('link', { name: 'View Alerts' })).getAttribute('href')!, 'http://localhost');
+    expect(link.searchParams.get('q')).toContain('date>=2026-10-09T00 AND date<=2026-11-07T23');
   });
 
   test.each(['Enter', ' '])('opens ranking rows with the %j key', async (key) => {
@@ -215,11 +259,11 @@ describe('Statistics page', () => {
     vi.mocked(sessionFetch).mockImplementation(async () => Response.json({
       ...data,
       coverage: { ...data.coverage, partial: false, comparisonPartial: false },
-      totals: { ...data.totals, alerts: 200, uniqueIPs: 40, bannedIPs: 30, returnedAfterBan: 4, newIPs: 25 },
-      previousTotals: { alerts: 100, bans: 2, decisions: 3, uniqueIPs: 40, bannedIPs: 20, repeatAttackers: 1 },
+      totals: { ...data.totals, alerts: 200, uniqueIPs: 40, remediatedIPs: 30, returnedAfterRemediation: 4, newIPs: 25 },
+      previousTotals: { alerts: 100, remediations: 2, decisions: 3, uniqueIPs: 40, remediatedIPs: 20, repeatAttackers: 1 },
       scenarios: [
-        { label: 'crowdsecurity/http-probing', count: 150, uniqueIPs: 30, machines: 2, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: null, lastActivity: null, previous: 0 },
-        { label: 'crowdsecurity/ssh-bf', count: 50, uniqueIPs: 10, machines: 1, bans: 30, bannedIPs: 10, activeDays: 1, firstActivity: null, lastActivity: null, previous: 50 },
+        { label: 'crowdsecurity/http-probing', count: 150, uniqueIPs: 30, machines: 2, remediations: 0, remediatedIPs: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: 0 },
+        { label: 'crowdsecurity/ssh-bf', count: 50, uniqueIPs: 10, machines: 1, remediations: 30, remediatedIPs: 10, remediationTypes: [{ label: 'ban', count: 30 }], activeDays: 1, firstActivity: null, lastActivity: null, previous: 50 },
       ],
       networks: [{ label: 'Example Cloud', count: 120, uniqueIPs: 25 }],
       quietMachines: [{ value: web, label: 'Web', previous: 80 }],
@@ -230,8 +274,8 @@ describe('Statistics page', () => {
     const showMore = within(findings).getByRole('button', { name: 'Show 1 more' });
     expect(within(findings).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
       expect.stringMatching(/Web raised no alerts in this period, after 80/),
-      expect.stringMatching(/crowdsecurity\/http-probing raised 150 alerts from 30 IPs without a single ban/),
-      expect.stringMatching(/4 IPs attacked again on a later day after being banned/),
+      expect.stringMatching(/crowdsecurity\/http-probing raised 150 alerts from 30 IPs without a single remediation/),
+      expect.stringMatching(/4 IPs attacked again on a later day after a remediation/),
       expect.stringMatching(/Server one received 60 alerts, up from 10/),
       expect.stringMatching(/New attack type: crowdsecurity\/http-probing/),
     ]);
@@ -243,7 +287,7 @@ describe('Statistics page', () => {
     expect(within(findings).getAllByRole('button').at(-1)).toBe(showFewer);
     fireEvent.click(showFewer);
     expect(within(findings).getAllByRole('listitem')).toHaveLength(5);
-    // Alerts doubled; ban coverage rose from 50% to 75%.
+    // Alerts doubled; remediation coverage rose from 50% to 75%.
     expect(screen.getByText('+100%')).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
     expect(screen.getByText('+25 pp')).toBeInTheDocument();
@@ -269,20 +313,20 @@ describe('Statistics page', () => {
       if (String(url).includes('/api/statistics/details')) {
         detailUrls.push(String(url));
         const query = new URLSearchParams(String(url).split('?')[1]);
-        if (query.get('kind') === 'returned') return Response.json({ kind: 'returned', ips: [{ ip: '203.0.113.9', alerts: 7, bans: 1, machines: 1, activeDays: 3, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z', firstBan: '2026-11-02', bannedBefore: false }], total: 1 });
+        if (query.get('kind') === 'returned') return Response.json({ kind: 'returned', ips: [{ ip: '203.0.113.9', alerts: 7, remediations: 1, remediationTypes: [{ label: 'ban', count: 1 }], machines: 1, activeDays: 3, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z', firstRemediation: '2026-11-02', remediatedBefore: false }], total: 1 });
         return Response.json({ kind: 'ips', ranges: [{ range: '198.51.100.0/24', ips: 6, alerts: 40 }], rangeTotal: 1, ips: [], total: 0 });
       }
       return Response.json({
         ...data,
-        totals: { ...data.totals, alerts: 200, returnedAfterBan: 1 },
-        scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 709, uniqueIPs: 93, machines: 1, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: null, lastActivity: null, previous: null }],
+        totals: { ...data.totals, alerts: 200, returnedAfterRemediation: 1 },
+        scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 709, uniqueIPs: 93, machines: 1, remediations: 0, remediatedIPs: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: null }],
         networks: [{ label: 'Example Cloud', count: 120, uniqueIPs: 25 }],
       } satisfies StatisticsResponse);
     });
     mount();
     // AppSec blocks in-band, so it is not reported as a missing remediation.
     expect(await screen.findByText(/crowdsecurity\/vpatch-env-access \(AppSec\) blocked 709 requests from 93 IPs/)).toBeInTheDocument();
-    expect(screen.queryByText(/without a single ban/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/without a single remediation/)).not.toBeInTheDocument();
 
     const returned = screen.getByText(/1 IPs attacked again/).closest('li')!;
     const summary = within(returned).getByRole('button', { name: /IPs attacked again/ });
@@ -299,14 +343,14 @@ describe('Statistics page', () => {
     fireEvent.click(summary);
     await within(returned).findByText('203.0.113.9');
     expect(within(returned).getByRole('link', { name: 'Learn more' })).toHaveAttribute('href', expect.stringContaining('#duration_expr'));
-    // The preceding period is incomplete, so earlier bans are not searched.
+    // The preceding period is incomplete, so earlier remediations are not searched.
     expect(new URLSearchParams(detailUrls[0].split('?')[1]).get('history')).toBeNull();
     fireEvent.click(within(returned).getByRole('button', { name: 'Ban' }));
     expect(await screen.findByLabelText('Duration')).toHaveValue('7d');
     expect(screen.getByLabelText('IP / Range')).toHaveValue('203.0.113.9');
     fireEvent.click(screen.getByRole('button', { name: 'Add Decision' }));
     expect(await within(returned).findByText('Decision added')).toBeInTheDocument();
-    expect(addDecision).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.9', duration: '7d', reason: 'Returned after ban' }));
+    expect(addDecision).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.9', duration: '7d', reason: 'Returned after remediation' }));
 
     const network = screen.getByText(/Example Cloud accounts for 60%/).closest('li')!;
     fireEvent.click(within(network).getByRole('button', { name: /Example Cloud accounts for/ }));
@@ -321,9 +365,9 @@ describe('Statistics page', () => {
     vi.mocked(sessionFetch).mockImplementation(async (url) => {
       if (String(url).includes('/api/statistics/details')) return Response.json({
         kind: 'ips', ranges: [], rangeTotal: 0, total: 2,
-        ips: ['203.0.113.9', '203.0.113.10'].map((ip) => ({ ip, alerts: 7, bans: 0, machines: 1, activeDays: 1, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z' })),
+        ips: ['203.0.113.9', '203.0.113.10'].map((ip) => ({ ip, alerts: 7, remediations: 0, remediationTypes: [], machines: 1, activeDays: 1, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z' })),
       });
-      return Response.json({ ...data, scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 14, uniqueIPs: 2, machines: 1, bans: 0, bannedIPs: 0, activeDays: 1, firstActivity: null, lastActivity: null, previous: null }] } satisfies StatisticsResponse);
+      return Response.json({ ...data, scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 14, uniqueIPs: 2, machines: 1, remediations: 0, remediatedIPs: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: null }] } satisfies StatisticsResponse);
     });
     mount();
     const summary = await screen.findByRole('button', { name: /AppSec.*blocked/ });
@@ -341,7 +385,7 @@ describe('Statistics page', () => {
 
   test('bans every listed IP of a finding at once and offers to bypass the allowlist for skipped ones', async () => {
     const data = payload();
-    const ip = (value: string) => ({ ip: value, alerts: 7, bans: 1, machines: 1, activeDays: 3, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z', firstBan: '2026-11-02', bannedBefore: false });
+    const ip = (value: string) => ({ ip: value, alerts: 7, remediations: 1, remediationTypes: [{ label: 'ban', count: 1 }], machines: 1, activeDays: 3, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z', firstRemediation: '2026-11-02', remediatedBefore: false });
     const results = [{ instance_id: 'default', instance_name: 'Production', success: true }];
     vi.mocked(addDecisions)
       .mockResolvedValueOnce({ added: ['203.0.113.9', '203.0.113.11'], allowlisted: [{ value: '203.0.113.10', allowlisted: [{ instance_id: 'default', instance_name: 'Production', reason: 'office' }] }], results, succeeded: 1, failed: 0 })
@@ -353,7 +397,7 @@ describe('Statistics page', () => {
         if (size !== 25) return Response.json({ kind: 'returned', ips: Array.from({ length: 30 }, (_, index) => ip(`203.0.113.${index + 9}`)), total: 30 });
         return Response.json({ kind: 'returned', ips: [ip('203.0.113.9'), ip('203.0.113.10'), ip('203.0.113.11')], total: 30 });
       }
-      return Response.json({ ...data, totals: { ...data.totals, returnedAfterBan: 3 } } satisfies StatisticsResponse);
+      return Response.json({ ...data, totals: { ...data.totals, returnedAfterRemediation: 3 } } satisfies StatisticsResponse);
     });
     mount();
     const returned = (await screen.findByText(/3 IPs attacked again/)).closest('li')!;
@@ -365,7 +409,7 @@ describe('Statistics page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add 3 Decisions' }));
 
     expect(await screen.findByText('1 allowlisted values were skipped')).toBeInTheDocument();
-    expect(addDecisions).toHaveBeenCalledWith(expect.objectContaining({ values: ['203.0.113.9', '203.0.113.10', '203.0.113.11'], duration: '7d', reason: 'Returned after ban' }));
+    expect(addDecisions).toHaveBeenCalledWith(expect.objectContaining({ values: ['203.0.113.9', '203.0.113.10', '203.0.113.11'], duration: '7d', reason: 'Returned after remediation' }));
     expect(screen.getByText('Added decisions for 2 values.')).toBeInTheDocument();
     expect(within(returned).getAllByText('Decision added')).toHaveLength(2);
     const submit = screen.getByRole('button', { name: 'Add 1 Decisions' });
@@ -395,8 +439,8 @@ describe('Statistics page', () => {
       .mockResolvedValueOnce({ added: [], allowlisted: values.map((value) => ({ value, allowlisted: [{ ...edge, reason: 'office' }] })), results: [], succeeded: 0, failed: 0 })
       .mockResolvedValueOnce({ added: values, allowlisted: [], results: [{ ...edge, success: true }], succeeded: 1, failed: 0 });
     vi.mocked(sessionFetch).mockImplementation(async (url) => String(url).includes('/api/statistics/details')
-      ? Response.json({ kind: 'returned', ips: values.map((ip) => ({ ip, alerts: 7, bans: 1, machines: 1, firstBan: '2026-11-02' })), total: 2 })
-      : Response.json({ ...data, totals: { ...data.totals, returnedAfterBan: 2 } }));
+      ? Response.json({ kind: 'returned', ips: values.map((ip) => ({ ip, alerts: 7, remediations: 1, remediationTypes: [{ label: 'ban', count: 1 }], machines: 1, firstRemediation: '2026-11-02' })), total: 2 })
+      : Response.json({ ...data, totals: { ...data.totals, returnedAfterRemediation: 2 } }));
     mount();
     const summary = await screen.findByRole('button', { name: /2 IPs attacked again/ });
     fireEvent.click(summary);
@@ -423,7 +467,7 @@ describe('Statistics page', () => {
     vi.mocked(sessionFetch).mockImplementation(async () => Response.json({
       ...data,
       coverage: { ...data.coverage, comparisonPartial: false },
-      previousTotals: { alerts: 600, bans: 2, decisions: 3, uniqueIPs: 1, bannedIPs: 1, repeatAttackers: 1 },
+      previousTotals: { alerts: 600, remediations: 2, decisions: 3, uniqueIPs: 1, remediatedIPs: 1, repeatAttackers: 1 },
       increases: [{ value: '["edge","proxy-02"]', label: 'proxy-02', current: 1896, previous: 366, change: 1530 }],
       decreases: [{ value: '["default","web-01"]', label: 'web-01', current: 50, previous: 200, change: -150 }],
       quietMachines: [{ value: '["default","dev-bastion"]', label: 'dev-bastion', previous: 120 }],
@@ -493,12 +537,12 @@ describe('Statistics polling', () => {
     let revision = 1;
     vi.mocked(sessionFetch).mockImplementation(async (url) => {
       if (String(url).includes('/api/statistics/details')) {
-        const ips = [{ ip: '203.0.113.9', alerts: 7, bans: 1, machines: 1, firstBan: '2026-11-02' }];
+        const ips = [{ ip: '203.0.113.9', alerts: 7, remediations: 1, remediationTypes: [{ label: 'ban', count: 1 }], machines: 1, firstRemediation: '2026-11-02' }];
         if (revision === 2) ips.push({ ...ips[0], ip: '203.0.113.10' });
         return Response.json({ kind: 'returned', ips, total: ips.length });
       }
       const data = payload();
-      return Response.json({ ...data, revision, totals: { ...data.totals, returnedAfterBan: revision } });
+      return Response.json({ ...data, revision, totals: { ...data.totals, returnedAfterRemediation: revision } });
     });
     mount();
     fireEvent.click(await screen.findByRole('button', { name: /1 IPs attacked again/ }));
@@ -518,13 +562,13 @@ describe('Statistics polling', () => {
       const restricted = settings.retentionDays === 1;
       if (String(url).includes('/api/statistics/details')) {
         const ips = (restricted ? ['203.0.113.10'] : ['203.0.113.9', '203.0.113.10'])
-          .map((ip) => ({ ip, alerts: 7, bans: 1, machines: 1, firstBan: '2026-11-02' }));
+          .map((ip) => ({ ip, alerts: 7, remediations: 1, remediationTypes: [{ label: 'ban', count: 1 }], machines: 1, firstRemediation: '2026-11-02' }));
         return Response.json({ kind: 'returned', ips, total: ips.length });
       }
       const data = payload();
       return Response.json({
         ...data, configuration: { ...configuration, settings }, attackers: restricted ? [] : data.attackers,
-        totals: { ...data.totals, returnedAfterBan: restricted ? 1 : 2 },
+        totals: { ...data.totals, returnedAfterRemediation: restricted ? 1 : 2 },
       });
     });
     mount();

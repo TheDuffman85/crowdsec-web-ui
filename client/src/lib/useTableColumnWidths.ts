@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type RefObject } from 'react';
-import type { TableColumnPreferenceTable } from '../types';
 import {
     MAX_TABLE_COLUMN_WIDTH,
     MIN_TABLE_COLUMN_WIDTH,
@@ -7,6 +6,7 @@ import {
     loadStoredTableColumnWidths,
     saveStoredTableColumnWidths,
     type TableColumnWidths,
+    type TableColumnWidthsKey,
 } from './tableColumns';
 
 export interface TableLayoutColumn {
@@ -213,7 +213,7 @@ function getEdgeScrollSpeed(drag: ColumnDrag): number {
 }
 
 export function useTableColumnWidths(
-    table: TableColumnPreferenceTable,
+    table: TableColumnWidthsKey,
     tableRef: RefObject<HTMLTableElement | null>,
     columns: TableLayoutColumn[],
 ) {

@@ -29,7 +29,7 @@ A self-hosted web UI for investigating alerts, managing decisions, tracking long
 | Area | Highlights |
 | --- | --- |
 | Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, shared quick filters, and simulation counts |
-| Statistics | Long-term attack trends, period comparisons, attacker and target rankings, and findings on recurring IPs, quiet machines, and gaps in ban coverage |
+| Statistics | Long-term attack trends, period comparisons, attacker and target rankings, and findings on recurring IPs, quiet machines, and gaps in remediation coverage |
 | Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, configurable columns, and an optional view grouped by attacking IP session |
 | Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
 | Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
@@ -46,9 +46,6 @@ A self-hosted web UI for investigating alerts, managing decisions, tracking long
 <p>
   <a href="screenshots/dashboard.png"><img src="screenshots/dashboard.png" alt="Dashboard" width="48%"></a>
   <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
-</p>
-<p align="center">
-  <a href="screenshots/statistics.png"><img src="screenshots/statistics.png" alt="Long-term statistics with findings, period comparisons, and an activity chart" width="65%"></a>
 </p>
 <p>
   <a href="screenshots/multi_instance.png"><img src="screenshots/multi_instance.png" alt="Combined multi-instance alerts" width="48%"></a>
@@ -73,6 +70,9 @@ A self-hosted web UI for investigating alerts, managing decisions, tracking long
 <p>
   <a href="screenshots/allowlists.png"><img src="screenshots/allowlists.png" alt="Allowlists" width="48%"></a>
   <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
+</p>
+<p align="center">
+  <a href="screenshots/statistics.png"><img src="screenshots/statistics.png" alt="Long-term statistics with findings, period comparisons, and an activity chart" width="65%"></a>
 </p>
 
 ## Quick Start
@@ -215,7 +215,7 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 - `CONFIG_AUTH_OIDC_CLIENT_ID` parses YAML scalars as strings, preserving numeric identifiers and leading zeros. For example, `CONFIG_AUTH_OIDC_CLIENT_ID=123456789012345678901` keeps every digit; YAML-quoted values also work. In `config.yaml` or whole-section `CONFIG_AUTH` overrides, quote numeric client IDs (for example `clientId: "123456789012345678901"`).
 - Arrays use zero-based contiguous indexes: `CONFIG_AUTH_OIDC_ADMIN_GROUPS_0`, `CONFIG_INSTANCES_0_ID`, `CONFIG_INSTANCES_0_METRICS_0_URL`.
 - OIDC role groups require YAML arrays (for example `CONFIG_AUTH_OIDC_ADMIN_GROUPS='[crowdsec_admins]'` and `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS='[crowdsec_users]'`) or indexed variables, even for a single group.
-- Whole sections accept YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_AUDIT`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
+- Whole sections accept YAML through `CONFIG_STATISTICS`, `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_AUDIT`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
 - `CONFIG_INSTANCE_*` addresses instance `0`: `CONFIG_INSTANCE_NAME` equals `CONFIG_INSTANCES_0_NAME`. Metrics index `0` may also be omitted: `CONFIG_INSTANCES_0_METRICS_URL` equals `CONFIG_INSTANCES_0_METRICS_0_URL`, and `CONFIG_INSTANCE_METRICS_URL` applies both shorthands. Do not set equivalent forms together.
 - Secrets accept a direct string or exactly one `env: NAME` / `file: PATH` reference. Secret overrides also accept `_FILE`.
 - Initial direct secret overrides are stored as environment references, never plaintext. Persisted secret references still require their environment variable.
@@ -241,7 +241,7 @@ To manage a locked value in Settings again, remove it from both the environment 
 | `storage.journalSizeLimit` | `128MiB` | Retained WAL size after checkpoints. This does not cap transactions; use `unlimited` to disable trimming. Ignored when WAL is disabled. | `CONFIG_STORAGE_JOURNAL_SIZE_LIMIT` |
 | `storage.queryTimeout` | `30s` | Maximum execution time for regular database queries, such as list pages and cache synchronization. Raise it for very large databases or slow storage. | `CONFIG_STORAGE_QUERY_TIMEOUT` |
 | `storage.analyticsQueryTimeout` | `60s` | Maximum execution time for dashboard statistics queries. | `CONFIG_STORAGE_ANALYTICS_QUERY_TIMEOUT` |
-| `ui.timeZone` | `browser` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. | `CONFIG_UI_TIME_ZONE` |
+| `ui.timeZone` | `browser` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. Statistics days use this zone, or the server's zone with `browser`. | `CONFIG_UI_TIME_ZONE` |
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
@@ -591,7 +591,7 @@ When `auth.passwordLogin.enabled` is set, it overrides the Settings value and th
 
 ### Personal settings
 
-Every user has a **Settings → Profile** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys and, while OIDC is configured, their [linked SSO identity](#linking-local-and-sso-sign-in). The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
+Every user has a **Settings → Profile** tab with their language, font, and Statistics, Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys and, while OIDC is configured, their [linked SSO identity](#linking-local-and-sso-sign-in). The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
 
 ### Users
 
@@ -643,7 +643,7 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 - Saved Settings override YAML. Scopes must include `openid`; add provider-specific scopes such as `groups` only when required.
 - Admin-group matches have full access; read-only-group matches can view data and keep permitted preferences; unmatched users follow `auth.oidc.unmatchedRole` (`deny` by default).
 - Set an unmatched fallback role only when every user who can sign in should receive it.
-- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **Profile** (language, font, and Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
+- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **Profile** (language, font, and Statistics, Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
 - Identities use stable issuer and subject claims. Username collisions with local accounts remain separate.
 - Sessions have a 24-hour absolute lifetime. OIDC-only users cannot add local passkeys; password-backed local accounts retain passkey support.
 - Existing OIDC rows migrate on their next successful SSO login.
@@ -891,7 +891,7 @@ AppSec and latency sections appear only when CrowdSec emits those metrics. Time-
 
 - `crowdsec.simulationsEnabled: true` fetches non-remediating simulation alerts/decisions and shows badges, filters, and dashboard counts. Default: `false`.
 - Alerts and Decisions column layouts persist per browser profile in local storage.
-- Drag the edge of a column header on Alerts or Decisions to resize the column, with the mouse or by touch. Double-click or double-tap the edge to fit the content. With the edge focused, the arrow keys resize the column and Enter fits it. **Reset widths** in the **Table columns** dialog returns to the automatic widths.
+- Drag the edge of a column header on Alerts, Decisions or Statistics to resize the column, with the mouse or by touch. Double-click or double-tap the edge to fit the content. With the edge focused, the arrow keys resize the column and Enter fits it. **Reset widths** returns to the automatic widths: on Alerts and Decisions in the **Table columns** dialog, on Statistics above the resized table.
 - `ID`, `Machine`, and `Origin` are hidden by default. `Machine` prefers `machine_alias`, then `machine_id`; multiple alert decision origins display as `Mixed`.
 - Hidden columns remain searchable through fields such as `id:`, `machine:`, and `origin:`.
 - **Grouped by IP** on the Alerts page shows one row per attacking IP session. Alerts from an IP stay in one session until there is a gap of more than 30 minutes. Select a row to expand the session's alerts below it. **Delete Session** removes every alert in the session that matches the current search, along with their linked decisions. The choice persists per browser profile in local storage.
@@ -1010,16 +1010,17 @@ Rules run against locally cached CrowdSec data, create in-app notifications, rec
 
 ### Rules
 
-Every rule has a name, severity (`info`, `warning`, `critical`), incident deduplication, and destination channels. Alert rules filter scenario, target, and simulation state; the scenario filter can include or exclude matching names. `IP Ban` and `New Alert/Decision` also accept exact IP/CIDR filters. `Window Minutes` sets the rolling lookback for each rule evaluation; `Alert Spike` also compares it with the preceding period of equal length. It does not set how often rules are evaluated.
+Every rule has a name, severity (`info`, `warning`, `critical`), incident deduplication, and destination channels. Alert rules filter scenario, target, and simulation state; the scenario filter can include or exclude matching names. `IP Ban` and `New Alert/Decision` also accept exact IP/CIDR filters, and `IP Ban` can include or exclude country codes. `Window Minutes` sets the rolling lookback for each rule evaluation; `Alert Spike` also compares it with the preceding period of equal length. It does not set how often rules are evaluated.
 
 | Rule type | Behavior |
 | --- | --- |
 | `Alert Spike` | Compares the current window with the previous window and triggers when percentage increase and minimum alert count are exceeded. |
 | `Alert Threshold` | Triggers when matching alerts in the configured time window reach the threshold. |
 | `New Alert/Decision` | Creates one notification for every matching alert, decision, or both within the lookback window. Includes record ID, timestamps, scenario, target, source/value, and related alert/decision details. Stable per-record deduplication prevents repeats. |
-| `IP Ban` | Triggers once for each active ban decision in the configured window, supports exact IP/CIDR filters, and deduplicates duplicate active decision rows for the same ban. |
+| `IP Ban` | Triggers once for each active ban decision in the configured window, supports exact IP/CIDR and country filters, and deduplicates duplicate active decision rows for the same ban. |
 | `Recent CVE` | Extracts CVE IDs from matching alerts and checks publication age before notifying. |
 | `LAPI Availability` | Triggers when CrowdSec LAPI stays unavailable past the outage threshold, with optional recovery notifications. |
+| `CrowdSec Update` | Reads the CrowdSec version from each configured Prometheus endpoint and triggers when a newer stable CrowdSec release is available. |
 | `Application Update` | Uses the built-in update check and triggers when a newer CrowdSec Web UI version is available. |
 
 #### Multi-instance behavior
@@ -1091,7 +1092,7 @@ Upgrading from a version that used a single `crowdsec.db` copies its durable dat
 - Initial imports and reconciliation retry in smaller windows after timeouts.
 - During LAPI outages, the application serves its available cache and retries in the background; partial imports are marked.
 
-Use `POST /api/cache/clear` for a full cache reset. Synchronization internals are documented in [DEVELOPMENT.md](DEVELOPMENT.md#cache-and-synchronization-internals).
+For a full cache reset, use **Delete cache** in the **Danger Zone** of the General settings tab (requires enforcement permission, asks for confirmation) or `POST /api/cache/clear`. It deletes cached alerts, decisions and allowlists and syncs them again; long-term statistics are kept. Synchronization internals are documented in [DEVELOPMENT.md](DEVELOPMENT.md#cache-and-synchronization-internals).
 
 ### Long-term statistics
 
@@ -1114,22 +1115,22 @@ statistics:
 
 Explicit YAML and environment settings lock the corresponding Settings controls. Other changes persist in `state.db` and apply without a restart.
 
-The **Statistics** page ranks attacking IPs, attacked machines and known targets. Rankings include unique IPs, linked bans, scenarios, country and ASN, activity dates, and targeted machines. Top Targets shows alert counts and unique source IPs for each target. Target information is available for alerts archived after target collection was added.
+The **Statistics** page ranks attacking IPs, attacked machines and known targets. Rankings include unique IPs, linked remediations, scenarios, country and ASN, activity dates, and targeted machines. Top Targets shows alert counts and unique source IPs for each target. Target information is available for alerts archived after target collection was added.
 
-- **Findings** flag quiet machines, scenarios without bans, AppSec blocks, IPs that return after a ban, traffic spikes by machine, new attack types, dominant networks, and IPs that target several machines. Up to five findings appear initially, with warnings first. Expand a finding to see the IPs involved, the address ranges (`/24` or `/64`) of a dominant AS, or a machine's recent activity. IP and range tables start with 25 rows and can expand to 500. With enforcement permissions, **Ban** and **Block range** open the decision dialog for one value. **Ban all** and **Block all** apply the same decision to every listed value, skipping allowlisted values unless you bypass the allowlist. Top IPs also offer the single-IP action.
-- **Summary tiles** show alerts, unique IPs (and how many were never seen before), bans, ban coverage (the share of attacking IPs that were banned), recurring IPs, and IPs that returned after a ban. Most tiles compare their totals with the preceding period of equal length.
-- **Scenarios** show alerts with their trend, unique IPs, machines, bans and ban coverage per scenario; select one to filter the whole page by it.
+- **Findings** flag quiet machines, scenarios without remediations, AppSec blocks, IPs that return after a remediation, traffic spikes by machine, new attack types, dominant networks, and IPs that target several machines. Up to five findings appear initially, with warnings first. Expand a finding to see the IPs involved, the address ranges (`/24` or `/64`) of a dominant AS, or a machine's recent activity. IP and range tables start with 25 rows and can expand to 500. With enforcement permissions, **Ban** and **Block range** open the decision dialog for one value. **Ban all** and **Block all** apply the same decision to every listed value, skipping allowlisted values unless you bypass the allowlist. Top IPs also offer the single-IP action.
+- **Summary tiles** show alerts, unique IPs (and how many were never seen before), remediations by decision type, remediation coverage (the share of attacking IPs that received one), recurring IPs, and IPs that returned after a remediation. Remediations are the decisions of any type (ban, captcha, or a custom type) that CrowdSec issued for alerts. Most tiles compare their totals with the preceding period of equal length.
+- **Scenarios** show alerts with their trend, unique IPs, machines, remediations and remediation coverage per scenario; select one to filter the whole page by it.
 - Top countries and AS include their number of distinct IPs, which tells one noisy host from a botnet. Machine changes show increases and machines that went quiet.
 
-Choose individual/all instances, live/simulation mode, Top 10/20/50, calendar presets or custom dates. Dates use **UTC**; Today is a partial day, not a rolling 24-hour window. Ranges within today and yesterday chart activity by hour, longer or older ranges by day. Comparisons and new-IP counts are only shown when the preceding period is fully covered.
+Choose individual/all instances, live/simulation mode, Top 10/20/50, calendar presets or custom dates. Dates are calendar days of the configured `ui.timeZone`, or of the server's own zone when it is `browser` (UTC in the Docker image unless `TZ` is set), because the archive stores whole days. Changing the zone applies to newly collected data; days already archived keep the day they were counted on. Today is a partial day, not a rolling 24-hour window. Ranges within today and yesterday chart activity by hour, longer or older ranges by day. Comparisons and new-IP counts are only shown when the preceding period is fully covered.
 
-Counts represent the first captured observation. Deleting alerts or expiring decisions does not subtract history. Each distinct decision counts once, even when its expiry is extended. Ranking bans are linked to alerts dated in the selected period; issuance charts use the decision’s own creation date. Missing addresses and network ranges do not count as unique attacking IPs. Counts only cover alerts and decisions imported by the existing sync filters.
+Counts represent the first captured observation. Deleting alerts or expiring decisions does not subtract history. Each distinct decision counts once, even when its expiry is extended. Remediations are linked to alerts dated in the selected period; issuance charts use the decision’s own creation date. Missing addresses and network ranges do not count as unique attacking IPs. Counts only cover alerts and decisions imported by the existing sync filters.
 
 Collection starts with available cached data; it does not fetch additional history from CrowdSec. A transactional queue preserves observations until a separate, lower-priority worker consolidates them in batches of up to 500. HTTP reads use a separate statistics query worker and never trigger collection. Coverage and backlog indicators identify incomplete periods; chart gaps are not treated as zero attacks. Investigation links show alert details only while those details remain in the normal cache.
 
-Statistics survive cache resets. Disabling collection finishes pending observations and keeps existing summaries until expiry; enabling it again backfills available cached records. Reducing retention permanently removes older summaries and deduplication identities. Queries enforce retention immediately. Expired data is pruned in bounded batches once per UTC day and after retention changes, including while collection is disabled. Restarts resume an unfinished backfill instead of rescanning the cache. Records dated up to one day ahead of the server clock are kept on their own date; anything further ahead is ignored. Processed observation payloads are discarded. Only compact aggregate relationships, timestamps, counts, hourly histograms and deduplication identities remain; alert bodies, events and search indexes are not archived. Exact IP statistics still grow with distinct IP/machine/scenario relationships.
+Statistics survive cache resets. Disabling collection finishes pending observations and keeps existing summaries until expiry; enabling it again backfills available cached records. Reducing retention permanently removes older summaries and deduplication identities. Queries enforce retention immediately. Expired data is pruned in bounded batches once per day and after retention changes, including while collection is disabled. Restarts resume an unfinished backfill instead of rescanning the cache. Records dated up to one day ahead of the server clock are kept on their own date; anything further ahead is ignored. Processed observation payloads are discarded. Only compact aggregate relationships, timestamps, counts, hourly histograms and deduplication identities remain; alert bodies, events and search indexes are not archived. Exact IP statistics still grow with distinct IP/machine/scenario relationships.
 
-For data directories on filesystems without SQLite WAL support, set `storage.walEnabled: false`; this also applies to `statistics.db`. Statistics storage uses incremental vacuum when enabled at database creation. Never delete `statistics.db` as part of a cache rebuild.
+For data directories on filesystems without SQLite WAL support, set `storage.walEnabled: false`; this also applies to `statistics.db`. Statistics storage uses incremental vacuum when enabled at database creation. Never delete `statistics.db` as part of a cache rebuild. To start over, use **Delete all statistics** in the **Danger Zone** of the General settings tab (requires settings permission, asks for confirmation): it permanently removes every summary, and enabled collection then backfills the alerts and decisions still in the cache, for example after changing `ui.timeZone`.
 
 Run `pnpm loadtest:benchmark:statistics` for an isolated A/B comparison of capture overhead, foreground request p95 during consolidation, historical query time, and storage size with repeated and high-cardinality attacker data. Temporary benchmark data never uses the configured application directory. `STATISTICS_BENCHMARK_RECORDS`, `STATISTICS_BENCHMARK_RUNS`, and `STATISTICS_BENCHMARK_SAMPLES` control its size; changes above 5% are an investigation gate, not a guarantee across deployment hardware.
 

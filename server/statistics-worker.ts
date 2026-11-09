@@ -15,6 +15,7 @@ process.on('message', (message: { id: number; request: Record<string, any> }) =>
     const r = message.request;
     let result: unknown;
     if (r.type === 'consolidate') result = store.consolidate(r.rows as StatisticsOutboxRow[], r.context as ConsolidationContext);
+    else if (r.type === 'reset') result = store.reset();
     else if (r.type === 'prune') {
       store.prune(String(r.cutoff));
       result = store.hasExpired(String(r.cutoff));

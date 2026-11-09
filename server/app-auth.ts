@@ -1356,6 +1356,11 @@ export function createDashboardAuth(options: {
     return `${getPublicOrigin(context)}${basePath}/settings?oidcLink=${outcome}`;
   }
 
+  // A failed SSO sign-in returns to the login page with a fixed reason code; details stay in the server log.
+  function oidcLoginErrorUrl(context: HonoContext, reason: 'expired' | 'failed' | 'denied' | 'unavailable'): string {
+    return `${getPublicOrigin(context)}${basePath}/login?oidcError=${reason}`;
+  }
+
   // The provider confirmed an identity for a link in progress. Nothing changes yet: the identity
   // waits in a cookie until the account holder has seen it and confirmed the link.
   function holdOidcLinkForConfirmation(
@@ -2147,7 +2152,9 @@ export function createDashboardAuth(options: {
     });
 
     auth.get('/oidc/callback', async (context) => {
-      if (!enabled || !oidc.enabled) return context.json({ error: 'OIDC not configured' }, 400);
+      // The callback is always a browser navigation, so every outcome redirects to a page.
+      if (!enabled) return context.json({ error: 'OIDC not configured' }, 400);
+      if (!oidc.enabled) return context.redirect(oidcLoginErrorUrl(context, 'unavailable'));
       const nonce = getCookie(context, OIDC_NONCE_COOKIE);
       const state = getCookie(context, OIDC_STATE_COOKIE);
       const codeVerifier = getCookie(context, OIDC_PKCE_COOKIE);
@@ -2158,8 +2165,12 @@ export function createDashboardAuth(options: {
         deleteCookie(context, name, { path: cookiePath });
       }
       // Only the browser that started the login may finish it, so no one can sign it in with their own code.
+      // A reload, the back button or a slow provider also arrives here: a signed-in browser goes to the
+      // dashboard, any other starts again from the login page.
       if (!nonce || !state || !codeVerifier || !redirectUri) {
-        return context.json({ error: 'OIDC login session expired or missing. Start the sign-in again.' }, 400);
+        if (getSession(context)) return context.redirect(`${getPublicOrigin(context)}${basePath || '/'}`);
+        console.info('OIDC callback without a login transaction; the sign-in has to start again');
+        return context.redirect(oidcLoginErrorUrl(context, 'expired'));
       }
 
       try {
@@ -2169,14 +2180,15 @@ export function createDashboardAuth(options: {
         const result = await oidc.handleCallback(callbackUrl, { state, nonce, codeVerifier });
         if (!result) {
           if (linkIntent) return context.redirect(oidcLinkOutcomeUrl(context, 'failed'));
-          return context.json({ error: 'OIDC authentication failed' }, 400);
+          return context.redirect(oidcLoginErrorUrl(context, 'failed'));
         }
         // A link in progress must not sign in, create an account or end sessions.
         if (linkIntent) return context.redirect(holdOidcLinkForConfirmation(context, linkIntent, result));
         if (!result.role) {
+          console.warn(`OIDC user "${result.username}" matched no configured group and was denied sign-in`);
           // End any SSO sessions the identity still holds from before it lost access, and stop counting that access.
           await writeDatabase(() => database.denyOidcIdentity(result.issuer, result.subject));
-          return context.json({ error: 'OIDC user is not authorized' }, 403);
+          return context.redirect(oidcLoginErrorUrl(context, 'denied'));
         }
         const oidcUser: OidcUserUpsertParams = {
           username: result.username,
@@ -2211,7 +2223,7 @@ export function createDashboardAuth(options: {
       } catch (error) {
         console.error('OIDC callback error:', error);
         if (linkIntent) return context.redirect(oidcLinkOutcomeUrl(context, 'failed'));
-        return context.json({ error: 'OIDC authentication failed' }, 400);
+        return context.redirect(oidcLoginErrorUrl(context, 'failed'));
       }
     });
 

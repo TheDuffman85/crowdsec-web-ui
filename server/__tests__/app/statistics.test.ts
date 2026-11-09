@@ -44,14 +44,14 @@ describe('statistics API and worker lifecycle', () => {
     const response = await controller.fetch(request('statistics'));
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.totals).toMatchObject({ alerts: 1, uniqueIPs: 1, bans: 1, decisions: 1 });
-    expect(data.machines[0]).toMatchObject({ label: 'Server one', alerts: 1, bans: 1 });
-    expect(data.scenarios[0]).toMatchObject({ count: 1, uniqueIPs: 1, bans: 1, bannedIPs: 1 });
+    expect(data.totals).toMatchObject({ alerts: 1, uniqueIPs: 1, remediations: 1, decisions: 1 });
+    expect(data.machines[0]).toMatchObject({ label: 'Server one', alerts: 1, remediations: 1 });
+    expect(data.scenarios[0]).toMatchObject({ count: 1, uniqueIPs: 1, remediations: 1, remediatedIPs: 1 });
     const scenarioResponse = await controller.fetch(request(`statistics?scenario=${encodeURIComponent(data.scenarios[0].label)}`));
     expect((await scenarioResponse.json()).totals.alerts).toBe(1);
     expect((await (await controller.fetch(request('statistics?scenario=other'))).json()).totals.alerts).toBe(0);
     const ips = await (await controller.fetch(request('statistics/details?kind=ips'))).json();
-    expect(ips).toMatchObject({ kind: 'ips', ranges: [], ips: [{ alerts: 1, bans: 1 }], total: 1 });
+    expect(ips).toMatchObject({ kind: 'ips', ranges: [], ips: [{ alerts: 1, remediations: 1 }], total: 1 });
     expect(await (await controller.fetch(request('statistics/details?kind=returned&history=1&size=50'))).json()).toEqual({ kind: 'returned', ips: [], total: 0 });
     const machine = data.machines[0].value;
     const machines = await (await controller.fetch(request(`statistics/details?kind=machines&machines=${encodeURIComponent(JSON.stringify([machine]))}`))).json();

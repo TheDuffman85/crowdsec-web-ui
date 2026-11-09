@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { apiUrl } from '../lib/basePath';
-import { setOidcAutoLoginSuppressed } from '../lib/oidcAutoLogin';
+import { setOidcAutoLoginRetried, setOidcAutoLoginSuppressed } from '../lib/oidcAutoLogin';
 import { AUTH_SESSION_INVALIDATED_EVENT } from '../lib/sessionFetch';
 
 export type AuthRole = 'admin' | 'read-only';
@@ -100,7 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (status.authEnabled && status.authenticated) setOidcAutoLoginSuppressed(false);
+    if (status.authEnabled && status.authenticated) {
+      setOidcAutoLoginSuppressed(false);
+      setOidcAutoLoginRetried(false);
+    }
   }, [status.authEnabled, status.authenticated]);
 
   const refresh = useCallback(async () => {

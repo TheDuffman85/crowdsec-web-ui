@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { isOidcAutoLoginSuppressed, setOidcAutoLoginSuppressed } from '../../lib/oidcAutoLogin';
+import { hasOidcAutoLoginRetried, isOidcAutoLoginSuppressed, setOidcAutoLoginRetried, setOidcAutoLoginSuppressed } from '../../lib/oidcAutoLogin';
 import { AuthProvider, useAuth } from '../AuthContext';
 
 function LogoutButton() {
@@ -45,10 +45,12 @@ describe('AuthProvider logout', () => {
 
   test('re-enables auto-login once the user is signed in again', async () => {
     setOidcAutoLoginSuppressed(true);
+    setOidcAutoLoginRetried(true);
     mockAuthApi({ status: 'ok' });
     render(<AuthProvider><LogoutButton /></AuthProvider>);
 
     await waitFor(() => expect(isOidcAutoLoginSuppressed()).toBe(false));
+    expect(hasOidcAutoLoginRetried()).toBe(false);
   });
 
   test('ignores non-http redirect URLs and refreshes the local session state', async () => {
