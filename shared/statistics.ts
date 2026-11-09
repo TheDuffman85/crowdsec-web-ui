@@ -62,6 +62,9 @@ export interface StatisticsFilters {
   target?: string;
 }
 
+/** Remediations of one decision type, such as ban or captcha, most frequent first. */
+export interface StatisticsRemediationType { label: string; count: number }
+
 export interface StatisticsRanking {
   value: string;
   label: string;
@@ -69,7 +72,8 @@ export interface StatisticsRanking {
   machineId?: string;
   alerts: number;
   events: number;
-  bans: number;
+  remediations: number;
+  remediationTypes: StatisticsRemediationType[];
   uniqueIPs: number;
   machines: number;
   activeDays: number;
@@ -80,18 +84,18 @@ export interface StatisticsRanking {
   network: string;
   scenarios: Array<{ label: string; count: number }>;
   targetedMachines: Array<{ value: string; label: string; count: number }>;
-  /** IP rankings only: the IP raised alerts on a later day than its first ban in the range. */
-  returnedAfterBan?: boolean;
+  /** IP rankings only: the IP raised alerts on a later day than its first remediation in the range. */
+  returnedAfterRemediation?: boolean;
 }
 
 /** Per-IP outcome counts; repeat attackers were active on more than one day. */
 export interface StatisticsAttackerTotals {
   uniqueIPs: number;
-  /** Alerting IPs with at least one ban linked to their alerts. */
-  bannedIPs: number;
+  /** Alerting IPs with at least one decision of any type (ban, captcha, ...) linked to their alerts. */
+  remediatedIPs: number;
   repeatAttackers: number;
-  /** IPs that raised alerts on a later day than a ban, including bans before the range. */
-  returnedAfterBan: number;
+  /** IPs that raised alerts on a later day than a remediation, including remediations before the range. */
+  returnedAfterRemediation: number;
 }
 
 export interface StatisticsScenario {
@@ -100,8 +104,9 @@ export interface StatisticsScenario {
   count: number;
   uniqueIPs: number;
   machines: number;
-  bans: number;
-  bannedIPs: number;
+  remediations: number;
+  remediationTypes: StatisticsRemediationType[];
+  remediatedIPs: number;
   /** Days with alerts of the scenario in the range. */
   activeDays: number;
   firstActivity: string | null;
@@ -116,12 +121,12 @@ export interface StatisticsResponse {
   configuration: StatisticsConfiguration;
   coverage: { from: string | null; through: string | null; partial: boolean; comparisonPartial: boolean };
   totals: StatisticsAttackerTotals & {
-    alerts: number; events: number; bans: number; decisions: number;
+    alerts: number; events: number; remediations: number; decisions: number;
     /** Alerting IPs not seen in the archive before the range, or null without complete earlier coverage. */
     newIPs: number | null;
   };
   /** The preceding period of equal length, or null when it is not fully covered. */
-  previousTotals: (Omit<StatisticsAttackerTotals, 'returnedAfterBan'> & { alerts: number; bans: number; decisions: number }) | null;
+  previousTotals: (Omit<StatisticsAttackerTotals, 'returnedAfterRemediation'> & { alerts: number; remediations: number; decisions: number }) | null;
   attackers: StatisticsRanking[];
   machines: StatisticsRanking[];
   /** Days, or hours (ISO timestamps) for ranges within the last STATISTICS_HOURLY_DAYS days. */
@@ -132,6 +137,8 @@ export interface StatisticsResponse {
   /** Known alert targets, ranked by alert count. Older observations may have no target. */
   targets: Array<{ label: string; count: number; uniqueIPs: number }>;
   networks: Array<{ label: string; count: number; uniqueIPs: number }>;
+  /** Remediations (alert-linked decisions) by decision type, such as ban or captcha; they add up to `totals.remediations`. */
+  remediationTypes: StatisticsRemediationType[];
   decisionTypes: Array<{ label: string; count: number }>;
   decisionOrigins: Array<{ label: string; count: number }>;
   /** Machines with more alerts than in the preceding period. */
@@ -207,7 +214,7 @@ export const STATISTICS_DETAIL_MAX = 500;
 export type StatisticsDetailRequest =
   /** Top IPs in the filtered scope, optionally within one AS, with their address ranges. */
   | { kind: 'ips'; network?: string; size?: number }
-  /** IPs that attacked again after a ban; `history` includes bans before the range. */
+  /** IPs that attacked again after a remediation; `history` includes remediations before the range. */
   | { kind: 'returned'; history: boolean; size?: number }
   /** Recent activity of machines compared with the preceding period. */
   | { kind: 'machines'; machines: string[] };
@@ -215,17 +222,18 @@ export type StatisticsDetailRequest =
 export interface StatisticsDetailIP {
   ip: string;
   alerts: number;
-  bans: number;
+  remediations: number;
+  remediationTypes: StatisticsRemediationType[];
   machines: number;
   activeDays: number;
   country: string;
   asn: string;
   network: string;
   lastActivity: string | null;
-  /** First day with a ban in the range. */
-  firstBan: string | null;
-  /** Banned before the range. */
-  bannedBefore: boolean;
+  /** First day with a remediation in the range. */
+  firstRemediation: string | null;
+  /** Remediated before the range. */
+  remediatedBefore: boolean;
 }
 
 export interface StatisticsDetailMachine {

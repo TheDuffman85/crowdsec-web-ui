@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Badge } from './ui/Badge';
 import { ClickableTableRow } from './ui/ClickableTableRow';
 import { CountryFlag } from './CountryFlag';
+import { RemediationPills } from './RemediationPills';
 import { PeriodChangeRow } from './PeriodChange';
 import { usePeriodChange } from '../lib/periodChange';
 import { sessionFetch } from '../lib/sessionFetch';
@@ -160,9 +161,9 @@ function IPTable({ title, actions, rows, draft, returned = false, context, foote
     <Table title={title} actions={actions} footer={footer} bulk={context.canBan && <BanAllButton values={rows.map((row) => row.ip)} draft={draft} context={context} />} head={<>
       <th className={headerCell}>{t('pages.dashboard.ip')}</th>
       <th className={right}>{t('pages.statistics.alerts')}</th>
-      <th className={right}>{t('pages.statistics.bans')}</th>
+      <th className={right}>{t('pages.statistics.remediations')}</th>
       <th className={right}>{t('pages.dashboard.machines')}</th>
-      <th className={headerCell}>{t(returned ? 'pages.statistics.firstBan' : 'pages.statistics.lastSeen')}</th>
+      <th className={headerCell}>{t(returned ? 'pages.statistics.firstRemediation' : 'pages.statistics.lastSeen')}</th>
       {context.canBan && <ActionsHeader />}
     </>}>
       {rows.map((row) => {
@@ -178,10 +179,10 @@ function IPTable({ title, actions, rows, draft, returned = false, context, foote
               </div>
             </td>
             <td className={`${cell} text-right font-semibold tabular-nums text-gray-900 dark:text-gray-100`}>{formatNumber(row.alerts)}</td>
-            <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
+            <td className={`${cell} text-right`}><RemediationPills types={row.remediationTypes} /></td>
             <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.machines)}</td>
             <td className={`${cell} whitespace-nowrap text-xs text-gray-600 dark:text-gray-300`}>
-              {returned ? (row.bannedBefore ? t('pages.statistics.bannedBeforeRange') : row.firstBan ? context.formatDay(row.firstBan) : '—') : context.formatTimestamp(row.lastActivity)}
+              {returned ? (row.remediatedBefore ? t('pages.statistics.remediatedBeforeRange') : row.firstRemediation ? context.formatDay(row.firstRemediation) : '—') : context.formatTimestamp(row.lastActivity)}
             </td>
             {context.canBan && <ActionsCell><BanButton value={row.ip} draft={draft} context={context} /></ActionsCell>}
           </ClickableTableRow>

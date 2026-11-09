@@ -63,6 +63,21 @@ export function canonicalStatisticsSource(value: unknown): string {
   const prefix = match ? Number(match[2]) : -1;
   return address && prefix <= (isIP(address) === 6 ? 128 : 32) ? `${address}/${prefix}` : '';
 }
+/**
+ * Remediation counts per owner and decision type, from rows ordered by owner.
+ * Types are listed most frequent first.
+ */
+function remediationTypesByOwner(rows: Array<{ owner: string; label: string; count: number }>): Map<string, Array<{ label: string; count: number }>> {
+  const result = new Map<string, Array<{ label: string; count: number }>>();
+  for (const row of rows) {
+    const list = result.get(row.owner);
+    const entry = { label: row.label || 'ban', count: Number(row.count) };
+    if (list) list.push(entry); else result.set(row.owner, [entry]);
+  }
+  for (const list of result.values()) list.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  return result;
+}
+
 // Ranges are ranked like the dashboard does, but are not unique IP addresses.
 const SINGLE_IP = "ip != '' AND instr(ip, '/') = 0";
 // Lookups for a few IPs across the archive. Without the hint SQLite prefers the
@@ -127,11 +142,24 @@ export class StatisticsStore {
     // Existing hourly cells lack these dimensions. Use daily data for filtered
     // charts until a whole requested day has the additional hourly dimensions.
     if (!fresh && !hourColumns.includes('target')) this.db.prepare('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)').run('hourlyBreakdownsSince', new Date().toISOString());
+    if (!this.metadata('allRemediations')) this.db.transaction(() => {
+      // Older versions linked only ban decisions to their alerts. Their other
+      // alert-linked decisions are still in 'issued', dated by their creation
+      // day, which is the alert's day for nearly all of them.
+      if (!fresh) this.db.exec(`INSERT OR IGNORE INTO cells (kind, day, key, instance, simulated, alert_simulated, ip, machine, machine_id, machine_name,
+        scenario, country, asn, network, type, origin, count, events, first_at, last_at, target)
+        SELECT 'ban', day, key, instance, simulated, alert_simulated, ip, machine, machine_id, machine_name,
+        scenario, country, asn, network, type, origin, count, events, first_at, last_at, target FROM cells WHERE kind = 'issued' AND ip != '' AND type NOT IN ('', 'ban')`);
+      this.db.prepare('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)').run('allRemediations', '1');
+    })();
   }
 
   /**
    * Cells are stored in (kind, day) order, so every period query reads one
    * contiguous range instead of looking up each matching row individually.
+   * Kinds: 'alert' by alert day, 'issued' for every decision by its own
+   * creation day, and 'ban' for alert-linked decisions of any type (ban,
+   * captcha, ...) by their alert's day. The name predates the other types.
    */
   private createCells(): void {
     this.db.exec(`CREATE TABLE cells (
@@ -269,7 +297,7 @@ export class StatisticsStore {
         }
         else {
           add('issued', o.at);
-          if ((o.type || 'ban') === 'ban' && o.alertAt) add('ban', o.alertAt);
+          if (o.alertAt) add('ban', o.alertAt);
         }
       }
       if (context.enabled && context.caughtUp && context.sourceComplete !== false) {
@@ -299,6 +327,7 @@ export class StatisticsStore {
     this.db.transaction(() => {
       this.db.exec('DELETE FROM cells; DELETE FROM seen; DELETE FROM coverage; DELETE FROM hours; DELETE FROM metadata;');
       this.db.prepare('INSERT INTO metadata(key, value) VALUES (?, ?)').run('revision', String(revision));
+      this.db.prepare('INSERT INTO metadata(key, value) VALUES (?, ?)').run('allRemediations', '1');
     })();
     if (this.vacuumEnabled) this.db.pragma('incremental_vacuum');
     return revision;
@@ -337,28 +366,35 @@ export class StatisticsStore {
   }
 
   private readDetails(f: StatisticsFilters, request: StatisticsDetailRequest, retentionDays: number, instances: string[], now: number): StatisticsDetails {
-    const { cutoff, start, scoped, scopeParams, isBan, where, params, previousFrom } = this.scopeOf(f, retentionDays, instances, now);
+    const { cutoff, start, scoped, scopeParams, isRemediation, where, params, previousFrom } = this.scopeOf(f, retentionDays, instances, now);
     const all = (sql: string, args: unknown[]): any[] => this.db.prepare(sql).all(...args);
     const size = 'size' in request && request.size ? Math.min(Math.max(1, Math.floor(request.size)), STATISTICS_DETAIL_MAX) : STATISTICS_DETAIL_PAGE;
     // Listed rows are bounded; the window count adds the total from the same grouped pass.
     const total = (rows: any[]) => Number(rows[0]?.total ?? 0);
     const perIP = (condition: string) => `SELECT ip, SUM(CASE WHEN kind = 'alert' THEN count ELSE 0 END) AS alerts,
-        SUM(CASE WHEN ${isBan} THEN count ELSE 0 END) AS bans,
+        SUM(CASE WHEN ${isRemediation} THEN count ELSE 0 END) AS remediations,
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND machine != '' THEN machine END) AS machines,
         COUNT(DISTINCT CASE WHEN kind = 'alert' THEN day END) AS activeDays,
         MAX(CASE WHEN kind = 'alert' THEN last_at END) AS lastActivity, MAX(CASE WHEN kind = 'alert' THEN day END) AS lastDay,
-        MIN(CASE WHEN ${isBan} THEN day END) AS firstBan, MAX(country) AS country, MAX(asn) AS asn, MAX(network) AS network
+        MIN(CASE WHEN ${isRemediation} THEN day END) AS firstRemediation, MAX(country) AS country, MAX(asn) AS asn, MAX(network) AS network
       FROM cells WHERE kind IN ('alert', 'ban') AND ${SINGLE_IP} AND ${where}${condition} GROUP BY ip HAVING alerts > 0`;
-    const toIP = (row: any) => ({
-      ip: row.ip, alerts: Number(row.alerts), bans: Number(row.bans), machines: Number(row.machines), activeDays: Number(row.activeDays),
+    /** Listed IPs with their remediations by type, looked up by the IP index for the remediated ones only. */
+    const withTypes = (rows: any[]) => {
+      const remediated = rows.filter((row) => Number(row.remediations) > 0).map((row) => row.ip as string);
+      const types = remediated.length ? remediationTypesByOwner(all(`SELECT ip AS owner, type AS label, SUM(count) AS count FROM ${CELLS_BY_IP}
+        WHERE ${isRemediation} AND ${where} AND ip IN (${remediated.map(() => '?').join(',')}) GROUP BY ip, type`, [...params, ...remediated])) : new Map();
+      return rows.map((row) => toIP(row, types.get(row.ip) || []));
+    };
+    const toIP = (row: any, remediationTypes: Array<{ label: string; count: number }>) => ({
+      ip: row.ip, alerts: Number(row.alerts), remediations: Number(row.remediations), remediationTypes, machines: Number(row.machines), activeDays: Number(row.activeDays),
       country: row.country || '', asn: row.asn || '', network: row.network || '', lastActivity: row.lastActivity || null,
-      firstBan: row.firstBan || null, bannedBefore: Boolean(row.bannedBefore),
+      firstRemediation: row.firstRemediation || null, remediatedBefore: Boolean(row.remediatedBefore),
     });
     if (request.kind === 'ips') {
       const network = request.network ? ' AND network = ?' : '';
       const args = request.network ? [...params, request.network] : params;
       const rows = all(`SELECT *, COUNT(*) OVER () AS total FROM (${perIP(network)}) ORDER BY alerts DESC, ip LIMIT ${size}`, args);
-      const ips = rows.map(toIP);
+      const ips = withTypes(rows);
       if (!request.network) return { kind: 'ips', ips, total: total(rows), ranges: [], rangeTotal: 0 };
       // Ranges come from up to 5000 of the network's busiest IPs.
       const ranges = new Map<string, { range: string; ips: number; alerts: number }>();
@@ -374,14 +410,14 @@ export class StatisticsStore {
         ranges: [...ranges.values()].sort((a, b) => b.ips - a.ips || b.alerts - a.alerts || a.range.localeCompare(b.range)).slice(0, size) };
     }
     if (request.kind === 'returned') {
-      // Same definition as the returned-after-ban total; the archive is only
+      // Same definition as the returned-after-remediation total; the archive is only
       // searched for IPs that did not already return within the range.
       const history = request.history && start > cutoff;
-      const before = history ? `CASE WHEN lastDay > firstBan THEN 0 ELSE EXISTS (SELECT 1 FROM ${CELLS_BY_IP} WHERE ${isBan} AND ip = p.ip AND day >= ? AND day < ? AND ${scoped}) END` : '0';
+      const before = history ? `CASE WHEN lastDay > firstRemediation THEN 0 ELSE EXISTS (SELECT 1 FROM ${CELLS_BY_IP} WHERE ${isRemediation} AND ip = p.ip AND day >= ? AND day < ? AND ${scoped}) END` : '0';
       const rows = all(`WITH p AS MATERIALIZED (${perIP('')})
-        SELECT *, COUNT(*) OVER () AS total FROM (SELECT p.*, ${before} AS bannedBefore FROM p) WHERE lastDay > firstBan OR bannedBefore
+        SELECT *, COUNT(*) OVER () AS total FROM (SELECT p.*, ${before} AS remediatedBefore FROM p) WHERE lastDay > firstRemediation OR remediatedBefore
         ORDER BY alerts DESC, ip LIMIT ${size}`, history ? [...params, cutoff, start, ...scopeParams] : params);
-      return { kind: 'returned', ips: rows.map(toIP), total: total(rows) };
+      return { kind: 'returned', ips: withTypes(rows), total: total(rows) };
     }
     const machines = request.machines.slice(0, STATISTICS_DETAIL_PAGE);
     if (!machines.length) return { kind: 'machines', machines: [] };
@@ -425,11 +461,11 @@ export class StatisticsStore {
     if (f.country) { scope.push('upper(country) = ?'); scopeParams.push(f.country.toUpperCase()); }
     if (f.network) { scope.push('network = ?'); scopeParams.push(f.network); }
     if (f.target) { scope.push('target = ?'); scopeParams.push(f.target); }
-    // Bans belong to the mode of the alert that caused them.
-    const banFilter = f.simulation === 'all' ? '' : ` AND alert_simulated = ${f.simulation === 'simulated' ? 1 : 0}`;
+    // Remediations belong to the mode of the alert that caused them.
+    const remediationFilter = f.simulation === 'all' ? '' : ` AND alert_simulated = ${f.simulation === 'simulated' ? 1 : 0}`;
     const days = Math.round((Date.parse(f.to) - Date.parse(f.from)) / 86_400_000) + 1;
     return {
-      cutoff, start, scoped: scope.join(' AND '), scopeParams, banFilter, isBan: `kind = 'ban'${banFilter}`,
+      cutoff, start, scoped: scope.join(' AND '), scopeParams, remediationFilter, isRemediation: `kind = 'ban'${remediationFilter}`,
       // One lower bound only: with a second one (the retention cutoff) SQLite
       // may start the index range at the cutoff and scan the whole archive.
       where: `day BETWEEN ? AND ? AND ${scope.join(' AND ')}`, params: [start, f.to, ...scopeParams] as unknown[],
@@ -439,37 +475,36 @@ export class StatisticsStore {
   }
 
   private read(f: StatisticsFilters, retentionDays: number, instances: string[], now: number, freshnessMs: number): StoredStatistics {
-    const { cutoff, start, scoped, scopeParams, banFilter, isBan, where, params, previousFrom, previousTo } = this.scopeOf(f, retentionDays, instances, now);
+    const { cutoff, start, scoped, scopeParams, remediationFilter, isRemediation, where, params, previousFrom, previousTo } = this.scopeOf(f, retentionDays, instances, now);
     const day = (at: string | number) => this.day(at);
     const all = (sql: string, args: unknown[] = params): any[] => this.db.prepare(sql).all(...args);
     const get = (sql: string, args: unknown[] = params): any => this.db.prepare(sql).get(...args);
-    // Bans count attacks from a known source; blocklist imports have none and
-    // appear under decisions by origin instead.
-    const sum = (kind: string, condition = where, args = params): number => Number(get(`SELECT COALESCE(SUM(count), 0) AS n FROM cells WHERE kind = '${kind}' AND ${condition}`, args).n);
+    const sum = (kind: string): number => Number(get(`SELECT COALESCE(SUM(count), 0) AS n FROM cells WHERE kind = '${kind}' AND ${where}`).n);
     const list = (field: string, kind = 'alert', filter = '') => all(`SELECT COALESCE(NULLIF(${field}, ''), 'Unknown') AS label, SUM(count) AS count
       ${kind === 'alert' ? `, COUNT(DISTINCT CASE WHEN ${SINGLE_IP} THEN ip END) AS uniqueIPs` : ''}
       FROM cells WHERE kind = '${kind}' AND ${filter}${where} GROUP BY ${field} ORDER BY count DESC, label LIMIT ${f.limit}`);
     /**
-     * Per-IP outcomes in one grouped pass over alerts and their bans. Bans are
-     * dated by their alert, so "returned" means alerts on a later day than a
-     * ban. With `history` (the archive before the range), each IP is also looked
-     * up once by the IP index: absent means new, and a ban there means returned.
+     * Per-IP outcomes in one grouped pass over alerts and their remediations.
+     * Remediations are dated by their alert, so "returned" means alerts on a
+     * later day than a remediation. With `history` (the archive before the
+     * range), each IP is also looked up once by the IP index: absent means new,
+     * and a remediation there means returned.
      */
     const attackerTotals = (args: unknown[], history?: { from: string; to: string }) => {
       const before = `ip = g.ip AND day >= ? AND day < ? AND ${scoped}`;
       const known = history ? `CASE WHEN NOT EXISTS (SELECT 1 FROM ${CELLS_BY_IP} WHERE kind = 'alert' AND ${before}) THEN 0
-          WHEN EXISTS (SELECT 1 FROM ${CELLS_BY_IP} WHERE ${isBan} AND ${before}) THEN 2 ELSE 1 END` : '1';
+          WHEN EXISTS (SELECT 1 FROM ${CELLS_BY_IP} WHERE ${isRemediation} AND ${before}) THEN 2 ELSE 1 END` : '1';
       const knownArgs = history ? [history.from, history.to, ...scopeParams, history.from, history.to, ...scopeParams] : [];
       // Materialized so the history lookups run once per IP, not once per use.
       const row = get(`WITH per_ip AS MATERIALIZED (SELECT g.*, ${known} AS known FROM (SELECT ip, COUNT(DISTINCT CASE WHEN kind = 'alert' THEN day END) AS days,
-          MIN(CASE WHEN ${isBan} THEN day END) AS firstBan, MAX(CASE WHEN kind = 'alert' THEN day END) AS lastAlert
+          MIN(CASE WHEN ${isRemediation} THEN day END) AS firstRemediation, MAX(CASE WHEN kind = 'alert' THEN day END) AS lastAlert
           FROM cells WHERE kind IN ('alert', 'ban') AND ${SINGLE_IP} AND ${where} GROUP BY ip) g WHERE days > 0)
         SELECT COUNT(*) AS uniqueIPs, COALESCE(SUM(days > 1), 0) AS repeatAttackers,
-          COALESCE(SUM(firstBan IS NOT NULL), 0) AS bannedIPs, COALESCE(SUM(lastAlert > firstBan OR known = 2), 0) AS returnedAfterBan,
+          COALESCE(SUM(firstRemediation IS NOT NULL), 0) AS remediatedIPs, COALESCE(SUM(lastAlert > firstRemediation OR known = 2), 0) AS returnedAfterRemediation,
           COALESCE(SUM(known = 0), 0) AS newIPs FROM per_ip`, [...knownArgs, ...args]);
       return {
-        uniqueIPs: Number(row.uniqueIPs), bannedIPs: Number(row.bannedIPs), repeatAttackers: Number(row.repeatAttackers),
-        returnedAfterBan: Number(row.returnedAfterBan), newIPs: history ? Number(row.newIPs) : null,
+        uniqueIPs: Number(row.uniqueIPs), remediatedIPs: Number(row.remediatedIPs), repeatAttackers: Number(row.repeatAttackers),
+        returnedAfterRemediation: Number(row.returnedAfterRemediation), newIPs: history ? Number(row.newIPs) : null,
       };
     };
     const ranking = (field: 'ip' | 'machine'): StatisticsRanking[] => {
@@ -501,12 +536,22 @@ export class StatisticsStore {
         SELECT ${field} AS owner, country, asn, network, machine_name,
           ROW_NUMBER() OVER (PARTITION BY ${field} ORDER BY last_at DESC, key) AS position
         FROM ${source} WHERE kind = 'alert' AND ${inRanked}) WHERE position = 1`, args).map((row) => [row.owner, row]));
-      // Bans only: the latest alert day comes from the ranking itself.
-      const outcomes = new Map(all(`SELECT ${field} AS owner, SUM(count) AS bans, MIN(day) AS firstBan FROM ${source}
-        WHERE ${isBan} AND ${inRanked} GROUP BY ${field}`, args).map((row) => [row.owner, row]));
-      // Ranked IPs banned earlier in the archive count as returning too.
-      const bannedBefore = field === 'ip' && start > cutoff ? new Set(all(`SELECT DISTINCT ip FROM ${CELLS_BY_IP}
-        WHERE ${isBan} AND day >= ? AND day < ? AND ${scoped} AND ip IN (${placeholders})`, [cutoff, start, ...scopeParams, ...values]).map((row) => row.ip as string)) : new Set<string>();
+      // Remediations only: the latest alert day comes from the ranking itself.
+      const outcomes = new Map<string, { remediations: number; firstRemediation: string }>();
+      const outcomeRows = all(`SELECT ${field} AS owner, type AS label, SUM(count) AS count, MIN(day) AS firstRemediation FROM ${source}
+        WHERE ${isRemediation} AND ${inRanked} GROUP BY ${field}, type`, args);
+      for (const row of outcomeRows) {
+        const outcome = outcomes.get(row.owner);
+        if (!outcome) outcomes.set(row.owner, { remediations: Number(row.count), firstRemediation: row.firstRemediation });
+        else {
+          outcome.remediations += Number(row.count);
+          if (row.firstRemediation < outcome.firstRemediation) outcome.firstRemediation = row.firstRemediation;
+        }
+      }
+      const remediationTypes = remediationTypesByOwner(outcomeRows);
+      // Ranked IPs remediated earlier in the archive count as returning too.
+      const remediatedBefore = field === 'ip' && start > cutoff ? new Set(all(`SELECT DISTINCT ip FROM ${CELLS_BY_IP}
+        WHERE ${isRemediation} AND day >= ? AND day < ? AND ${scoped} AND ip IN (${placeholders})`, [cutoff, start, ...scopeParams, ...values]).map((row) => row.ip as string)) : new Set<string>();
       const scenarios = byOwner<{ label: string; count: number }>(all(`SELECT owner, label, count FROM (
         SELECT ${field} AS owner, COALESCE(NULLIF(scenario, ''), 'Unknown') AS label, SUM(count) AS count,
           ROW_NUMBER() OVER (PARTITION BY ${field} ORDER BY SUM(count) DESC, COALESCE(NULLIF(scenario, ''), 'Unknown')) AS position
@@ -522,8 +567,8 @@ export class StatisticsStore {
         return {
           ...row, country: top.country, asn: top.asn, network: top.network,
           ...(field === 'machine' ? { label: top.machine_name || row.machineId } : {}),
-          bans: Number(outcome?.bans || 0),
-          ...(field === 'ip' ? { returnedAfterBan: bannedBefore.has(row.value) || Boolean(outcome?.firstBan && day(row.lastActivity) > outcome.firstBan) } : {}),
+          remediations: outcome?.remediations || 0, remediationTypes: remediationTypes.get(row.value) || [],
+          ...(field === 'ip' ? { returnedAfterRemediation: remediatedBefore.has(row.value) || Boolean(outcome?.firstRemediation && day(row.lastActivity) > outcome.firstRemediation) } : {}),
           scenarios: scenarios.get(row.value) || [],
           targetedMachines: targetedMachines.get(row.value) || [],
         };
@@ -604,11 +649,11 @@ export class StatisticsStore {
     const previousScenarios = new Map<string, number>();
     let previousTotals: StoredStatistics['previousTotals'] = null;
     if (compare) {
-      const counts = { alerts: 0, bans: 0, decisions: 0 };
+      const counts = { alerts: 0, remediations: 0, decisions: 0 };
       for (const row of all(`SELECT kind, machine, MAX(machine_name) AS label, scenario, SUM(count) AS n FROM cells
-        WHERE kind IN ('alert', 'ban', 'issued') AND (kind != 'ban' OR (${isBan} AND ip != '')) AND ${where} GROUP BY kind, machine, scenario`, previousParams)) {
+        WHERE kind IN ('alert', 'ban', 'issued') AND (kind != 'ban' OR (${isRemediation} AND ip != '')) AND ${where} GROUP BY kind, machine, scenario`, previousParams)) {
         const n = Number(row.n);
-        if (row.kind === 'ban') { counts.bans += n; continue; }
+        if (row.kind === 'ban') { counts.remediations += n; continue; }
         if (row.kind === 'issued') { counts.decisions += n; continue; }
         counts.alerts += n;
         const machine = previousMachines.get(row.machine);
@@ -616,8 +661,8 @@ export class StatisticsStore {
         else previousMachines.set(row.machine, { label: row.label || '', n });
         if (row.scenario) previousScenarios.set(row.scenario, (previousScenarios.get(row.scenario) || 0) + n);
       }
-      const { uniqueIPs, bannedIPs, repeatAttackers } = attackerTotals(previousParams);
-      previousTotals = { ...counts, uniqueIPs, bannedIPs, repeatAttackers };
+      const { uniqueIPs, remediatedIPs, repeatAttackers } = attackerTotals(previousParams);
+      previousTotals = { ...counts, uniqueIPs, remediatedIPs, repeatAttackers };
     }
     const currentMachines = all(`SELECT machine AS value, MAX(machine_name) AS label, SUM(count) AS current FROM cells WHERE kind = 'alert' AND machine != '' AND ${where} GROUP BY machine`);
     const changes = currentMachines.map((r) => ({ ...r, previous: previousMachines.get(r.value)?.n || 0, change: r.current - (previousMachines.get(r.value)?.n || 0) }));
@@ -634,13 +679,24 @@ export class StatisticsStore {
     const scenarios = all(`SELECT scenario AS label, SUM(CASE WHEN kind = 'alert' THEN count ELSE 0 END) AS count,
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} THEN ip END) AS uniqueIPs,
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND machine != '' THEN machine END) AS machines,
-        SUM(CASE WHEN ${isBan} THEN count ELSE 0 END) AS bans,
-        COUNT(DISTINCT CASE WHEN ${isBan} AND ${SINGLE_IP} THEN ip END) AS bannedIPs,
+        SUM(CASE WHEN ${isRemediation} THEN count ELSE 0 END) AS remediations,
+        COUNT(DISTINCT CASE WHEN ${isRemediation} AND ${SINGLE_IP} THEN ip END) AS remediatedIPs,
         COUNT(DISTINCT CASE WHEN kind = 'alert' THEN day END) AS activeDays,
         MIN(CASE WHEN kind = 'alert' THEN first_at END) AS firstActivity, MAX(CASE WHEN kind = 'alert' THEN last_at END) AS lastActivity
       FROM cells WHERE kind IN ('alert', 'ban') AND scenario != '' AND ${where}
       GROUP BY scenario HAVING count > 0 ORDER BY count DESC, label LIMIT ${f.limit}`)
       .map((row) => ({ ...row, previous: compare ? previousScenarios.get(row.label) || 0 : null }));
+    // Types only for listed scenarios with remediations, from the remediation rows alone.
+    const remediatedScenarios = scenarios.filter((row) => row.remediations > 0).map((row) => row.label as string);
+    const scenarioTypes = remediatedScenarios.length ? remediationTypesByOwner(all(`SELECT scenario AS owner, type AS label, SUM(count) AS count FROM cells
+      WHERE ${isRemediation} AND ${where} AND scenario IN (${remediatedScenarios.map(() => '?').join(',')}) GROUP BY scenario, type`, [...params, ...remediatedScenarios])) : new Map();
+    for (const row of scenarios) row.remediationTypes = scenarioTypes.get(row.label) || [];
+
+    // Remediations by decision type (ban, captcha, ...); their sum is the total.
+    // They count attacks from a known source; blocklist imports have none and
+    // appear under decisions by origin instead.
+    const remediationTypes = all(`SELECT type AS label, SUM(count) AS count FROM cells WHERE kind = 'ban' AND ip != '' AND ${where}${remediationFilter}
+      GROUP BY type ORDER BY count DESC, label`).map((row) => ({ label: row.label as string, count: Number(row.count) }));
 
     const relevant = spans.filter((span) => scopes.includes(span.instance));
     return {
@@ -649,8 +705,8 @@ export class StatisticsStore {
       coverage: { from: relevant.length ? [relevant.map((s) => s.start).sort()[0], this.dayStart(cutoff)].sort().at(-1)! : null,
         through: scopes.every((i) => spansByInstance.get(i)?.length) ? scopes.map((i) => spansByInstance.get(i)!.map((s) => s.through).sort().at(-1)!).sort()[0] : null,
         partial: dates.some((date) => !covered(date)) || relevant.some((s) => s.start > rangeStart && day(s.start) === f.from), comparisonPartial },
-      totals: { alerts: Number(totals.alerts), events: Number(totals.events), bans: sum('ban', `ip != '' AND ${where}${banFilter}`), decisions: sum('issued'), ...attackers },
-      previousTotals,
+      totals: { alerts: Number(totals.alerts), events: Number(totals.events), remediations: remediationTypes.reduce((n, row) => n + row.count, 0), decisions: sum('issued'), ...attackers },
+      previousTotals, remediationTypes,
       attackers: ranking('ip'), machines: ranking('machine'), series, granularity, scenarios,
       // Like the dashboard cards, top lists skip alerts without a known value.
       countries: list('country', 'alert', "country != '' AND upper(country) != 'UNKNOWN' AND "),

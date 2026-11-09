@@ -15,6 +15,8 @@ import { CountryFlag } from '../components/CountryFlag';
 import { InstanceIcon } from '../components/InstanceIcon';
 import { AddDecisionModal } from '../components/AddDecisionModal';
 import { PeriodChangeRow } from '../components/PeriodChange';
+import { RemediationPills } from '../components/RemediationPills';
+import { useRemediationTypeLabel } from '../lib/remediationTypes';
 import { usePeriodChange } from '../lib/periodChange';
 import { DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
 import { fetchConfig } from '../lib/api';
@@ -98,13 +100,13 @@ function readStoredSelection(): StoredSelection {
   }
 }
 const formatNumber = (value: number) => value.toLocaleString();
-/** Share of alerting IPs that were banned, in whole percent, or null without single IPs. */
-const banCoverage = (bannedIPs: number, uniqueIPs: number) => (uniqueIPs > 0 ? Math.round(bannedIPs / uniqueIPs * 100) : null);
+/** Share of alerting IPs with a remediation, in whole percent, or null without single IPs. */
+const remediationCoverage = (remediatedIPs: number, uniqueIPs: number) => (uniqueIPs > 0 ? Math.round(remediatedIPs / uniqueIPs * 100) : null);
 
 // Thresholds for findings. They favour few, clear signals over many weak ones.
 const FINDINGS = {
-  /** A scenario with at least this many alerts and no ban at all. */
-  unbannedScenarioAlerts: 10,
+  /** A scenario with at least this many alerts and no remediation at all. */
+  unremediatedScenarioAlerts: 10,
   /** One AS with at least this share of all alerts, from at least this many IPs. */
   networkShare: 0.2,
   networkIPs: 5,
@@ -113,10 +115,10 @@ const FINDINGS = {
   spikeFactor: 2,
   /** A ranked IP that attacked at least this many machines. */
   wideScannerMachines: 3,
-  /** A scenario blocked in-band by AppSec with at least this many alerts and no ban. */
+  /** A scenario blocked in-band by AppSec with at least this many alerts and no remediation. */
   inBandAlerts: 10,
 } as const;
-// AppSec (WAF) rules block the request itself; bans only follow from scenarios.
+// AppSec (WAF) rules block the request itself; remediations only follow from scenarios.
 const isInBandScenario = (label: string) => /(^|\/)(vpatch-|appsec)/i.test(label);
 const PROFILE_DOCS = 'https://docs.crowdsec.net/docs/local_api/profiles/format';
 
@@ -499,7 +501,7 @@ export function Statistics() {
                 <tr>
                   <th className={headerCell}>{t(attackers ? 'pages.dashboard.ip' : 'tableColumns.machine')}</th>
                   <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.bans')}</th>
+                  <th className={`${headerCell} text-right`}>{t('pages.statistics.remediations')}</th>
                   <th className={headerCell}>{t(attackers ? 'pages.dashboard.machines' : 'pages.statistics.uniqueIPs')}</th>
                   <th className={headerCell}>{t('pages.statistics.activity')}</th>
                   {actions && <th className={`${headerCell} text-right ${STICKY_ACTIONS_HEADER_CLASS_NAME}`}>{t('tableColumns.actions')}</th>}
@@ -513,7 +515,7 @@ export function Statistics() {
                     <ClickableTableRow key={row.value} aria-label={row.label} selected={(attackers ? ip : machine) === row.value} onSelect={() => toggleFilters({ [attackers ? 'ip' : 'machine']: row.value })}>
                       <td className={`${cell} min-w-64`}>
                         <span className="break-all font-medium text-gray-900 dark:text-gray-100">{row.label}</span>
-                        {row.returnedAfterBan && <Badge variant="danger" className="ml-2 align-middle">{t('pages.statistics.returnedAfterBan')}</Badge>}
+                        {row.returnedAfterRemediation && <Badge variant="danger" className="ml-2 align-middle">{t('pages.statistics.returnedAfterRemediation')}</Badge>}
                         {/* Like the rest of the app, instances are only named when several are configured. */}
                         {(attackers || instances.length > 1) && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                           {attackers ? <>
@@ -527,7 +529,7 @@ export function Statistics() {
                         {scenarioChips(row.scenarios)}
                       </td>
                       <td className={`${cell} text-right font-semibold tabular-nums text-gray-900 dark:text-gray-100`}>{formatNumber(row.alerts)}</td>
-                      <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
+                      <td className={`${cell} text-right`}><RemediationPills types={row.remediationTypes} /></td>
                       <td className={cell}>
                         <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{formatNumber(attackers ? row.machines : row.uniqueIPs)}</span>
                       </td>
@@ -539,7 +541,7 @@ export function Statistics() {
                             : (
                               <DecisionIconButton
                                 label={t('pages.statistics.ban')}
-                                onClick={() => setPendingDecision({ value: row.value, reason: row.scenarios[0]?.label && row.scenarios[0].label !== 'Unknown' ? row.scenarios[0].label : 'manual', duration: row.returnedAfterBan ? '7d' : '4h' })}
+                                onClick={() => setPendingDecision({ value: row.value, reason: row.scenarios[0]?.label && row.scenarios[0].label !== 'Unknown' ? row.scenarios[0].label : 'manual', duration: row.returnedAfterRemediation ? '7d' : '4h' })}
                                 className="-my-2"
                               />
                             )}
@@ -593,9 +595,10 @@ export function Statistics() {
   // Ranges within the last two days are charted by hour.
   const hourly = data?.granularity === 'hour';
   const compared = data && !data.coverage.comparisonPartial ? data.previousTotals : null;
-  const coverage = data ? banCoverage(data.totals.bannedIPs, data.totals.uniqueIPs) : null;
-  const previousCoverage = compared ? banCoverage(compared.bannedIPs, compared.uniqueIPs) : null;
+  const coverage = data ? remediationCoverage(data.totals.remediatedIPs, data.totals.uniqueIPs) : null;
+  const previousCoverage = compared ? remediationCoverage(compared.remediatedIPs, compared.uniqueIPs) : null;
   const delta = (current: number, previous: number | undefined, better: TileDelta['better']): TileDelta | null => (compared && previous !== undefined ? { current, previous, better } : null);
+  const decisionTypeLabel = useRemediationTypeLabel();
   const machineName = (value: string, label?: string) => label || (() => { try { return (JSON.parse(value) as string[])[1]; } catch { return value; } })();
 
   const canBan = config?.permissions?.can_manage_enforcement !== false;
@@ -614,19 +617,19 @@ export function Statistics() {
     data.quietMachines.forEach((row) => findings.push({ key: `quiet-${row.value}`, severity: 'warning',
       text: t('pages.statistics.findingQuietMachine', { machine: machineName(row.value, row.label), count: formatNumber(row.previous) }),
       detail: { kind: 'machines', machines: [row.value] } }));
-    // Alerts that never lead to a ban point at a profile or remediation gap.
-    const unbanned = data.scenarios.filter((row) => row.bans === 0);
-    unbanned.filter((row) => !isInBandScenario(row.label) && row.count >= FINDINGS.unbannedScenarioAlerts).forEach((row) => findings.push({
-      key: `unbanned-${row.label}`, severity: 'warning',
-      text: t('pages.statistics.findingUnbannedScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
-      help: { text: t('pages.statistics.findingUnbannedScenarioHelp'), href: PROFILE_DOCS },
+    // Alerts that never lead to a remediation point at a profile gap.
+    const unremediated = data.scenarios.filter((row) => row.remediations === 0);
+    unremediated.filter((row) => !isInBandScenario(row.label) && row.count >= FINDINGS.unremediatedScenarioAlerts).forEach((row) => findings.push({
+      key: `unremediated-${row.label}`, severity: 'warning',
+      text: t('pages.statistics.findingUnremediatedScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
+      help: { text: t('pages.statistics.findingUnremediatedScenarioHelp'), href: PROFILE_DOCS },
       action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
       detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
     }));
-    if (data.totals.returnedAfterBan > 0) {
+    if (data.totals.returnedAfterRemediation > 0) {
       findings.push({ key: 'returned', severity: 'warning',
-        text: t('pages.statistics.findingReturnedAfterBan', { count: formatNumber(data.totals.returnedAfterBan) }),
-        help: { text: t('pages.statistics.findingReturnedAfterBanHelp'), href: `${PROFILE_DOCS}#duration_expr` },
+        text: t('pages.statistics.findingReturnedAfterRemediation', { count: formatNumber(data.totals.returnedAfterRemediation) }),
+        help: { text: t('pages.statistics.findingReturnedAfterRemediationHelp'), href: `${PROFILE_DOCS}#duration_expr` },
         detail: { kind: 'returned', history: compare, decision: { reason: t('pages.statistics.reasonReturned'), duration: '7d' } } });
     }
     if (compare) {
@@ -637,7 +640,7 @@ export function Statistics() {
         detail: { kind: 'machines', machines: [row.value] },
       }));
     }
-    unbanned.filter((row) => isInBandScenario(row.label) && row.count >= FINDINGS.inBandAlerts).forEach((row) => findings.push({
+    unremediated.filter((row) => isInBandScenario(row.label) && row.count >= FINDINGS.inBandAlerts).forEach((row) => findings.push({
       key: `inband-${row.label}`, severity: 'info',
       text: t('pages.statistics.findingInBandScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
       help: { text: t('pages.statistics.findingInBandScenarioHelp') },
@@ -687,14 +690,14 @@ export function Statistics() {
                   <th className={`${headerCell} text-right`}>{t('pages.statistics.alerts')}</th>
                   <th className={`${headerCell} text-right`}>{t('pages.statistics.uniqueIPs')}</th>
                   <th className={`${headerCell} text-right`}>{t('pages.dashboard.machines')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.bans')}</th>
-                  <th className={`${headerCell} text-right`}>{t('pages.statistics.banCoverage')}</th>
+                  <th className={`${headerCell} text-right`}>{t('pages.statistics.remediations')}</th>
+                  <th className={`${headerCell} text-right`}>{t('pages.statistics.remediationCoverage')}</th>
                   <th className={headerCell}>{t('pages.statistics.activity')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => {
-                  const share = banCoverage(row.bannedIPs, row.uniqueIPs);
+                  const share = remediationCoverage(row.remediatedIPs, row.uniqueIPs);
                   const change = row.previous === null || row.previous === 0 ? null : Math.round((row.count - row.previous) / row.previous * 100);
                   return (
                     <ClickableTableRow key={row.label} aria-label={row.label} selected={scenario === row.label} onSelect={() => toggleFilters({ scenario: row.label })}>
@@ -710,8 +713,8 @@ export function Statistics() {
                       </td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.uniqueIPs)}</td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.machines)}</td>
-                      <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.bans)}</td>
-                      <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && row.count >= FINDINGS.unbannedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{share === null ? '—' : `${share}%`}</td>
+                      <td className={`${cell} text-right`}><RemediationPills types={row.remediationTypes} /></td>
+                      <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && row.count >= FINDINGS.unremediatedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{share === null ? '—' : `${share}%`}</td>
                       <td className={`${cell} whitespace-nowrap`}>{activity(row)}</td>
                     </ClickableTableRow>
                   );
@@ -838,15 +841,16 @@ export function Statistics() {
           <SummaryTile icon={Users} title={t('pages.statistics.uniqueIPs')} value={data.totals.uniqueIPs} deltaLabel={t('pages.statistics.vsPrevious')}
             hint={data.totals.newIPs === null ? undefined : t('pages.statistics.newIPs', { count: formatNumber(data.totals.newIPs) })}
             delta={delta(data.totals.uniqueIPs, compared?.uniqueIPs, 'down')} />
-          <SummaryTile icon={Gavel} tone="decision" title={t('pages.statistics.bans')} value={data.totals.bans} deltaLabel={t('pages.statistics.vsPrevious')}
-            delta={delta(data.totals.bans, compared?.bans, 'neutral')} />
-          <SummaryTile icon={ShieldCheck} tone="decision" title={t('pages.statistics.banCoverage')} value={coverage === null ? '—' : `${coverage}%`} deltaLabel={t('pages.statistics.vsPrevious')}
-            hint={t('pages.statistics.bannedIPs', { banned: formatNumber(data.totals.bannedIPs), total: formatNumber(data.totals.uniqueIPs) })}
+          <SummaryTile icon={Gavel} tone="decision" title={t('pages.statistics.remediations')} value={data.totals.remediations} deltaLabel={t('pages.statistics.vsPrevious')}
+            hint={data.remediationTypes.map((row) => `${decisionTypeLabel(row.label)} ${formatNumber(row.count)}`).join(' · ') || undefined}
+            delta={delta(data.totals.remediations, compared?.remediations, 'neutral')} />
+          <SummaryTile icon={ShieldCheck} tone="decision" title={t('pages.statistics.remediationCoverage')} value={coverage === null ? '—' : `${coverage}%`} deltaLabel={t('pages.statistics.vsPrevious')}
+            hint={t('pages.statistics.remediatedIPs', { remediated: formatNumber(data.totals.remediatedIPs), total: formatNumber(data.totals.uniqueIPs) })}
             delta={coverage !== null && previousCoverage !== null ? { ...delta(coverage, previousCoverage, 'up')!, points: true } : null} />
           <SummaryTile icon={Repeat} title={t('pages.statistics.repeatAttackers')} value={data.totals.repeatAttackers} deltaLabel={t('pages.statistics.vsPrevious')}
             hint={t('pages.statistics.repeatAttackersHelp')} delta={delta(data.totals.repeatAttackers, compared?.repeatAttackers, 'down')} />
-          <SummaryTile icon={RotateCcw} tone="alert" title={t('pages.statistics.returnedAfterBan')} value={data.totals.returnedAfterBan} deltaLabel={t('pages.statistics.vsPrevious')}
-            hint={t('pages.statistics.returnedAfterBanHelp')} />
+          <SummaryTile icon={RotateCcw} tone="alert" title={t('pages.statistics.returnedAfterRemediation')} value={data.totals.returnedAfterRemediation} deltaLabel={t('pages.statistics.vsPrevious')}
+            hint={t('pages.statistics.returnedAfterRemediationHelp')} />
         </div>
 
         <Card>
