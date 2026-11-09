@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { I18nProvider } from '../../lib/I18nProvider';
 import { LANGUAGE_SETTING_KEY } from '../../lib/i18n';
-import { setOidcAutoLoginSuppressed } from '../../lib/oidcAutoLogin';
+import { hasOidcAutoLoginRetried, setOidcAutoLoginRetried, setOidcAutoLoginSuppressed } from '../../lib/oidcAutoLogin';
 import { Login } from '../Login';
 
 const { loginMock, refreshMock, useAuthMock } = vi.hoisted(() => ({
@@ -105,6 +105,58 @@ describe('Login', () => {
 
     expect(await screen.findByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  test('starts an expired SSO sign-in again once', async () => {
+    const replace = renderWithAutoLogin({}, '/login?oidcError=expired');
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/api/auth/oidc/login'));
+    expect(hasOidcAutoLoginRetried()).toBe(true);
+  });
+
+  test('does not start an expired SSO sign-in again when the retry cannot be stored', async () => {
+    const storage = window.sessionStorage;
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => storage.getItem(key),
+      setItem: () => {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      },
+      removeItem: (key: string) => storage.removeItem(key),
+      clear: () => storage.clear(),
+    });
+    const replace = renderWithAutoLogin({}, '/login?oidcError=expired');
+
+    expect(await screen.findByText('Your sign-in session expired. Please sign in again.')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  test('stops after an expired SSO sign-in that was already started again', async () => {
+    setOidcAutoLoginRetried(true);
+    const replace = renderWithAutoLogin({}, '/login?oidcError=expired');
+
+    expect(await screen.findByText('Your sign-in session expired. Please sign in again.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['failed', 'Single sign-on failed. Please try again or contact your administrator.'],
+    ['denied', 'Your account is not allowed to sign in to this dashboard.'],
+  ])('shows a %s SSO sign-in without starting it again', async (reason, message) => {
+    const replace = renderWithAutoLogin({}, `/login?oidcError=${reason}`);
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  test('shows an expired SSO sign-in when auto-login is inactive', async () => {
+    const replace = renderWithAutoLogin({ oidcAutoLogin: false, passwordLoginDisabled: false }, '/login?oidcError=expired');
+
+    expect(await screen.findByText('Your sign-in session expired. Please sign in again.')).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+    expect(hasOidcAutoLoginRetried()).toBe(false);
   });
 
   test('uses the stored language preference for login copy', async () => {

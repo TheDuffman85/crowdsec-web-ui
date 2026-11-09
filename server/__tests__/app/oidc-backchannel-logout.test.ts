@@ -422,6 +422,7 @@ describe('OIDC login transaction', () => {
 
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -478,8 +479,43 @@ describe('OIDC login transaction', () => {
       { headers: { cookie: selectCookies(flowCookies).join('; ') } },
     ));
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://ui.example.com/crowdsec/login?oidcError=expired');
     expect(tokenRequests).toHaveLength(0);
+    expect(response.headers.getSetCookie().some((cookie) => cookie.startsWith('crowdsec_web_ui_session=') && !cookie.startsWith('crowdsec_web_ui_session=;'))).toBe(false);
+  });
+
+  test('sends a signed-in browser that returns to a used callback to the dashboard', async () => {
+    stubProvider();
+    const { controller, createCookie } = createOidcController();
+    const tokenRequests = stubTokenEndpoint();
+
+    const response = await controller.fetch(new Request(
+      'https://ui.example.com/crowdsec/api/auth/oidc/callback?code=used-code&state=used-state',
+      { headers: { cookie: createCookie('idp-session-1') } },
+    ));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://ui.example.com/crowdsec');
+    expect(tokenRequests).toHaveLength(0);
+  });
+
+  test('returns to the login page when the provider rejects the code', async () => {
+    stubProvider();
+    const { controller } = createOidcController();
+    const loginResponse = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/oidc/login'));
+    const state = new URL(loginResponse.headers.get('location')!).searchParams.get('state');
+    const flowCookies = loginResponse.headers.getSetCookie().map((cookie) => cookie.split(';')[0]);
+    const tokenRequests = stubTokenEndpoint();
+
+    const response = await controller.fetch(new Request(
+      `https://ui.example.com/crowdsec/api/auth/oidc/callback?code=auth-code&state=${state}`,
+      { headers: { cookie: flowCookies.join('; ') } },
+    ));
+
+    expect(tokenRequests).toHaveLength(1);
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://ui.example.com/crowdsec/login?oidcError=failed');
     expect(response.headers.getSetCookie().some((cookie) => cookie.startsWith('crowdsec_web_ui_session=') && !cookie.startsWith('crowdsec_web_ui_session=;'))).toBe(false);
   });
 });
