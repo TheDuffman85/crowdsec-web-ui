@@ -2,18 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
-  DEFAULT_STATISTICS_SETTINGS, statisticsCutoff, validateStatisticsSettings,
+  DEFAULT_STATISTICS_SETTINGS, addStatisticsDays, statisticsCutoff, validateStatisticsSettings,
   type StatisticsConfiguration, type StatisticsDetailRequest, type StatisticsDetails, type StatisticsFilters, type StatisticsResponse, type StatisticsSettings,
 } from '../shared/statistics';
 import { parseDurationMs } from '../shared/duration';
 import { parseLookbackToMs, resolveManagedSettingSource, type RuntimeConfig } from './config';
 import type { CrowdsecDatabase } from './database';
 import type { DatabaseSyncWorker } from './sync-worker-client';
-import { acknowledgeStatisticsBatch, configureStatisticsCapture, readStatisticsBatch } from './statistics-capture';
+import { acknowledgeStatisticsBatch, configureStatisticsCapture, readStatisticsBatch, resetStatisticsCapture } from './statistics-capture';
 import { StatisticsWorkerClient } from './statistics-worker-client';
 import type { StoredStatistics } from './statistics-store';
 
-type SyncQueue = Pick<DatabaseSyncWorker, 'runExclusive'> & Partial<Pick<DatabaseSyncWorker, 'configureStatistics' | 'statisticsBatch' | 'acknowledgeStatistics'>>;
+type SyncQueue = Pick<DatabaseSyncWorker, 'runExclusive'> & Partial<Pick<DatabaseSyncWorker, 'configureStatistics' | 'resetStatistics' | 'statisticsBatch' | 'acknowledgeStatistics'>>;
 const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 100));
 // Settings are validated before use, so an unparsable value cannot reach here.
 const durationMs = (value: string): number => parseDurationMs(value) ?? 0;
@@ -47,6 +47,8 @@ export class StatisticsService {
   private readonly writer: StatisticsWorkerClient;
   private readonly reader: StatisticsWorkerClient;
   private readonly file: string;
+  /** Days are calendar days of the configured TZ, or of the server's own zone. */
+  readonly timeZone: string;
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private started = false;
@@ -87,19 +89,46 @@ export class StatisticsService {
     if (this.settings.enabled || database.getMeta('statistics_capture_enabled')?.value === 'true') configureStatisticsCapture(database.db, this.settings.enabled);
     this.status.backfillPending = this.settings.enabled;
     this.file = path.join(path.dirname(database.statePath || database.cachePath), 'statistics.db');
-    const workerOptions = { dbPath: this.file, walEnabled: config.sqliteWalEnabled, incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled, journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes };
+    this.timeZone = config.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const workerOptions = { dbPath: this.file, timeZone: this.timeZone, walEnabled: config.sqliteWalEnabled, incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled, journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes };
     this.writer = new StatisticsWorkerClient(workerOptions);
     this.reader = new StatisticsWorkerClient({ ...workerOptions, readonly: true });
   }
 
   configuration(): StatisticsConfiguration {
-    return { settings: { ...this.settings }, managed: { ...this.managed }, status: { ...this.status } };
+    return { settings: { ...this.settings }, managed: { ...this.managed }, status: { ...this.status }, timeZone: this.timeZone };
   }
 
   update(value: unknown): Promise<StatisticsConfiguration> {
     const result = this.updateQueue.then(() => this.applySettings(value));
     this.updateQueue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  /** Deletes all statistics; enabled collection starts over from the cached alerts and decisions. */
+  reset(): Promise<StatisticsConfiguration> {
+    const result = this.updateQueue.then(() => this.deleteAll());
+    this.updateQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private async deleteAll(): Promise<StatisticsConfiguration> {
+    this.updating = true;
+    try {
+      while (this.active || this.maintaining) await (this.active || this.maintaining);
+      const { database, sync } = this.options;
+      // The source goes first: if the archive then fails to clear, its
+      // deduplication identities still keep re-captured rows from counting twice.
+      if (sync.resetStatistics) await sync.resetStatistics();
+      else await sync.runExclusive(() => resetStatisticsCapture(database.db));
+      if (fs.existsSync(this.file)) this.status.revision = Math.max(this.status.revision + 1, await this.writer.request<number>({ type: 'reset' }));
+      this.epoch = randomUUID(); this.epochStartedAt = new Date().toISOString(); this.coverageFrom = {}; this.resumeFrom = {};
+      Object.assign(this.status, { lastSuccess: null, backlog: 0, backfillPending: this.settings.enabled, error: null });
+      this.prunedCutoff = null;
+      this.lastRun = 0;
+    } finally { this.updating = false; }
+    if (this.started) { if (!this.timer) this.start(); else void this.tick(); }
+    return this.configuration();
   }
 
   private async applySettings(value: unknown): Promise<StatisticsConfiguration> {
@@ -209,10 +238,15 @@ export class StatisticsService {
     }
   }
 
-  /** Pruning is only needed after the UTC day or the retention changes, or to finish a bounded pass. */
+  /** Pruning is only needed after the day or the retention changes, or to finish a bounded pass. */
   private maintenanceDue(): boolean {
-    return (this.settings.enabled || fs.existsSync(this.file)) && statisticsCutoff(this.settings.retentionDays) !== this.prunedCutoff;
+    return (this.settings.enabled || fs.existsSync(this.file)) && this.cutoff() !== this.prunedCutoff;
   }
+
+  private cutoff(): string { return statisticsCutoff(this.settings.retentionDays, Date.now(), this.timeZone); }
+
+  /** Source rows are dated by UTC day, which may be one day before the zone's day. */
+  private static sourceCutoff(cutoff: string): string { return addStatisticsDays(cutoff, -1); }
 
   private recordError(error: unknown): void {
     if (this.stopped) return;
@@ -223,11 +257,12 @@ export class StatisticsService {
   private async maintain(): Promise<void> {
     const deadline = Date.now() + 30_000;
     do {
-      const cutoff = statisticsCutoff(this.settings.retentionDays);
+      const cutoff = this.cutoff();
       const { sync, database } = this.options;
+      const sourceCutoff = StatisticsService.sourceCutoff(cutoff);
       const sourceRemains = sync.acknowledgeStatistics
-        ? await sync.acknowledgeStatistics([], cutoff)
-        : await sync.runExclusive(() => acknowledgeStatisticsBatch(database.db, [], cutoff));
+        ? await sync.acknowledgeStatistics([], sourceCutoff)
+        : await sync.runExclusive(() => acknowledgeStatisticsBatch(database.db, [], sourceCutoff));
       const archiveRemains = fs.existsSync(this.file) && await this.writer.request<boolean>({ type: 'prune', cutoff });
       if (!sourceRemains && !archiveRemains) { this.prunedCutoff = cutoff; break; }
       await pause();
@@ -256,7 +291,7 @@ export class StatisticsService {
         this.status.backfillPending = batch.backfillPending;
         this.status.backlog = batch.backlog;
         if (!this.settings.enabled && !batch.rows.length) break;
-        const cutoff = statisticsCutoff(this.settings.retentionDays);
+        const cutoff = this.cutoff();
         const result = await this.writer.request<{ lastSuccess: string | null; revision: number }>({ type: 'consolidate', rows: batch.rows,
           context: { cutoff, epoch: this.epoch, enabled: this.settings.enabled,
             caughtUp: !batch.backfillPending && batch.backlog <= batch.rows.length,
@@ -266,8 +301,9 @@ export class StatisticsService {
               const start = [this.coverageFrom[instance.id], this.resumeFrom[instance.id], this.epochStartedAt].filter(Boolean).sort()[0];
               return [instance.id, start > floor ? start : floor];
             })), instances: config.instances.map((i) => i.id), now: new Date().toISOString() } });
-        if (sync.acknowledgeStatistics) await sync.acknowledgeStatistics(batch.rows.map((r) => r.seq), cutoff);
-        else await sync.runExclusive(() => acknowledgeStatisticsBatch(database.db, batch.rows.map((r) => r.seq), cutoff));
+        const sourceCutoff = StatisticsService.sourceCutoff(cutoff);
+        if (sync.acknowledgeStatistics) await sync.acknowledgeStatistics(batch.rows.map((r) => r.seq), sourceCutoff);
+        else await sync.runExclusive(() => acknowledgeStatisticsBatch(database.db, batch.rows.map((r) => r.seq), sourceCutoff));
         this.status.lastSuccess = result.lastSuccess;
         this.status.revision = result.revision;
         this.status.backlog = Math.max(0, batch.backlog - batch.rows.length);

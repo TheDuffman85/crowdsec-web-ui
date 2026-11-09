@@ -264,7 +264,7 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
           <div key={machine.value} className="rounded-md border border-gray-100 p-3 text-sm dark:border-gray-700/60">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <span className="font-medium text-gray-900 dark:text-gray-100">{context.machineName(machine.value)}</span>
-              <span className="text-xs text-gray-500 dark:text-gray-400">{t('pages.statistics.lastAlert')}: {machine.lastActivity ? `${context.formatTimestamp(machine.lastActivity)} UTC` : t('pages.statistics.noneRetained')}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">{t('pages.statistics.lastAlert')}: {machine.lastActivity ? context.formatTimestamp(machine.lastActivity) : t('pages.statistics.noneRetained')}</span>
             </div>
             {machine.scenarios.length > 0 && (
               <ul className="mt-3 space-y-2">

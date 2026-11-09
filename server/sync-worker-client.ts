@@ -51,6 +51,7 @@ export interface DatabaseTransactionOptions {
 
 type SyncWorkerRequest =
   | { type: 'statistics-configure'; enabled: boolean }
+  | { type: 'statistics-reset' }
   | { type: 'statistics-batch'; backfill: boolean }
   | { type: 'statistics-ack'; ids: number[]; cutoff: string }
   | { type: 'set-meta'; key: string; value: string }
@@ -115,6 +116,10 @@ export class DatabaseSyncWorker {
 
   configureStatistics(enabled: boolean): Promise<void> {
     return this.execute({ type: 'statistics-configure', enabled });
+  }
+
+  resetStatistics(): Promise<void> {
+    return this.execute({ type: 'statistics-reset' });
   }
 
   statisticsBatch(backfill: boolean): Promise<{ rows: StatisticsOutboxRow[]; backlog: number; backfillPending: boolean; coverageFrom: Record<string, string> }> {

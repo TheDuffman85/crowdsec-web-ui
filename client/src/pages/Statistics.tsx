@@ -29,15 +29,16 @@ import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { formatCustomDate } from '../../../shared/date-format';
 import type { ConfigResponse, FacetField } from '../types';
 import type { SearchDateRange } from '../../../shared/search';
-import type { StatisticsRanking, StatisticsResponse, StatisticsScenario } from '../../../shared/statistics';
+import {
+  addStatisticsDays, statisticsDay, statisticsDayStart, type StatisticsRanking, type StatisticsResponse, type StatisticsScenario,
+} from '../../../shared/statistics';
 
-const DAY = 86_400_000;
-const isoDay = (stamp: number) => new Date(stamp).toISOString().slice(0, 10);
+const HOUR = 3_600_000;
 
 /**
  * The hour containing `stamp` as an hour-precision search value (`YYYY-MM-DDTHH`) in `timeZone`,
- * the format the Alerts and Decisions quick filters use. Returns null in zones whose offset is
- * not a whole hour, where a local hour does not line up with a UTC day boundary.
+ * the format the Alerts and Decisions quick filters use. Returns null when `stamp` is not a whole
+ * hour there, as when the statistics day starts at a different offset than `timeZone` uses.
  */
 function searchHour(stamp: number, timeZone: string | null): string | null {
   try {
@@ -52,12 +53,17 @@ function searchHour(stamp: number, timeZone: string | null): string | null {
   }
 }
 
-/** The Statistics UTC day range as a quick-filter date range for the Alerts and Decisions pages. */
-function quickFilterDateRange(from: string, to: string, timeZone: string | null): SearchDateRange {
-  const start = searchHour(Date.parse(`${from}T00:00:00Z`), timeZone);
+/**
+ * The Statistics day range (days of `statisticsZone`) as a quick-filter date range for the Alerts
+ * and Decisions pages, which use `timeZone`.
+ */
+function quickFilterDateRange(from: string, to: string, statisticsZone: string, timeZone: string | null): SearchDateRange {
+  const startStamp = statisticsDayStart(from, statisticsZone);
+  const endStamp = statisticsDayStart(addStatisticsDays(to, 1), statisticsZone);
+  const start = searchHour(startStamp, timeZone);
   // An hour-precision `date<=` includes the whole hour, so the last hour of the day ends the range.
-  const end = searchHour(Date.parse(`${to}T23:00:00Z`), timeZone);
-  return start && end ? { start, end } : { start: `${from}T00:00:00Z`, end: `${to}T23:59:59.999Z` };
+  const end = searchHour(endStamp - HOUR, timeZone);
+  return start && end ? { start, end } : { start: new Date(startStamp).toISOString(), end: new Date(endStamp - 1).toISOString() };
 }
 const isIsoDay = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value));
 
@@ -68,10 +74,9 @@ const SIMULATION_MODES = ['live', 'simulated', 'all'];
 const LIMITS = ['10', '20', '50'];
 const isPreset = (value: unknown): value is Preset => PRESETS.includes(value as Preset);
 const presetRange = (preset: Preset, today: string) => {
-  const end = Date.parse(today);
   if (preset === 'today') return { from: today, to: today };
-  if (preset === 'yesterday') return { from: isoDay(end - DAY), to: isoDay(end - DAY) };
-  return { from: isoDay(end - (Number(preset) - 1) * DAY), to: today };
+  if (preset === 'yesterday') return { from: addStatisticsDays(today, -1), to: addStatisticsDays(today, -1) };
+  return { from: addStatisticsDays(today, -(Number(preset) - 1)), to: today };
 };
 
 // The last selection is remembered in this browser. Presets are stored by name so they stay relative to today.
@@ -261,7 +266,11 @@ export function Statistics() {
   const [configError, setConfigError] = useState('');
   const [reload, setReload] = useState(0);
   const [archiveChange, setArchiveChange] = useState(0);
-  const [today, setToday] = useState(() => isoDay(Date.now()));
+  const [now, setNow] = useState(() => Date.now());
+  // Days are those of the statistics time zone, known once the configuration has loaded.
+  const statisticsZone = config?.statistics?.timeZone ?? (configError ? 'UTC' : null);
+  const timeZone = statisticsZone ?? 'UTC';
+  const today = statisticsDay(now, timeZone);
   const [stored] = useState(readStoredSelection);
   // The URL wins over the stored selection, so links keep working.
   const urlPreset = params.get('range');
@@ -328,6 +337,7 @@ export function Statistics() {
     }
   }, [instance, machine, setParams]);
   useEffect(() => {
+    if (!statisticsZone) return;
     const abort = new AbortController();
     void sessionFetch(`${apiUrl('/api/statistics')}?${queryString}`, { signal: abort.signal }).then(async (response) => {
       if (!response.ok) {
@@ -340,7 +350,7 @@ export function Statistics() {
       if (!abort.signal.aborted) setResult({ key: requestKey, queryString, data: null, error: e instanceof Error ? e.message : t('pages.statistics.loadError'), retryable: true });
     });
     return () => abort.abort();
-  }, [queryString, requestKey, t]);
+  }, [queryString, requestKey, statisticsZone, t]);
   const refreshArchive = useEffectEvent((statistics: ConfigResponse['statistics']) => {
     if (!statistics) return;
     const retentionDays = statistics.settings.retentionDays;
@@ -377,7 +387,7 @@ export function Statistics() {
     };
     const poll = () => {
       if (document.visibilityState === 'hidden') return;
-      setToday(isoDay(Date.now()));
+      setNow(Date.now());
       void loadConfig(true);
     };
     void loadConfig(false);
@@ -388,7 +398,7 @@ export function Statistics() {
 
   const configuration = config?.statistics ?? data?.configuration;
   const instances = config?.instances || [];
-  // Statistics are bucketed by UTC day, so days are always formatted in UTC.
+  // Days are calendar dates, so they are formatted as such, independent of any time zone.
   const formatDay = (day: string, compact = false) => {
     const date = new Date(`${day}T00:00:00Z`);
     if (!Number.isFinite(date.getTime())) return day;
@@ -397,12 +407,12 @@ export function Statistics() {
       ? { month: 'short', day: 'numeric', timeZone: 'UTC' }
       : { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
-  // Timestamps use the configured date and time format, but stay in UTC like the rest of the page.
-  const formatTimestamp = (value: string | null | undefined) => (value ? formatDateTimeValue(value, { ...dateTime, timeZone: 'UTC' }) : '—');
+  // Timestamps use the configured date and time format in the time zone of the statistics days.
+  const formatTimestamp = (value: string | null | undefined) => (value ? formatDateTimeValue(value, { ...dateTime, timeZone }) : '—');
   /** Chart ticks for hourly series; across two days they also name the day. */
   const formatHour = (value: string, withDay: boolean) => {
-    const time = formatTimeValue(value, { ...dateTime, timeZone: 'UTC' }, { hour: '2-digit', minute: '2-digit' });
-    return withDay ? `${formatDay(value.slice(0, 10), true)} ${time}` : time;
+    const time = formatTimeValue(value, { ...dateTime, timeZone }, { hour: '2-digit', minute: '2-digit' });
+    return withDay ? `${formatDay(statisticsDay(value, timeZone), true)} ${time}` : time;
   };
   const unknown = (label: string) => (label === 'Unknown' ? t('pages.statistics.unknown') : label);
 
@@ -424,7 +434,7 @@ export function Statistics() {
   }
   const relatedQuickFilters: StoredQuickFilters = {
     selections: relatedSelections,
-    dateRange: quickFilterDateRange(from, to, dateTime.timeZone || getBrowserTimeZone()),
+    dateRange: quickFilterDateRange(from, to, timeZone, dateTime.timeZone || getBrowserTimeZone()),
     simulation: simulationsEnabled ? simulation as QuickFilterSimulationValue : 'all',
   };
   const relatedHref = (page: 'alerts' | 'decisions') => {
@@ -440,7 +450,7 @@ export function Statistics() {
   const selectRange = (values: { range: Preset } | { from: string; to: string }) => update('range' in values
     ? { range: values.range, from: null, to: null }
     : { range: null, from: values.from, to: values.to });
-  const rangeLabel = `${formatDay(from)} – ${formatDay(to)} (UTC)`;
+  const rangeLabel = `${formatDay(from)} – ${formatDay(to)}`;
   const instanceName = (id?: string) => instances.find((candidate) => candidate.id === id)?.name || id || '';
   const instanceIcon = (id?: string) => {
     const index = instances.findIndex((candidate) => candidate.id === id);
@@ -730,11 +740,11 @@ export function Statistics() {
           />
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="space-y-1.5">
-              <label htmlFor="statistics-from" className={labelClass}>{t('pages.statistics.from')} (UTC)</label>
+              <label htmlFor="statistics-from" className={labelClass}>{t('pages.statistics.from')}</label>
               <input id="statistics-from" type="date" max={to} value={from} className={inputClass} onChange={(e) => { if (e.target.value) selectRange({ from: e.target.value, to }); }} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="statistics-to" className={labelClass}>{t('pages.statistics.to')} (UTC)</label>
+              <label htmlFor="statistics-to" className={labelClass}>{t('pages.statistics.to')}</label>
               <input id="statistics-to" type="date" min={from} max={today} value={to} className={inputClass} onChange={(e) => { if (e.target.value) selectRange({ from, to: e.target.value }); }} />
             </div>
             {simulationsEnabled && <div className="space-y-1.5">
@@ -754,7 +764,7 @@ export function Statistics() {
           </div>
           <p className="flex items-start gap-1.5 text-xs leading-5 text-gray-500 dark:text-gray-400">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            {t('pages.statistics.rangeHint')}
+            {t('pages.statistics.rangeHint', { timeZone })}
           </p>
           {(ip || machine || scenario || country || network || target) && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-gray-100 pt-4 text-sm dark:border-gray-700/50">
@@ -783,7 +793,7 @@ export function Statistics() {
         {configuration && (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-500 sm:px-6 dark:border-gray-700/50 dark:bg-gray-900/40 dark:text-gray-400">
             <span className="inline-flex items-center gap-1.5"><Database className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.retainedDays', { count: configuration.settings.retentionDays })}</span>
-            <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.lastUpdate')}: {formatTimestamp(configuration.status.lastSuccess)} UTC</span>
+            <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.lastUpdate')}: {formatTimestamp(configuration.status.lastSuccess)}</span>
             <span>{t('pages.statistics.backlog')}: <span className="tabular-nums">{formatNumber(configuration.status.backlog)}</span></span>
             {configuration.status.backfillPending && <Badge variant="info">{t('pages.statistics.backfilling')}</Badge>}
             {!configuration.settings.enabled && <Badge>{t('common.disabled')}</Badge>}
@@ -795,7 +805,7 @@ export function Statistics() {
         <Notice tone="warning">
           <p>{t('pages.statistics.partial')}</p>
           <p className="mt-1 text-xs opacity-80">
-            {t('pages.statistics.coverage')}: {data.coverage.from ? formatDay(data.coverage.from.slice(0, 10)) : '—'} – {formatTimestamp(data.coverage.through)} UTC
+            {t('pages.statistics.coverage')}: {data.coverage.from ? formatDay(statisticsDay(data.coverage.from, timeZone)) : '—'} – {formatTimestamp(data.coverage.through)}
           </p>
         </Notice>
       )}
@@ -840,7 +850,7 @@ export function Statistics() {
         </div>
 
         <Card>
-          <SectionHeader icon={TrendingUp} title={t('components.dashboardCharts.activityHistory')} description={t('pages.statistics.countingHelp')} />
+          <SectionHeader icon={TrendingUp} title={t('components.dashboardCharts.activityHistory')} description={t('pages.statistics.activityHistoryHelp')} />
           <CardContent>
             <div className="h-72 min-w-0" role="img" aria-label={t('components.dashboardCharts.activityHistory')}>
               <ResponsiveContainer width="100%" height="100%">
@@ -848,7 +858,7 @@ export function Statistics() {
                   <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
                   <XAxis dataKey="date" {...axisProps} tickFormatter={(value: string) => (hourly ? formatHour(value, from !== to) : formatDay(value, true))} minTickGap={hourly && from !== to ? 48 : 32} />
                   <YAxis {...axisProps} allowDecimals={false} width={48} tickFormatter={formatNumber} />
-                  <Tooltip content={<ChartTooltip formatLabel={(value) => (hourly ? `${formatTimestamp(String(value))} UTC` : formatDay(String(value)))} />} />
+                  <Tooltip content={<ChartTooltip formatLabel={(value) => (hourly ? formatTimestamp(String(value)) : formatDay(String(value)))} />} />
                   <Legend verticalAlign="top" height={36} iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 13 }} />
                   <Line type="monotone" dataKey="alerts" name={t('pages.statistics.alerts')} stroke={DASHBOARD_COLORS.liveAlerts} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />
                   <Line type="monotone" dataKey="decisions" name={t('pages.statistics.decisions')} stroke={DASHBOARD_COLORS.liveDecisions} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />

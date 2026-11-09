@@ -22,7 +22,7 @@ vi.mock('recharts', () => ({
   CartesianGrid: () => null, XAxis: () => null, YAxis: () => null, Tooltip: () => null, Legend: () => null, Line: () => null, Bar: () => null,
 }));
 const i18n: I18nContextValue = { language: 'en', preference: 'en', browserLanguage: 'en', setLanguagePreference: () => {}, t: (key, values = {}) => Object.entries(values).reduce((message, [name, value]) => message.replaceAll(`{${name}}`, String(value)), (en as Record<string, string>)[key] || key) };
-const configuration: StatisticsConfiguration = { settings: { ...DEFAULT_STATISTICS_SETTINGS, enabled: true }, managed: {}, status: { running: false, lastSuccess: '2026-11-07T12:00:00Z', backlog: 0, backfillPending: false, error: null, revision: 1 } };
+const configuration: StatisticsConfiguration = { settings: { ...DEFAULT_STATISTICS_SETTINGS, enabled: true }, managed: {}, status: { running: false, lastSuccess: '2026-11-07T12:00:00Z', backlog: 0, backfillPending: false, error: null, revision: 1 }, timeZone: 'UTC' };
 function payload(): StatisticsResponse {
   return {
     filters: { from: '2026-10-09', to: '2026-11-07', instance: 'all', simulation: 'live', limit: 10 }, revision: 1, configuration,
@@ -59,10 +59,10 @@ describe('Statistics page', () => {
     expect(within(topIps).getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
     expect(within(topIps).getByRole('button', { name: 'Ban' }).closest('td')).toBe(within(topIps).getAllByRole('cell').at(-1));
     // Activity names its first and last timestamps, in Top IPs and Top Scenarios alike.
-    expect(within(topIps).getByRole('columnheader', { name: 'Activity (UTC)' })).toBeInTheDocument();
+    expect(within(topIps).getByRole('columnheader', { name: 'Activity' })).toBeInTheDocument();
     expect(within(topIps).getAllByRole('cell').at(-2)).toHaveTextContent('3 days activeFirst seen11/1/2026, 10:00:00 AMLast seen11/7/2026, 11:00:00 AM');
     const topScenarios = screen.getByRole('row', { name: 'ssh' }).closest('table')!;
-    expect(within(topScenarios).getAllByRole('columnheader').at(-1)).toHaveTextContent('Activity (UTC)');
+    expect(within(topScenarios).getAllByRole('columnheader').at(-1)).toHaveTextContent('Activity');
     expect(within(topScenarios).getAllByRole('cell').at(-1)).toHaveTextContent('3 days activeFirst seen11/5/2026, 8:00:00 AMLast seen11/7/2026, 9:30:00 AM');
     // With one instance, Top Machines does not name it, like the rest of the app.
     expect(screen.queryByText('Production')).not.toBeInTheDocument();
@@ -101,6 +101,20 @@ describe('Statistics page', () => {
       simulation: 'live',
     });
     expect(screen.getByTestId('location').textContent).toBe(`/alerts${target.search}`);
+  });
+
+  test('uses the days and timestamps of the statistics time zone', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue({ statistics: { ...configuration, timeZone: 'Europe/Berlin' }, lookback_days: 7, instances: [{ id: 'default', name: 'Production' }] } as ConfigResponse);
+    mount(<DateTimeContext.Provider value={createDateTimeContextValue({ ...DEFAULT_DATE_TIME_SETTINGS, timeZone: 'Europe/Berlin' })}><Statistics /></DateTimeContext.Provider>);
+    const attacker = await screen.findByRole('row', { name: '192.0.2.7' });
+    expect(screen.getByText(/Statistics use calendar days in Europe\/Berlin\. Dashboard totals/)).toBeInTheDocument();
+    expect(within(attacker).getAllByRole('cell').at(-2)).toHaveTextContent('First seen11/1/2026, 11:00:00 AMLast seen11/7/2026, 12:00:00 PM');
+    // The statistics request waits for the zone, so it is sent once.
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+    // Statistics days and the quick filters share the zone, so the range maps to whole local days.
+    fireEvent.click(within(attacker).getAllByRole('cell')[1]);
+    const link = new URL((await screen.findByRole('link', { name: 'View Alerts' })).getAttribute('href')!, 'http://localhost');
+    expect(link.searchParams.get('q')).toContain('date>=2026-10-09T00 AND date<=2026-11-07T23');
   });
 
   test.each(['Enter', ' '])('opens ranking rows with the %j key', async (key) => {

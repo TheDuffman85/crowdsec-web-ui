@@ -6,15 +6,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CrowdsecDatabase } from '../../database';
 import { StatisticsStore, canonicalStatisticsIP, canonicalStatisticsSource, decodeStatisticsObservation, type ConsolidationContext } from '../../statistics-store';
-import { acknowledgeStatisticsBatch, configureStatisticsCapture, readStatisticsBatch } from '../../statistics-capture';
-import { statisticsCutoff, validateStatisticsSettings, type StatisticsFilters } from '../../../shared/statistics';
+import { acknowledgeStatisticsBatch, configureStatisticsCapture, readStatisticsBatch, resetStatisticsCapture } from '../../statistics-capture';
+import { statisticsCutoff, statisticsDay, statisticsDayStart, validateStatisticsSettings, type StatisticsFilters } from '../../../shared/statistics';
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
-function fixture() {
+function fixture(timeZone?: string) {
   const dir = mkdtempSync(path.join(tmpdir(), 'statistics-'));
   const source = new CrowdsecDatabase({ dataDir: dir });
-  const store = new StatisticsStore(path.join(dir, 'statistics.db'));
+  const store = new StatisticsStore(path.join(dir, 'statistics.db'), { timeZone });
   cleanups.push(() => { source.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   const context: ConsolidationContext = { cutoff: '2026-01-01', epoch: 'first', enabled: true, caughtUp: true, coverageFrom: { default: '2026-01-01T00:00:00.000Z' }, instances: ['default'], now: '2026-02-01T12:00:00.000Z' };
   const filters: StatisticsFilters = { from: '2026-01-01', to: '2026-01-31', instance: 'all', simulation: 'all', limit: 10 };
@@ -37,6 +37,68 @@ function fixture() {
 }
 
 describe('long-term statistics capture and aggregation', () => {
+  it('converts instants to calendar days of a time zone, across daylight saving and half-hour offsets', () => {
+    const start = (day: string, zone: string) => new Date(statisticsDayStart(day, zone)).toISOString();
+    expect(start('2026-03-29', 'Europe/Berlin')).toBe('2026-03-28T23:00:00.000Z');
+    expect(start('2026-03-30', 'Europe/Berlin')).toBe('2026-03-29T22:00:00.000Z');
+    expect(start('2026-01-11', 'Asia/Kolkata')).toBe('2026-01-10T18:30:00.000Z');
+    // Midnight is skipped when daylight saving time starts in Santiago; the day starts at 01:00.
+    expect(start('2026-09-06', 'America/Santiago')).toBe('2026-09-06T04:00:00.000Z');
+    expect(statisticsDay('2026-03-29T22:30:00.000Z', 'Europe/Berlin')).toBe('2026-03-30');
+    expect(statisticsDay('2026-01-10T18:29:00.000Z', 'Asia/Kolkata')).toBe('2026-01-10');
+    expect(statisticsDay('2026-01-10T18:30:00.000Z', 'Asia/Kolkata')).toBe('2026-01-11');
+    expect(statisticsCutoff(1, Date.parse('2026-02-01T23:30:00.000Z'), 'Europe/Berlin')).toBe('2026-02-02');
+    expect(statisticsCutoff(1, Date.parse('2026-02-01T23:30:00.000Z'))).toBe('2026-02-01');
+  });
+
+  it('deletes all statistics and recaptures the cached rows once', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    f.alert(1); f.alert(2); f.decision(1, 1);
+    f.consolidate();
+    // An uncaptured observation is pending when the statistics are deleted.
+    f.alert(3);
+    const before = f.query({ instance: 'default' });
+    expect(before.totals).toMatchObject({ alerts: 2, bans: 1 });
+    resetStatisticsCapture(f.source.db);
+    expect((f.source.db.prepare('SELECT COUNT(*) AS n FROM statistics_outbox').get() as { n: number }).n).toBe(0);
+    expect(f.store.reset()).toBe(before.revision + 1);
+    const empty = f.query({ instance: 'default' });
+    expect(empty.totals).toMatchObject({ alerts: 0, bans: 0, decisions: 0 });
+    expect(empty.coverage).toMatchObject({ from: null, through: null });
+    expect(f.store.metadata('lastSuccess')).toBeNull();
+    // Collection starts over with every cached row, each counted once.
+    while (f.consolidate().backfillPending) { /* drain the backfill */ }
+    f.consolidate();
+    expect(f.query({ instance: 'default' }).totals).toMatchObject({ alerts: 3, bans: 1, decisions: 1 });
+  });
+
+  it('buckets days, bans, coverage and hourly charts by the configured time zone', () => {
+    const f = fixture('Europe/Berlin'); configureStatisticsCapture(f.source.db, true);
+    // 23:30 UTC is already the next day in Berlin (UTC+1 in winter).
+    f.alert(1, { created_at: '2026-01-10T22:30:00.000Z' });
+    f.alert(2, { created_at: '2026-01-10T23:30:00.000Z' });
+    f.decision(1, 2, { created_at: '2026-01-10T23:45:00.000Z' });
+    f.alert(3, { created_at: '2026-01-31T23:30:00.000Z' });
+    f.alert(4, { created_at: '2026-02-01T11:00:00.000Z' });
+    // Coverage is clamped to the start of the first retained Berlin day.
+    f.context.coverageFrom.default = '2025-12-01T00:00:00.000Z';
+    f.consolidate();
+    const query = (filters: Partial<StatisticsFilters>) => f.query({ instance: 'default', ...filters });
+    expect(query({ from: '2026-01-10', to: '2026-01-10' }).totals).toMatchObject({ alerts: 1, bans: 0, decisions: 0 });
+    expect(query({ from: '2026-01-11', to: '2026-01-11' }).totals).toMatchObject({ alerts: 1, bans: 1, decisions: 1 });
+    const daily = query({ from: '2026-01-09', to: '2026-01-11' });
+    expect(daily.granularity).toBe('day');
+    expect(daily.series.map((row) => row.alerts)).toEqual([0, 1, 1]);
+    expect(daily.coverage.from).toBe('2025-12-31T23:00:00.000Z');
+    // Today in Berlin starts at 23:00 UTC the day before and is charted by UTC hour up to now.
+    const today = query({ from: '2026-02-01', to: '2026-02-01' });
+    expect(today.granularity).toBe('hour');
+    expect(today.series[0].date).toBe('2026-01-31T23:00:00.000Z');
+    expect(today.series.at(-1)!.date).toBe('2026-02-01T12:00:00.000Z');
+    expect(today.series.filter((row) => row.alerts).map((row) => row.date)).toEqual(['2026-01-31T23:00:00.000Z', '2026-02-01T11:00:00.000Z']);
+    expect(today.totals.alerts).toBe(2);
+  });
+
   it('filters breakdowns across totals, comparisons, hourly charts and finding details', () => {
     const f = fixture(); configureStatisticsCapture(f.source.db, true);
     const at = '2026-01-31T10:00:00.000Z';

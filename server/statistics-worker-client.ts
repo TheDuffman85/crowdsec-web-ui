@@ -10,7 +10,7 @@ export class StatisticsWorkerClient {
   private nextId = 0;
   private closed = false;
 
-  constructor(private readonly options: { dbPath: string; readonly?: boolean; walEnabled: boolean; incrementalVacuumEnabled: boolean; journalSizeLimitBytes: number }) {}
+  constructor(private readonly options: { dbPath: string; timeZone?: string; readonly?: boolean; walEnabled: boolean; incrementalVacuumEnabled: boolean; journalSizeLimitBytes: number }) {}
 
   request<T>(request: Record<string, unknown>): Promise<T> {
     if (this.closed) return Promise.reject(new Error('Statistics worker closed'));

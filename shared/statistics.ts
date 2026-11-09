@@ -44,6 +44,8 @@ export interface StatisticsConfiguration {
   settings: StatisticsSettings;
   managed: Partial<Record<keyof StatisticsSettings, ManagedSettingSource>>;
   status: StatisticsStatus;
+  /** IANA time zone whose calendar days the statistics are bucketed by. */
+  timeZone: string;
 }
 
 export interface StatisticsFilters {
@@ -78,17 +80,17 @@ export interface StatisticsRanking {
   network: string;
   scenarios: Array<{ label: string; count: number }>;
   targetedMachines: Array<{ value: string; label: string; count: number }>;
-  /** IP rankings only: the IP raised alerts on a later UTC day than its first ban in the range. */
+  /** IP rankings only: the IP raised alerts on a later day than its first ban in the range. */
   returnedAfterBan?: boolean;
 }
 
-/** Per-IP outcome counts; repeat attackers were active on more than one UTC day. */
+/** Per-IP outcome counts; repeat attackers were active on more than one day. */
 export interface StatisticsAttackerTotals {
   uniqueIPs: number;
   /** Alerting IPs with at least one ban linked to their alerts. */
   bannedIPs: number;
   repeatAttackers: number;
-  /** IPs that raised alerts on a later UTC day than a ban, including bans before the range. */
+  /** IPs that raised alerts on a later day than a ban, including bans before the range. */
   returnedAfterBan: number;
 }
 
@@ -100,7 +102,7 @@ export interface StatisticsScenario {
   machines: number;
   bans: number;
   bannedIPs: number;
-  /** UTC days with alerts of the scenario in the range. */
+  /** Days with alerts of the scenario in the range. */
   activeDays: number;
   firstActivity: string | null;
   lastActivity: string | null;
@@ -122,7 +124,7 @@ export interface StatisticsResponse {
   previousTotals: (Omit<StatisticsAttackerTotals, 'returnedAfterBan'> & { alerts: number; bans: number; decisions: number }) | null;
   attackers: StatisticsRanking[];
   machines: StatisticsRanking[];
-  /** UTC days, or UTC hours (ISO timestamps) for ranges within the last STATISTICS_HOURLY_DAYS days. */
+  /** Days, or hours (ISO timestamps) for ranges within the last STATISTICS_HOURLY_DAYS days. */
   series: Array<{ date: string; alerts: number | null; decisions: number | null }>;
   granularity: 'day' | 'hour';
   scenarios: StatisticsScenario[];
@@ -140,11 +142,60 @@ export interface StatisticsResponse {
   quietMachines: Array<{ value: string; label: string; previous: number }>;
 }
 
-/** UTC days, including today, whose activity is also kept per hour for the chart. */
+/** Days, including today, whose activity is also kept per hour for the chart. */
 export const STATISTICS_HOURLY_DAYS = 2;
 
-export function statisticsCutoff(retentionDays: number, now = Date.now()): string {
-  return new Date(Date.parse(new Date(now).toISOString().slice(0, 10)) - (retentionDays - 1) * 86_400_000).toISOString().slice(0, 10);
+/*
+ * Statistics are bucketed by calendar days of one time zone (the configured TZ,
+ * or the server's zone). Days are `YYYY-MM-DD` strings; day arithmetic uses UTC
+ * dates so it is independent of daylight saving time.
+ */
+const HOUR_MS = 3_600_000;
+const offsetFormatters = new Map<string, Intl.DateTimeFormat>();
+const offsetCache = new Map<string, number>();
+
+/** UTC offset of `timeZone` in the UTC hour containing `stamp`, cached per hour. */
+function zoneOffsetMs(stamp: number, timeZone: string): number {
+  if (timeZone === 'UTC') return 0;
+  const hour = Math.floor(stamp / HOUR_MS) * HOUR_MS;
+  const key = `${timeZone}\u0000${hour}`;
+  let offset = offsetCache.get(key);
+  if (offset !== undefined) return offset;
+  let formatter = offsetFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    offsetFormatters.set(timeZone, formatter);
+  }
+  const parts = formatter.formatToParts(hour);
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value || 0);
+  offset = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute')) - hour;
+  if (offsetCache.size >= 100_000) offsetCache.clear();
+  offsetCache.set(key, offset);
+  return offset;
+}
+
+/** The calendar day of an instant in `timeZone`. */
+export function statisticsDay(at: string | number, timeZone: string): string {
+  const stamp = typeof at === 'number' ? at : Date.parse(at);
+  return new Date(stamp + zoneOffsetMs(stamp, timeZone)).toISOString().slice(0, 10);
+}
+
+/** The instant (epoch ms) at which `day` begins in `timeZone`. */
+export function statisticsDayStart(day: string, timeZone: string): number {
+  const wall = Date.parse(`${day}T00:00:00.000Z`);
+  const guess = wall - zoneOffsetMs(wall, timeZone);
+  const start = wall - zoneOffsetMs(guess, timeZone);
+  // Where midnight is skipped by a daylight saving change, the day starts at the transition.
+  return statisticsDay(start, timeZone) === day ? start : guess;
+}
+
+export function addStatisticsDays(day: string, days: number): string {
+  return new Date(Date.parse(`${day}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** First retained day. */
+export function statisticsCutoff(retentionDays: number, now = Date.now(), timeZone = 'UTC'): string {
+  return addStatisticsDays(statisticsDay(now, timeZone), -(retentionDays - 1));
 }
 
 /** Drill-down data for one finding, loaded only when the finding is expanded. */
@@ -171,7 +222,7 @@ export interface StatisticsDetailIP {
   asn: string;
   network: string;
   lastActivity: string | null;
-  /** First UTC day with a ban in the range. */
+  /** First day with a ban in the range. */
   firstBan: string | null;
   /** Banned before the range. */
   bannedBefore: boolean;

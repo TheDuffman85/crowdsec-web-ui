@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { normalizeMachineId } from '../shared/machine';
 import {
-  STATISTICS_DETAIL_MAX, STATISTICS_DETAIL_PAGE, STATISTICS_HOURLY_DAYS, statisticsAddressRange, statisticsCutoff,
+  STATISTICS_DETAIL_MAX, STATISTICS_DETAIL_PAGE, STATISTICS_HOURLY_DAYS, addStatisticsDays, statisticsAddressRange, statisticsCutoff,
+  statisticsDay, statisticsDayStart,
   type StatisticsDetailRequest, type StatisticsDetails, type StatisticsFilters, type StatisticsRanking, type StatisticsResponse,
 } from '../shared/statistics';
 import type { StatisticsOutboxRow } from './statistics-capture';
@@ -41,13 +42,10 @@ export interface ConsolidationContext {
 
 export type StoredStatistics = Omit<StatisticsResponse, 'configuration'> & { lastSuccess: string | null };
 const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
-const day = (value: string): string => value.slice(0, 10);
 // Source clocks can run slightly ahead of this server. Observations up to one
-// UTC day ahead are kept on their own date instead of being dropped.
+// day ahead are kept on their own date instead of being dropped.
 const CLOCK_SKEW_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
-/** First UTC day that keeps hourly counts at `now`; see STATISTICS_HOURLY_DAYS. */
-const hourlyFloor = (now: number): string => new Date(now - (STATISTICS_HOURLY_DAYS - 1) * 86_400_000).toISOString().slice(0, 10);
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 
 export function canonicalStatisticsIP(value: unknown): string {
@@ -74,9 +72,15 @@ const CELLS_BY_IP = 'cells INDEXED BY idx_statistics_cells_ip';
 export class StatisticsStore {
   readonly db: any;
   private readonly vacuumEnabled: boolean;
+  /**
+   * Days are calendar days of this zone. Hourly counts are kept by UTC hour.
+   * Days stored before the zone changed keep the day they were bucketed by.
+   */
+  private readonly timeZone: string;
 
-  constructor(file: string, options: { readonly?: boolean; walEnabled?: boolean; incrementalVacuumEnabled?: boolean; journalSizeLimitBytes?: number } = {}) {
+  constructor(file: string, options: { readonly?: boolean; walEnabled?: boolean; incrementalVacuumEnabled?: boolean; journalSizeLimitBytes?: number; timeZone?: string } = {}) {
     this.vacuumEnabled = options.incrementalVacuumEnabled !== false;
+    this.timeZone = options.timeZone || 'UTC';
     this.db = new Database(file, { readonly: options.readonly ?? false, timeout: 1000 });
     this.db.pragma('busy_timeout = 1000');
     this.db.pragma('cache_size = -8000');
@@ -181,6 +185,16 @@ export class StatisticsStore {
 
   close(): void { this.db.close(); }
 
+  private day(at: string | number): string { return statisticsDay(at, this.timeZone); }
+
+  /** ISO timestamp at which `day` begins. */
+  private dayStart(day: string): string { return new Date(statisticsDayStart(day, this.timeZone)).toISOString(); }
+
+  /** First UTC hour (`YYYY-MM-DDTHH`) that keeps hourly counts at `now`; see STATISTICS_HOURLY_DAYS. */
+  private hourlyFloor(now: number): string {
+    return this.dayStart(addStatisticsDays(this.day(now), -(STATISTICS_HOURLY_DAYS - 1))).slice(0, 13);
+  }
+
   /** Latest coverage end per instance, used to continue coverage across restarts. */
   latestCoverage(): Record<string, string> {
     const rows = this.db.prepare('SELECT instance, MAX(through) AS through FROM coverage WHERE through IS NOT NULL GROUP BY instance').all() as Array<{ instance: string; through: string }>;
@@ -203,26 +217,30 @@ export class StatisticsStore {
     const upsertHour = this.db.prepare(`INSERT INTO hours (kind, hour, key, instance, simulated, ip, machine, scenario, country, network, target, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(kind, hour, key) DO UPDATE SET count = count + 1`);
     const pruneHours = this.db.prepare('DELETE FROM hours WHERE kind = ? AND hour < ?');
-    const firstHourlyDay = hourlyFloor(Date.parse(context.now));
+    const firstHour = this.hourlyFloor(Date.parse(context.now));
+    const day = (at: string) => this.day(at);
     const overlappingCoverage = this.db.prepare('SELECT MIN(start) AS start FROM coverage WHERE instance = ? AND through >= ? AND start <= ?');
     const deleteCoverage = this.db.prepare('DELETE FROM coverage WHERE instance = ? AND through >= ? AND start <= ?');
     const putCoverage = this.db.prepare('INSERT OR REPLACE INTO coverage(epoch, instance, start, through) VALUES (?, ?, ?, ?)');
     const today = day(context.now);
-    const horizon = day(new Date(Date.parse(context.now) + CLOCK_SKEW_MS).toISOString());
+    const horizon = this.day(Date.parse(context.now) + CLOCK_SKEW_MS);
+    // Source rows are dated by UTC day, which may be one day before the zone's day.
+    const sourceCutoff = addStatisticsDays(context.cutoff, -1);
     const withinRetention = (at: string | undefined) => Boolean(at && day(at) >= context.cutoff && day(at) <= horizon);
     this.db.transaction(() => {
       for (const row of rows) {
-        if (row.day < context.cutoff) continue;
+        if (row.day < sourceCutoff) continue;
         const o = decodeStatisticsObservation(row.payload);
         if (!Number.isFinite(Date.parse(o.at))) throw new Error('Invalid statistics observation timestamp');
         if (!withinRetention(o.at) && !(o.kind === 'decision' && withinRetention(o.alertAt))) continue;
         // Future-dated source clocks must not bypass the maximum retention age.
-        if (!insertSeen.run(digest(row.identity), row.day > today ? today : row.day).changes) continue;
+        const seenDay = day(o.at);
+        if (!insertSeen.run(digest(row.identity), seenDay > today ? today : seenDay).changes) continue;
         if (o.kind === 'decision' && o.alertIdentity) {
           const parent = getParent.get(digest(JSON.stringify(o.alertIdentity)));
           if (parent) Object.assign(o, { ip: parent.ip, machineId: parent.machine_id, machineName: parent.machine_name,
             scenario: parent.scenario, country: parent.country, asn: parent.asn, network: parent.network, target: parent.target,
-            alertAt: `${parent.day}T00:00:00.000Z`, alertSimulated: parent.simulated });
+            alertAt: this.dayStart(parent.day), alertSimulated: parent.simulated });
         }
         const ip = canonicalStatisticsSource(o.ip);
         const machineId = normalizeMachineId(o.machineId) || normalizeMachineId(o.machineName) || '';
@@ -239,7 +257,7 @@ export class StatisticsStore {
           const [cellKind, cellDay, ...rest] = dims;
           upsert.run(cellKind, cellDay, key, ...rest, target, 1, events, at, at);
           // Only the chart uses hours, so they keep just the series dimensions.
-          if (kind !== 'ban' && cellDay >= firstHourlyDay) {
+          if (kind !== 'ban' && at.slice(0, 13) >= firstHour) {
             const hourDims = [kind, at.slice(0, 13), o.instance, o.simulated ? 1 : 0, ip, machine, text(o.scenario), text(o.country), text(o.network), target];
             upsertHour.run(kind, hourDims[1], digest(JSON.stringify(hourDims)), ...hourDims.slice(2));
           }
@@ -256,7 +274,7 @@ export class StatisticsStore {
       }
       if (context.enabled && context.caughtUp && context.sourceComplete !== false) {
         for (const instance of context.instances) {
-          const floor = `${context.cutoff}T00:00:00.000Z`;
+          const floor = this.dayStart(context.cutoff);
           const requestedStart = context.coverageFrom[instance] || context.now;
           const start = requestedStart < floor ? floor : requestedStart;
           // Merge only overlapping authoritative import windows. An outage
@@ -267,12 +285,23 @@ export class StatisticsStore {
           putCoverage.run(`${context.epoch}:${context.now}`, instance, mergedStart, context.now);
         }
       }
-      for (const kind of ['alert', 'issued']) pruneHours.run(kind, firstHourlyDay);
+      for (const kind of ['alert', 'issued']) pruneHours.run(kind, firstHour);
       const revision = Number(this.metadata('revision') || 0) + 1;
       putMeta.run('revision', String(revision));
       if (context.caughtUp) putMeta.run('lastSuccess', context.now);
     })();
     return { revision: Number(this.metadata('revision')), lastSuccess: this.metadata('lastSuccess') };
+  }
+
+  /** Deletes every statistic. The revision still advances so readers notice the change. */
+  reset(): number {
+    const revision = Number(this.metadata('revision') || 0) + 1;
+    this.db.transaction(() => {
+      this.db.exec('DELETE FROM cells; DELETE FROM seen; DELETE FROM coverage; DELETE FROM hours; DELETE FROM metadata;');
+      this.db.prepare('INSERT INTO metadata(key, value) VALUES (?, ?)').run('revision', String(revision));
+    })();
+    if (this.vacuumEnabled) this.db.pragma('incremental_vacuum');
+    return revision;
   }
 
   prune(cutoff: string): void {
@@ -286,8 +315,9 @@ export class StatisticsStore {
           .run(kind, cutoff, kind, cutoff, budget).changes;
       }
       this.db.prepare('DELETE FROM seen WHERE identity IN (SELECT identity FROM seen WHERE day < ? LIMIT 500)').run(cutoff);
-      this.db.prepare('DELETE FROM coverage WHERE through < ?').run(cutoff);
-      this.db.prepare('UPDATE coverage SET start = ? WHERE start < ?').run(`${cutoff}T00:00:00.000Z`, cutoff);
+      const start = this.dayStart(cutoff);
+      this.db.prepare('DELETE FROM coverage WHERE through < ?').run(start);
+      this.db.prepare('UPDATE coverage SET start = ? WHERE start < ?').run(start, start);
     })();
     if (this.vacuumEnabled) this.db.pragma('incremental_vacuum(64)');
   }
@@ -381,7 +411,7 @@ export class StatisticsStore {
 
   /** Shared filter scope; the day range is separate so other periods reuse the same scope. */
   private scopeOf(f: StatisticsFilters, retentionDays: number, instances: string[], now: number) {
-    const cutoff = statisticsCutoff(retentionDays, now);
+    const cutoff = statisticsCutoff(retentionDays, now, this.timeZone);
     const start = f.from > cutoff ? f.from : cutoff;
     const scope: string[] = [];
     const scopeParams: unknown[] = [];
@@ -410,6 +440,7 @@ export class StatisticsStore {
 
   private read(f: StatisticsFilters, retentionDays: number, instances: string[], now: number, freshnessMs: number): StoredStatistics {
     const { cutoff, start, scoped, scopeParams, banFilter, isBan, where, params, previousFrom, previousTo } = this.scopeOf(f, retentionDays, instances, now);
+    const day = (at: string | number) => this.day(at);
     const all = (sql: string, args: unknown[] = params): any[] => this.db.prepare(sql).all(...args);
     const get = (sql: string, args: unknown[] = params): any => this.db.prepare(sql).get(...args);
     // Bans count attacks from a known source; blocklist imports have none and
@@ -420,7 +451,7 @@ export class StatisticsStore {
       FROM cells WHERE kind = '${kind}' AND ${filter}${where} GROUP BY ${field} ORDER BY count DESC, label LIMIT ${f.limit}`);
     /**
      * Per-IP outcomes in one grouped pass over alerts and their bans. Bans are
-     * dated by their alert, so "returned" means alerts on a later UTC day than a
+     * dated by their alert, so "returned" means alerts on a later day than a
      * ban. With `history` (the archive before the range), each IP is also looked
      * up once by the IP index: absent means new, and a ban there means returned.
      */
@@ -520,7 +551,7 @@ export class StatisticsStore {
         return false;
       });
     };
-    const covered = (date: string): boolean => coveredSpan(`${date}T00:00:00.000Z`, new Date(Math.min(Date.parse(date) + 86_400_000, now)).toISOString());
+    const covered = (date: string): boolean => coveredSpan(this.dayStart(date), new Date(Math.min(statisticsDayStart(addStatisticsDays(date, 1), this.timeZone), now)).toISOString());
     let comparisonPartial = previousFrom < cutoff;
     for (let stamp = Date.parse(previousFrom); !comparisonPartial && stamp <= Date.parse(previousTo); stamp += 86_400_000) comparisonPartial = !covered(new Date(stamp).toISOString().slice(0, 10));
     const compare = !comparisonPartial;
@@ -534,19 +565,23 @@ export class StatisticsStore {
     // Ranges within the kept hourly days are charted by hour.
     const hourlySince = this.metadata('hourlySince');
     const hourlyBreakdownsSince = (f.country || f.network || f.target) && this.metadata('hourlyBreakdownsSince');
-    const granularity = dates.length <= STATISTICS_HOURLY_DAYS && f.from >= hourlyFloor(now) && f.from <= day(new Date(now).toISOString())
-      && (!hourlySince || hourlySince <= `${f.from}T00:00:00.000Z`)
-      && (!hourlyBreakdownsSince || hourlyBreakdownsSince <= `${f.from}T00:00:00.000Z`)
+    const rangeStart = this.dayStart(f.from);
+    const granularity = dates.length <= STATISTICS_HOURLY_DAYS && f.from >= addStatisticsDays(day(now), -(STATISTICS_HOURLY_DAYS - 1)) && f.from <= day(now)
+      && (!hourlySince || hourlySince <= rangeStart)
+      && (!hourlyBreakdownsSince || hourlyBreakdownsSince <= rangeStart)
       && this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'hours'").get() ? 'hour' : 'day';
     const series: StoredStatistics['series'] = [];
     if (granularity === 'hour') {
+      // UTC hours from the one containing the start of the first day. Hours
+      // after the current one have not happened yet.
+      const first = `${rangeStart.slice(0, 13)}:00:00.000Z`;
+      const end = statisticsDayStart(addStatisticsDays(f.to, 1), this.timeZone);
+      const last = Math.min(Math.ceil(end / HOUR_MS) * HOUR_MS - HOUR_MS, Math.floor(now / HOUR_MS) * HOUR_MS);
       const hourly = new Map<string, { alerts: number; decisions: number }>();
       for (const row of all(`SELECT hour, SUM(CASE WHEN kind = 'alert' THEN count ELSE 0 END) AS alerts,
         SUM(CASE WHEN kind = 'issued' THEN count ELSE 0 END) AS decisions FROM hours
-        WHERE kind IN ('alert', 'issued') AND hour BETWEEN ? AND ? AND ${scoped} GROUP BY hour`, [`${f.from}T00`, `${f.to}T23`, ...scopeParams])) hourly.set(row.hour, row);
-      // Hours after the current one have not happened yet.
-      const last = Math.min(Date.parse(f.to) + 23 * HOUR_MS, Math.floor(now / HOUR_MS) * HOUR_MS);
-      for (let stamp = Date.parse(f.from); stamp <= last; stamp += HOUR_MS) {
+        WHERE kind IN ('alert', 'issued') AND hour BETWEEN ? AND ? AND ${scoped} GROUP BY hour`, [first.slice(0, 13), new Date(last).toISOString().slice(0, 13), ...scopeParams])) hourly.set(row.hour, row);
+      for (let stamp = Date.parse(first); stamp <= last; stamp += HOUR_MS) {
         const date = new Date(stamp).toISOString();
         const counts = hourly.get(date.slice(0, 13));
         const known = counts ? true : coveredSpan(date, new Date(Math.min(stamp + HOUR_MS, now)).toISOString());
@@ -611,9 +646,9 @@ export class StatisticsStore {
     return {
       lastSuccess: this.metadata('lastSuccess'),
       filters: f, revision: Number(this.metadata('revision') || 0),
-      coverage: { from: relevant.length ? [relevant.map((s) => s.start).sort()[0], `${cutoff}T00:00:00.000Z`].sort().at(-1)! : null,
+      coverage: { from: relevant.length ? [relevant.map((s) => s.start).sort()[0], this.dayStart(cutoff)].sort().at(-1)! : null,
         through: scopes.every((i) => spansByInstance.get(i)?.length) ? scopes.map((i) => spansByInstance.get(i)!.map((s) => s.through).sort().at(-1)!).sort()[0] : null,
-        partial: dates.some((date) => !covered(date)) || relevant.some((s) => s.start > `${f.from}T00:00:00.000Z` && day(s.start) === f.from), comparisonPartial },
+        partial: dates.some((date) => !covered(date)) || relevant.some((s) => s.start > rangeStart && day(s.start) === f.from), comparisonPartial },
       totals: { alerts: Number(totals.alerts), events: Number(totals.events), bans: sum('ban', `ip != '' AND ${where}${banFilter}`), decisions: sum('issued'), ...attackers },
       previousTotals,
       attackers: ranking('ip'), machines: ranking('machine'), series, granularity, scenarios,

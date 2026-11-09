@@ -2,7 +2,9 @@ import type { Hono } from 'hono';
 import type { RuntimeConfig } from '../config';
 import type { StatisticsService } from '../statistics-service';
 import { canonicalStatisticsSource } from '../statistics-store';
-import { STATISTICS_DETAIL_MAX, STATISTICS_DETAIL_PAGE, type StatisticsDetailRequest, type StatisticsFilters } from '../../shared/statistics';
+import {
+  STATISTICS_DETAIL_MAX, STATISTICS_DETAIL_PAGE, addStatisticsDays, statisticsDay, type StatisticsDetailRequest, type StatisticsFilters,
+} from '../../shared/statistics';
 
 export function registerStatisticsRoutes(options: {
   app: Hono; config: RuntimeConfig; statistics: StatisticsService;
@@ -11,12 +13,12 @@ export function registerStatisticsRoutes(options: {
   const { app, config, statistics, ensureAuth, ensureCanManageSettings } = options;
   /** Parses the shared page filters, or returns an error message. */
   const parseFilters = (q: Record<string, string>): StatisticsFilters | string => {
-    const today = new Date().toISOString().slice(0, 10);
-    // Tolerate a browser clock that has already reached the next UTC day.
-    const latestTo = new Date(Date.parse(today) + 86_400_000).toISOString().slice(0, 10);
+    const today = statisticsDay(Date.now(), statistics.timeZone);
+    // Tolerate a browser clock that has already reached the next day.
+    const latestTo = addStatisticsDays(today, 1);
     const date = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
     const filters: StatisticsFilters = {
-      from: q.from || new Date(Date.parse(today) - 29 * 86_400_000).toISOString().slice(0, 10),
+      from: q.from || addStatisticsDays(today, -29),
       to: q.to || today, instance: q.instance || 'all',
       // Simulated activity is hidden everywhere while simulations are disabled.
       simulation: (config.simulationsEnabled ? q.simulation || 'live' : 'live') as StatisticsFilters['simulation'],
@@ -26,7 +28,7 @@ export function registerStatisticsRoutes(options: {
       ...(q.network ? { network: q.network } : {}), ...(q.target ? { target: q.target } : {}),
     };
     if (!date(filters.from) || !date(filters.to) || filters.from > filters.to || filters.to > latestTo
-      || Date.parse(filters.to) - Date.parse(filters.from) >= 3650 * 86_400_000) return 'Choose a valid UTC date range of at most 3650 days, ending no later than today';
+      || Date.parse(filters.to) - Date.parse(filters.from) >= 3650 * 86_400_000) return 'Choose a valid date range of at most 3650 days, ending no later than today';
     if (!['all', ...config.instances.map((i) => i.id)].includes(filters.instance)) return 'Unknown instance';
     if (!['all', 'live', 'simulated'].includes(filters.simulation) || ![10, 20, 50].includes(filters.limit)) return 'Invalid simulation filter or ranking limit';
     if (filters.ip && !canonicalStatisticsSource(filters.ip)) return 'ip must be an IPv4 or IPv6 address or range';
@@ -75,6 +77,16 @@ export function registerStatisticsRoutes(options: {
     } else return context.json({ error: 'Invalid detail kind' }, 400);
     try { return context.json(await statistics.details(filters, request)); }
     catch (error) { return unavailable(context, error); }
+  });
+
+  app.delete(`${config.basePath}/api/statistics`, ensureAuth, async (context) => {
+    const denied = ensureCanManageSettings(context);
+    if (denied) return denied;
+    try { return context.json({ success: true, statistics: await statistics.reset() }); }
+    catch (error) {
+      console.error('Deleting statistics failed:', error instanceof Error ? error.message : String(error));
+      return context.json({ error: 'Statistics could not be deleted' }, 500);
+    }
   });
 
   app.put(`${config.basePath}/api/config/statistics`, ensureAuth, async (context) => {
