@@ -621,6 +621,8 @@
   "pages.passwordChange.subtitle": "Вы вошли как {username}. Выберите новый пароль, чтобы продолжить.",
   "pages.passwordChange.signOut": "Выйти",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "Настройки OIDC сохранены, но discovery завершился ошибкой: {error}",
+  "pages.alerts.aggregateSource": "Сводный ({count})",
+  "pages.alerts.aggregateSourceTitle": "У этого оповещения нет единого IP-источника. Оно объединяет решения ({count}), например из импорта блок-листа.",
   "pages.alerts.alertDetails": "Сведения об оповещении",
   "pages.alerts.alertDetailsId": "Сведения об оповещении #{id}",
   "pages.alerts.allowlisted": "В списке разрешённых",

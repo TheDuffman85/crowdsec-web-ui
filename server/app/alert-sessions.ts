@@ -1,4 +1,5 @@
 import type { AlertSessionScenarioGroup, AlertSessionTarget } from '../../shared/contracts';
+import { isUnspecifiedSourceAddress } from '../../shared/source';
 
 export const ALERT_SESSION_GAP_MS = 30 * 60_000;
 export const ALERT_SESSION_SCAN_BATCH_SIZE = 2_000;
@@ -48,7 +49,8 @@ type OpenAlertSession = {
 };
 
 function getSessionIdentity(row: AlertSessionScanRow): string | null {
-  if (!row.source_ip) return null;
+  // Placeholder sources stand for many IPs, so they do not identify an attacker.
+  if (!row.source_ip || isUnspecifiedSourceAddress(row.source_ip)) return null;
   const scope = row.source_scope?.trim().toLowerCase();
   if (scope && scope !== 'ip' && scope !== 'range') return null;
   return `${row.instance_id}\u0000${row.simulated ? 1 : 0}\u0000${row.source_ip}`;

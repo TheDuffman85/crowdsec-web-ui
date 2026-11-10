@@ -621,6 +621,8 @@
   "pages.passwordChange.subtitle": "Angemeldet als {username}. Wähle ein neues Passwort, um fortzufahren.",
   "pages.passwordChange.signOut": "Abmelden",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "OIDC-Einstellungen gespeichert, aber Discovery ist fehlgeschlagen: {error}",
+  "pages.alerts.aggregateSource": "Sammelalarm ({count})",
+  "pages.alerts.aggregateSourceTitle": "Dieser Alarm hat keine einzelne Quell-IP. Er bündelt {count} Entscheidungen, z. B. aus einem Blocklisten-Import.",
   "pages.alerts.alertDetails": "Alarmdetails",
   "pages.alerts.alertDetailsId": "Alarmdetails #{id}",
   "pages.alerts.allowlisted": "Auf Allowlist",

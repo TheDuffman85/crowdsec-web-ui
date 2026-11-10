@@ -621,6 +621,8 @@
   "pages.passwordChange.subtitle": "{username} としてサインインしています。続行するには新しいパスワードを選択してください。",
   "pages.passwordChange.signOut": "サインアウト",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "OIDC 設定を保存しましたが、Discovery に失敗しました: {error}",
+  "pages.alerts.aggregateSource": "集約 ({count})",
+  "pages.alerts.aggregateSourceTitle": "このアラートには単一の送信元 IP がありません。ブロックリストのインポートなどによる {count} 件の判定をまとめています。",
   "pages.alerts.alertDetails": "アラート詳細",
   "pages.alerts.alertDetailsId": "アラート詳細 #{id}",
   "pages.alerts.allowlisted": "許可リスト登録済み",

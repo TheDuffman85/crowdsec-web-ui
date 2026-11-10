@@ -105,6 +105,27 @@ describe('AlertSessionWalker', () => {
     expect(new Set(sessions.map((session) => session.key)).size).toBe(4);
   });
 
+  test('never merges alerts whose source is an unspecified placeholder address', () => {
+    const sessions = walk([
+      scanRow(4, 0, { source_ip: '0.0.0.0', scenario: 'external/blocklist (AbuseIPDB)' }),
+      scanRow(3, 0, { source_ip: '0.0.0.0', scenario: 'external/blocklist (IPsum)' }),
+      scanRow(2, 1, { source_ip: '::', source_scope: 'Ip' }),
+      scanRow(1, 2, { source_ip: '::', source_scope: 'Ip' }),
+    ]);
+
+    expect(sessions.map((session) => session.alertCount)).toEqual([1, 1, 1, 1]);
+    expect(new Set(sessions.map((session) => session.key)).size).toBe(4);
+  });
+
+  test('completes placeholder-source sessions without waiting for the gap', () => {
+    const walker = new AlertSessionWalker();
+    walker.add(scanRow(2, 0, { source_ip: '0.0.0.0' }));
+    walker.add(scanRow(1, 1, { source_ip: '0.0.0.0' }));
+    walker.advanceTo(minutesBefore(1));
+
+    expect(walker.completeCount).toBe(2);
+  });
+
   test('accepts range sources and alerts without a recorded scope', () => {
     const sessions = walk([
       scanRow(4, 0, { source_ip: '10.0.0.0/24', source_scope: 'Range' }),

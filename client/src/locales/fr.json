@@ -623,6 +623,8 @@
   "pages.passwordChange.subtitle": "Connecté en tant que {username}. Choisissez un nouveau mot de passe pour continuer.",
   "pages.passwordChange.signOut": "Se déconnecter",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "Paramètres OIDC enregistrés, mais la découverte a échoué : {error}",
+  "pages.alerts.aggregateSource": "Agrégé ({count})",
+  "pages.alerts.aggregateSourceTitle": "Cette alerte n'a pas d'IP source unique. Elle regroupe {count} décisions, par exemple issues de l'import d'une liste de blocage.",
   "pages.alerts.alertDetails": "Détails de l’alerte",
   "pages.alerts.alertDetailsId": "Détails de l’alerte #{id}",
   "pages.alerts.allowlisted": "Autorisé",

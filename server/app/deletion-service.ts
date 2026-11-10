@@ -606,7 +606,8 @@ function getDecisionIdsForAlertIds(alertIds: string[]): string[] {
     if (chunk.length === 0) continue;
     const placeholders = chunk.map(() => '?').join(',');
     const rows = database.db.prepare(`SELECT id FROM decisions WHERE alert_id IN (${placeholders})`).all(...chunk) as Array<{ id: string | number }>;
-    ids.push(...rows.map((row) => String(row.id)));
+    // One imported-blocklist alert can own many thousands of decisions; avoid spreading them into a call.
+    for (const row of rows) ids.push(String(row.id));
   }
   return ids;
 }

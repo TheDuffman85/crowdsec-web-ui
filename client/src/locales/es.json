@@ -621,6 +621,8 @@
   "pages.passwordChange.subtitle": "Sesión iniciada como {username}. Elige una nueva contraseña para continuar.",
   "pages.passwordChange.signOut": "Cerrar sesión",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "Ajustes de OIDC guardados, pero falló el descubrimiento: {error}",
+  "pages.alerts.aggregateSource": "Agregado ({count})",
+  "pages.alerts.aggregateSourceTitle": "Esta alerta no tiene una única IP de origen. Agrupa {count} decisiones, por ejemplo de la importación de una lista de bloqueo.",
   "pages.alerts.alertDetails": "Detalles de la alerta",
   "pages.alerts.alertDetailsId": "Detalles de la alerta #{id}",
   "pages.alerts.allowlisted": "Permitido",

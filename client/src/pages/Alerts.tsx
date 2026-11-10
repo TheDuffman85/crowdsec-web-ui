@@ -56,6 +56,7 @@ import { formatAlertSessionDuration, loadStoredAlertGrouping, saveStoredAlertGro
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
+import { isUnspecifiedSourceAddress } from "../../../shared/source";
 import {
     compileAlertSearch,
     getSearchDateRange,
@@ -175,12 +176,33 @@ function hasAlertEvents(alert: AlertSelection): alert is AlertRecord {
 }
 
 function getAlertDecisionIp(alert: AlertSelection): string | null {
-    return alert.source?.ip?.trim() || null;
+    const ip = alert.source?.ip?.trim();
+    return ip && !isUnspecifiedSourceAddress(ip) ? ip : null;
 }
 
 function getAlertSourceValue(source: AlertSource | null | undefined): string | undefined {
     const values = [source?.ip, source?.value, source?.range];
-    return values.find((value): value is string => typeof value === 'string' && value.length > 0);
+    return values.find((value): value is string => typeof value === 'string' && value.length > 0 && !isUnspecifiedSourceAddress(value));
+}
+
+function hasPlaceholderAlertSource(source: AlertSource | null | undefined): boolean {
+    return isUnspecifiedSourceAddress(source?.ip) || isUnspecifiedSourceAddress(source?.value) || isUnspecifiedSourceAddress(source?.range);
+}
+
+function getAlertTotalDecisionCount(alert: AlertSelection): number {
+    const summary = hasAlertEvents(alert) ? undefined : alert.decision_summary;
+    return summary ? summary.active_count + summary.expired_count : alert.decisions?.length ?? 0;
+}
+
+/**
+ * Number of decisions an alert carries when it has no single source, as with
+ * blocklist imports (shown by cscli as `Ip (54 IPs)`), or null for a normal alert.
+ */
+function getAggregateSourceCount(alert: AlertSelection): number | null {
+    if (getAlertSourceValue(alert.source)) return null;
+    const count = getAlertTotalDecisionCount(alert);
+    if (count === 0) return null;
+    return hasPlaceholderAlertSource(alert.source) || count > 1 ? count : null;
 }
 
 function getAlertOrigins(alert: AlertListItem): string[] {
@@ -1789,6 +1811,7 @@ export function Alerts() {
         || selectedAlertEvents.some(isAppSecEvent);
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
+    const selectedAlertAggregateSourceCount = selectedAlert ? getAggregateSourceCount(selectedAlert) : null;
     const alertSummaryGridColumns = multipleInstances
         ? (isAlertColumnVisible('machine') ? 'md:grid-cols-3 xl:grid-cols-6' : 'md:grid-cols-3 xl:grid-cols-5')
         : (isAlertColumnVisible('machine') ? 'md:grid-cols-3 xl:grid-cols-5' : 'md:grid-cols-2 xl:grid-cols-4');
@@ -1922,12 +1945,21 @@ export function Alerts() {
                         {alert.source?.as_name || "-"}
                     </td>
                 );
-            case 'source':
+            case 'source': {
+                const aggregateCount = sourceValue ? null : getAggregateSourceCount(alert);
+                if (aggregateCount !== null) {
+                    return (
+                        <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[200px] truncate" title={t('pages.alerts.aggregateSourceTitle', { count: aggregateCount })}>
+                            {t('pages.alerts.aggregateSource', { count: aggregateCount })}
+                        </td>
+                    );
+                }
                 return (
                     <td key={columnId} className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
                         {sourceValue || "-"}
                     </td>
                 );
+            }
             case 'machine':
                 return (
                     <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
@@ -2604,11 +2636,18 @@ export function Alerts() {
                                             </span>
                                             <ExternalLink size={14} className="shrink-0" />
                                         </a>
+                                    ) : selectedAlertAggregateSourceCount !== null ? (
+                                        <span
+                                            className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} truncate`}
+                                            title={t('pages.alerts.aggregateSourceTitle', { count: selectedAlertAggregateSourceCount })}
+                                        >
+                                            {t('pages.alerts.aggregateSource', { count: selectedAlertAggregateSourceCount })}
+                                        </span>
                                     ) : (
                                         <span className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} font-mono`}>-</span>
                                     )}
                                 </div>
-                                {selectedAlert.source?.range && selectedAlert.source.range !== selectedAlertSourceValue && (
+                                {selectedAlert.source?.range && selectedAlert.source.range !== selectedAlertSourceValue && !isUnspecifiedSourceAddress(selectedAlert.source.range) && (
                                     <div
                                         className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} font-mono mt-1 truncate`}
                                         title={t('pages.alerts.range', { range: selectedAlert.source.range })}
