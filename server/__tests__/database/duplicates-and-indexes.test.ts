@@ -242,6 +242,46 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     db.close();
   });
 
+  test('incrementally refreshes more expired decisions than a call can take as arguments', () => {
+    const db = createTestDatabase();
+    const expiring = 200_000;
+    // Imported blocklists expire in bulk; insert them directly to keep the test fast.
+    db.db.prepare(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+      INSERT INTO decisions (id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario)
+      SELECT 'list-' || i, 'list-' || i, 1, '2026-01-01T00:00:00.000Z', '2029-06-01T00:00:00.000Z',
+        '10.' || (i / 65536) || '.' || ((i / 256) % 256) || '.' || (i % 256), 'ban', 'lists', 'crowdsecurity/blocklist-import'
+      FROM n
+    `).run(expiring);
+    const insertDecision = (id: string, stopAt: string) => db.insertDecision({
+      $id: id,
+      $uuid: id,
+      $alert_id: 2,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: stopAt,
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id, value: '1.2.3.4', stop_at: stopAt }),
+    });
+    insertDecision('active', '2030-01-01T00:00:00.000Z');
+    insertDecision('expiring', '2029-06-01T00:00:00.000Z');
+
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z', true)).toBe(1);
+    expect(db.getMeta('decision_duplicate_flags_dirty')?.value).toBe('false');
+
+    // Every decision expired since the last refresh is a dirty key of the incremental pass.
+    expect(db.refreshDecisionDuplicateFlags('2029-07-01T00:00:00.000Z')).toBe(1);
+    expect(db.db.prepare("SELECT id, is_duplicate FROM decisions WHERE alert_id = 2 ORDER BY id").all()).toEqual([
+      { id: 'active', is_duplicate: 0 },
+      { id: 'expiring', is_duplicate: 0 },
+    ]);
+    expect(db.getMeta('decision_duplicate_refresh_at')?.value).toBe('2029-07-01T00:00:00.000Z');
+
+    db.close();
+  });
+
   test('deleting retained expired decisions does not dirty active duplicate flags', () => {
     const db = createTestDatabase();
     const insertDecision = (id: string, stopAt: string) => db.insertDecision({

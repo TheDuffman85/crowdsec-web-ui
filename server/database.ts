@@ -2037,21 +2037,22 @@ export class CrowdsecDatabase {
       return result.changes;
     }
 
-    const dirtyKeys = Array.from(this.decisionDuplicateDirtyKeys.values());
+    const uniqueKeys = new Map<string, DecisionDuplicateKeyRow>(this.decisionDuplicateDirtyKeys);
     if (this.lastDecisionDuplicateRefreshAt) {
-      dirtyKeys.push(...this.db.prepare(`
+      // Expirations since the last refresh can number in the hundreds of
+      // thousands (e.g. imported blocklists), so they are added one by one:
+      // spreading them into a call would exceed the engine's argument limit.
+      const expiredKeys = this.db.prepare(`
         SELECT DISTINCT value, simulated
         FROM decisions
         WHERE stop_at > ? AND stop_at <= ?
-      `).all(this.lastDecisionDuplicateRefreshAt, now) as DecisionDuplicateKeyRow[]);
-    }
-
-    const uniqueKeys = new Map<string, DecisionDuplicateKeyRow>();
-    for (const key of dirtyKeys) {
-      uniqueKeys.set(
-        `${key.simulated}\u0000${key.value === null ? '\u0001' : `\u0002${key.value}`}`,
-        key,
-      );
+      `).all(this.lastDecisionDuplicateRefreshAt, now) as DecisionDuplicateKeyRow[];
+      for (const key of expiredKeys) {
+        uniqueKeys.set(
+          `${key.simulated}\u0000${key.value === null ? '\u0001' : `\u0002${key.value}`}`,
+          key,
+        );
+      }
     }
     if (uniqueKeys.size === 0 && !this.decisionDuplicateFlagsDirty) {
       this.lastDecisionDuplicateRefreshAt = now;
@@ -2903,7 +2904,8 @@ export class CrowdsecDatabase {
       const chunk = alertIds.slice(offset, offset + chunkSize);
       const placeholders = chunk.map(() => '?').join(',');
       const rows = this.db.prepare(`SELECT id FROM decisions WHERE alert_id IN (${placeholders})`).all(...chunk) as Array<{ id: string | number }>;
-      decisionIds.push(...rows.map((row) => String(row.id)));
+      // One imported-blocklist alert can own many thousands of decisions; avoid spreading them into a call.
+      for (const row of rows) decisionIds.push(String(row.id));
     }
     this.deleteDecisionSearchIndexes(decisionIds);
   }
