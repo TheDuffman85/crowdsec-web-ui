@@ -623,6 +623,8 @@
   "pages.passwordChange.subtitle": "Signed in as {username}. Choose a new password to continue.",
   "pages.passwordChange.signOut": "Sign out",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "OIDC settings saved, but discovery failed: {error}",
+  "pages.alerts.aggregateSource": "Aggregate ({count})",
+  "pages.alerts.aggregateSourceTitle": "This alert has no single source IP. It groups {count} decisions, for example from a blocklist import.",
   "pages.alerts.alertDetails": "Alert Details",
   "pages.alerts.alertDetailsId": "Alert Details #{id}",
   "pages.alerts.allowlisted": "Allowlisted",

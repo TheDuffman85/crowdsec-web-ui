@@ -621,6 +621,8 @@
   "pages.passwordChange.subtitle": "已以 {username} 身份登录。请选择新密码以继续。",
   "pages.passwordChange.signOut": "退出登录",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "OIDC 设置已保存，但发现失败：{error}",
+  "pages.alerts.aggregateSource": "聚合 ({count})",
+  "pages.alerts.aggregateSourceTitle": "此告警没有单一来源 IP。它包含 {count} 个决策，例如来自黑名单导入。",
   "pages.alerts.alertDetails": "告警详情",
   "pages.alerts.alertDetailsId": "告警详情 #{id}",
   "pages.alerts.allowlisted": "已在允许列表中",

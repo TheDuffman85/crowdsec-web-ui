@@ -245,6 +245,48 @@ describe('Alerts page presentation and columns', () => {
     await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
   });
 
+  test('shows blocklist alerts with a placeholder source as an aggregate without IP actions', async () => {
+    vi.mocked(api.fetchAlertsPaginated).mockImplementationOnce(async (page, pageSize) => toPaginatedAlerts([{
+      id: 323,
+      created_at: '2026-11-10T15:52:18.000Z',
+      scenario: 'external/blocklist (AbuseIPDB)',
+      source: { ip: '0.0.0.0', value: '0.0.0.0', scope: 'Ip' },
+      target: 'blocklist (AbuseIPDB)',
+      meta_search: '',
+      decisions: [],
+      decision_summary: { origins: ['cscli'], active_count: 54, expired_count: 0, simulated_active_count: 0, simulated_expired_count: 0 },
+    }], page, pageSize));
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 323,
+      created_at: '2026-11-10T15:52:18.000Z',
+      scenario: 'external/blocklist (AbuseIPDB)',
+      source: { ip: '0.0.0.0', value: '0.0.0.0', scope: 'Ip' },
+      target: 'blocklist (AbuseIPDB)',
+      decisions: [
+        { id: 1, value: '198.51.100.1', type: 'ban' },
+        { id: 2, value: '198.51.100.2', type: 'ban' },
+      ],
+      events: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    const cell = await screen.findByText('Aggregate (54)');
+    expect(screen.queryByText('0.0.0.0')).not.toBeInTheDocument();
+    const row = cell.closest('tr')!;
+    expect(within(row).queryByRole('button', { name: 'Add Decision' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /Delete all alerts and decisions for/i })).not.toBeInTheDocument();
+
+    await userEvent.click(cell);
+    const details = await screen.findByRole('dialog', { name: 'Alert Details #323' });
+    expect(within(details).getByText('Aggregate (2)')).toBeInTheDocument();
+    expect(within(details).queryByRole('link', { name: '0.0.0.0' })).not.toBeInTheDocument();
+  });
+
   test('shows the primary target, distinct target count, and target detail card', async () => {
     vi.mocked(api.fetchAlertsPaginated).mockImplementationOnce(async (page, pageSize) => toPaginatedAlerts([{
       id: 91,

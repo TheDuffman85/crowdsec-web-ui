@@ -621,6 +621,8 @@
   "pages.passwordChange.subtitle": "تم تسجيل الدخول باسم {username}. اختر كلمة مرور جديدة للمتابعة.",
   "pages.passwordChange.signOut": "تسجيل الخروج",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "تم حفظ إعدادات OIDC، لكن فشل الاكتشاف: {error}",
+  "pages.alerts.aggregateSource": "مجمّع ({count})",
+  "pages.alerts.aggregateSourceTitle": "لا يحتوي هذا التنبيه على عنوان IP مصدر واحد. فهو يجمع {count} من القرارات، مثلًا من استيراد قائمة حظر.",
   "pages.alerts.alertDetails": "تفاصيل التنبيه",
   "pages.alerts.alertDetailsId": "تفاصيل التنبيه #{id}",
   "pages.alerts.allowlisted": "مسموح",

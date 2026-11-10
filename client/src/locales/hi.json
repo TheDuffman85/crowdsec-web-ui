@@ -621,6 +621,8 @@
   "pages.passwordChange.subtitle": "{username} के रूप में साइन इन। जारी रखने के लिए नया पासवर्ड चुनें।",
   "pages.passwordChange.signOut": "साइन आउट",
   "pages.settings.oidcSettingsSavedButDiscoveryFailed": "OIDC सेटिंग्स सहेजी गईं, लेकिन discovery विफल रहा: {error}",
+  "pages.alerts.aggregateSource": "समेकित ({count})",
+  "pages.alerts.aggregateSourceTitle": "इस अलर्ट का कोई एक स्रोत IP नहीं है। यह {count} निर्णयों को समूहित करता है, उदाहरण के लिए ब्लॉकलिस्ट आयात से।",
   "pages.alerts.alertDetails": "अलर्ट विवरण",
   "pages.alerts.alertDetailsId": "अलर्ट विवरण #{id}",
   "pages.alerts.allowlisted": "अनुमति सूची में",
