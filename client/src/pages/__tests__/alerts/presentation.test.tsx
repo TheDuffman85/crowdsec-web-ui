@@ -192,7 +192,7 @@ describe('Alerts page presentation and columns', () => {
 
     await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Target', 'Decisions', 'Actions']));
     expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '[]'))
-      .toEqual(['id', 'instance', 'time', 'scenario', 'kind', 'country', 'region', 'city', 'as', 'source', 'target', 'machine', 'origin', 'decisions']);
+      .toEqual(['id', 'instance', 'time', 'scenario', 'message', 'kind', 'country', 'region', 'city', 'as', 'source', 'target', 'machine', 'origin', 'decisions']);
   });
 
   test('resets custom column widths from the columns modal when saved', async () => {
@@ -243,6 +243,45 @@ describe('Alerts page presentation and columns', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
+  });
+
+  test('shows the alert message when the message column is enabled', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      alerts: ['time', 'scenario', 'message', 'source', 'decisions'],
+    }));
+    vi.mocked(api.fetchAlertsPaginated).mockImplementationOnce(async (page, pageSize) => toPaginatedAlerts([
+      {
+        id: 401,
+        created_at: '2026-11-10T15:52:18.000Z',
+        scenario: 'manual/web-ui',
+        message: 'Manual decision from Web UI: noisy scanner',
+        source: { ip: '198.51.100.40', value: '198.51.100.40', scope: 'Ip' },
+        meta_search: '',
+        decisions: [],
+      },
+      {
+        id: 402,
+        created_at: '2026-11-10T15:50:00.000Z',
+        scenario: 'crowdsecurity/ssh-bf',
+        message: "Ip 198.51.100.41 performed 'crowdsecurity/ssh-bf' (6 events over 2s)",
+        source: { ip: '198.51.100.41', value: '198.51.100.41', scope: 'Ip' },
+        meta_search: '',
+        decisions: [],
+      },
+    ], page, pageSize));
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('noisy scanner')).toBeInTheDocument());
+    expect(screen.getByText('noisy scanner')).toHaveAttribute('title', 'noisy scanner');
+    expect(screen.queryByText(/Manual decision from Web UI/)).not.toBeInTheDocument();
+    expect(screen.getByText("Ip 198.51.100.41 performed 'crowdsecurity/ssh-bf' (6 events over 2s)")).toBeInTheDocument();
+    const headers = getVisibleColumnHeaderNames();
+    expect(headers.indexOf('Message')).toBe(headers.indexOf('Scenario') + 1);
   });
 
   test('shows blocklist alerts with a placeholder source as an aggregate without IP actions', async () => {

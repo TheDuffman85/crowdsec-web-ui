@@ -1122,6 +1122,7 @@
   "tableColumns.machine": "Hôte",
   "tableColumns.origin": "Origine",
   "tableColumns.kind": "Type",
+  "tableColumns.message": "Message",
   "tableColumns.scenario": "Scénario",
   "tableColumns.target": "Cible",
   "tableColumns.source": "IP / plage",

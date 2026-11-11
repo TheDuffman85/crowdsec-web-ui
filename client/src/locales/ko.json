@@ -1124,6 +1124,7 @@
   "tableColumns.machine": "머신",
   "tableColumns.origin": "출처",
   "tableColumns.kind": "종류",
+  "tableColumns.message": "메시지",
   "tableColumns.scenario": "시나리오",
   "tableColumns.target": "대상",
   "tableColumns.source": "IP / 범위",

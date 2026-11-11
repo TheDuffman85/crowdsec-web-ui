@@ -55,7 +55,7 @@ Alert search fields: `id`, `instance`, `scenario`, `kind`, `message`, `ip`/`sour
 
 Use a quoted empty value to match an empty field, such as `origin:""`. Use `origin<>""` or `-origin:""` to require a non-empty value.
 
-Decision search fields: `id`, `instance`, `alert`/`alert_id`, `scenario`/`reason`, `kind`, `ip`/`value`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`. Decision `kind` is inherited from the linked alert.
+Decision search fields: `id`, `instance`, `alert`/`alert_id`, `scenario`/`reason`, `kind`, `message`, `ip`/`value`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`. Decision `kind` and `message` are inherited from the linked alert. Decision free text also matches the linked alert's message.
 
 Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day buckets or values containing `T` for hour-level comparisons. `tz_offset` is an offset in minutes; `browser_tz` accepts an IANA timezone. They control local bucket comparisons when the server has no fixed timezone configured.
 
@@ -205,6 +205,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 Supported decision query parameters: `instance`, `include_expired`, `page`, `page_size`, `q`, `alert_id`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `hide_duplicates`, `tz_offset`, `browser_tz`.
 
 - `include_expired=true` includes expired decisions within the configured lookback window.
+- Paginated rows include `message`, the linked alert's message, when it has one. The non-paginated list omits it.
 - Duplicate decisions are hidden by default in paginated results. Deduplication is applied after active filters, so the preferred matching row remains visible even when the globally preferred row does not match. Set `hide_duplicates=false` or filter by `alert_id` to show every row.
 - `alert_id` accepts one alert ID or a comma-separated list. Combine it with `instance` when instances can share alert IDs.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.

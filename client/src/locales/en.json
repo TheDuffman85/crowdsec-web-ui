@@ -1124,6 +1124,7 @@
   "tableColumns.machine": "Machine",
   "tableColumns.origin": "Origin",
   "tableColumns.kind": "Kind",
+  "tableColumns.message": "Message",
   "tableColumns.scenario": "Scenario",
   "tableColumns.target": "Target",
   "tableColumns.source": "IP / Range",

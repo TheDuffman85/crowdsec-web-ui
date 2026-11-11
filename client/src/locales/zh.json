@@ -1120,6 +1120,7 @@
   "tableColumns.machine": "机器",
   "tableColumns.origin": "来源类型",
   "tableColumns.kind": "类型",
+  "tableColumns.message": "消息",
   "tableColumns.scenario": "Scenario",
   "tableColumns.target": "目标",
   "tableColumns.source": "IP / 范围",

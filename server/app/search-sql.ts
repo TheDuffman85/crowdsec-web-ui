@@ -42,7 +42,7 @@ export function createSqlWhere(): SqlWhere {
 
 const DECISION_COVERED_SEARCH_FIELDS = new Set([
   'id', 'instance', 'alert', 'scenario', 'ip', 'country', 'region', 'city', 'as', 'target',
-  'kind', 'date', 'action', 'type', 'status', 'duplicate', 'sim', 'machine', 'origin',
+  'kind', 'message', 'date', 'action', 'type', 'status', 'duplicate', 'sim', 'machine', 'origin',
 ]);
 
 const ALERT_COVERED_SEARCH_FIELDS = new Set([
@@ -346,6 +346,25 @@ export function freeTextSearchCondition(page: SearchPageForSql, value: string, s
   };
 }
 
+/**
+ * Matches decisions whose linked alert message contains the free-text value.
+ *
+ * Decisions do not copy the message into their own search index, because a blocklist
+ * alert would repeat it on every one of its decisions. Instead the matching alert IDs
+ * are collected once per search term with a sequential scan of the alerts. A scan costs
+ * the same for every term, while narrowing through the alert index first is slower for
+ * common terms, which match most alerts and then need a row lookup each.
+ *
+ * `LIKE` is already case-insensitive for ASCII, and SQLite's `LOWER()` folds nothing
+ * else, so the message is compared without `LOWER()` to keep the scan cheaper.
+ */
+export function decisionAlertMessageFreeTextCondition(value: string): SqlCondition {
+  return {
+    sql: `decisions.alert_id IN (SELECT alerts.id FROM alerts WHERE alerts.message LIKE ? ESCAPE '\\')`,
+    params: [likeParam(value)],
+  };
+}
+
 export function alertFieldCondition(
   field: string,
   value: string,
@@ -422,6 +441,8 @@ export function decisionFieldCondition(
       return textCondition('LOWER(scenario)', value, exact);
     case 'kind':
       return textCondition('LOWER((SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id))', value, exact);
+    case 'message':
+      return textCondition('LOWER((SELECT message FROM alerts WHERE alerts.id = decisions.alert_id))', value, exact);
     case 'ip':
       return ipCondition('value', value, exact);
     case 'country':
@@ -563,6 +584,7 @@ export function decisionEmptyFieldCondition(field: string): SqlCondition {
     case 'alert':
     case 'scenario':
     case 'kind':
+    case 'message':
     case 'ip':
     case 'country':
     case 'region':
@@ -575,6 +597,7 @@ export function decisionEmptyFieldCondition(field: string): SqlCondition {
         alert: 'alert_id',
         scenario: 'scenario',
         kind: '(SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id)',
+        message: '(SELECT message FROM alerts WHERE alerts.id = decisions.alert_id)',
         ip: 'value',
         country: 'country',
         region: 'region',

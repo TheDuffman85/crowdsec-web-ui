@@ -1120,6 +1120,7 @@
   "tableColumns.machine": "Машина",
   "tableColumns.origin": "Источник",
   "tableColumns.kind": "Тип",
+  "tableColumns.message": "Сообщение",
   "tableColumns.scenario": "Сценарий",
   "tableColumns.target": "Цель",
   "tableColumns.source": "IP / диапазон",

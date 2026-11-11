@@ -111,6 +111,81 @@ describe('createApp search API', () => {
     destroyTempDir();
   });
 
+  test('returns and matches decisions by their linked alert message', async () => {
+    const manualAlert = sampleAlert({ id: 1, uuid: 'message-manual', message: 'Manual decision from Web UI: noisy scanner' });
+    const silentAlert = sampleAlert({
+      id: 2,
+      uuid: 'message-empty',
+      message: '',
+      source: { ip: '5.6.7.8', value: '5.6.7.8' },
+      decisions: (sampleAlert().decisions || []).map((decision) => ({
+        ...decision,
+        id: 20,
+        value: '5.6.7.8',
+      })),
+    });
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    seedAlert(database, manualAlert);
+    seedAlert(database, silentAlert);
+
+    const listResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/decisions?page=1&page_size=10&hide_duplicates=false',
+    ));
+    expect(listResponse.status).toBe(200);
+    const list = (await listResponse.json()) as PaginatedResponse<DecisionListItem>;
+    expect(list.data.find((decision) => decision.id === 10)?.message).toBe('Manual decision from Web UI: noisy scanner');
+    expect(list.data.find((decision) => decision.id === 20)?.message).toBeUndefined();
+
+    // With duplicates hidden, fielded searches page through the promoted-row query.
+    for (const suffix of ['&hide_duplicates=false', '']) {
+      const matchResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/decisions?page=1&page_size=10${suffix}&q=${encodeURIComponent('message:NOISY')}`,
+      ));
+      expect(matchResponse.status).toBe(200);
+      expect((await matchResponse.json()) as PaginatedResponse<DecisionListItem>).toEqual(expect.objectContaining({
+        data: [expect.objectContaining({ id: 10, message: 'Manual decision from Web UI: noisy scanner' })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }));
+
+      const emptyResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/decisions?page=1&page_size=10${suffix}&q=${encodeURIComponent('message:""')}`,
+      ));
+      expect(emptyResponse.status).toBe(200);
+      expect((await emptyResponse.json()) as PaginatedResponse<DecisionListItem>).toEqual(expect.objectContaining({
+        data: [expect.objectContaining({ id: 20 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }));
+
+      // Free text matches the linked alert message as well. `oi` is shorter than the
+      // trigram index allows, so it exercises the unindexed path.
+      for (const query of ['"noisy scanner"', 'noisy scanner', 'oi', 'NOISY 1.2.3.4']) {
+        const freeTextResponse = await controller.fetch(new Request(
+          `http://localhost/crowdsec/api/decisions?page=1&page_size=10${suffix}&q=${encodeURIComponent(query)}`,
+        ));
+        expect(freeTextResponse.status).toBe(200);
+        expect((await freeTextResponse.json()) as PaginatedResponse<DecisionListItem>).toEqual(expect.objectContaining({
+          data: [expect.objectContaining({ id: 10 })],
+          pagination: expect.objectContaining({ total: 1 }),
+        }));
+      }
+
+      const excludedResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/decisions?page=1&page_size=10${suffix}&q=${encodeURIComponent('-scanner')}`,
+      ));
+      expect(excludedResponse.status).toBe(200);
+      expect((await excludedResponse.json()) as PaginatedResponse<DecisionListItem>).toEqual(expect.objectContaining({
+        data: [expect.objectContaining({ id: 20 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }));
+    }
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('matches alert search queries against decision origins', async () => {
     const searchAlerts = [
       sampleAlert({

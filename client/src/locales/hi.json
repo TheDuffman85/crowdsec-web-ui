@@ -1120,6 +1120,7 @@
   "tableColumns.machine": "मशीन",
   "tableColumns.origin": "उत्पत्ति",
   "tableColumns.kind": "प्रकार",
+  "tableColumns.message": "संदेश",
   "tableColumns.scenario": "परिदृश्य",
   "tableColumns.target": "लक्ष्य",
   "tableColumns.source": "IP / रेंज",

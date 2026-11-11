@@ -1120,6 +1120,7 @@
   "tableColumns.machine": "الجهاز",
   "tableColumns.origin": "الأصل",
   "tableColumns.kind": "النوع",
+  "tableColumns.message": "الرسالة",
   "tableColumns.scenario": "السيناريو",
   "tableColumns.target": "الهدف",
   "tableColumns.source": "IP / النطاق",

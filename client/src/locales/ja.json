@@ -1120,6 +1120,7 @@
   "tableColumns.machine": "マシン",
   "tableColumns.origin": "発生元",
   "tableColumns.kind": "種別",
+  "tableColumns.message": "メッセージ",
   "tableColumns.scenario": "シナリオ",
   "tableColumns.target": "対象",
   "tableColumns.source": "IP / 範囲",

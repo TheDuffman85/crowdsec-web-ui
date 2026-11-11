@@ -53,7 +53,7 @@ import {
 } from "../lib/quickFilters";
 import { getQuickFilterCompatibility } from "../lib/quickFilterCompatibility";
 import { formatAlertSessionDuration, loadStoredAlertGrouping, saveStoredAlertGrouping } from "../lib/alertGrouping";
-import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
+import { TABLE_COLUMN_DEFINITIONS, formatAlertMessage } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
 import { isUnspecifiedSourceAddress } from "../../../shared/source";
@@ -1902,6 +1902,14 @@ export function Alerts() {
                         />
                     </td>
                 );
+            case 'message': {
+                const message = formatAlertMessage(alert.message);
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[260px] truncate" title={message}>
+                        {message || "-"}
+                    </td>
+                );
+            }
             case 'kind':
                 return (
                     <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
