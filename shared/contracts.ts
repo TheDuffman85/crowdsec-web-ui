@@ -69,8 +69,8 @@ export interface InstanceSummary {
 }
 
 export type TableColumnPreferenceTable = 'alerts' | 'decisions';
-export type AlertTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'kind' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
-export type DecisionTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'kind' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
+export type AlertTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'message' | 'kind' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
+export type DecisionTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'message' | 'kind' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
 export type TableColumnId = AlertTableColumnId | DecisionTableColumnId;
 
 export interface TableColumnDefinition {
@@ -87,6 +87,7 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'instance', label: 'Instance', defaultVisible: false },
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
+    { id: 'message', label: 'Message', defaultVisible: false },
     { id: 'kind', label: 'Kind', defaultVisible: false },
     { id: 'country', label: 'Country', defaultVisible: true },
     { id: 'region', label: 'Region', defaultVisible: false },
@@ -103,6 +104,7 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'instance', label: 'Instance', defaultVisible: false },
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
+    { id: 'message', label: 'Message', defaultVisible: false },
     { id: 'kind', label: 'Kind', defaultVisible: false },
     { id: 'country', label: 'Country', defaultVisible: true },
     { id: 'region', label: 'Region', defaultVisible: false },
@@ -357,6 +359,8 @@ export interface DecisionListItem {
   machine_alias?: string;
   scenario?: string;
   kind?: string;
+  /** Message of the alert that created the decision. */
+  message?: string;
   value?: string;
   expired: boolean;
   is_duplicate: boolean;
@@ -847,6 +851,15 @@ export const DEFAULT_MANUAL_DECISION_SCENARIO = 'manual/web-ui';
 /** Prefix of the alert message the Web UI writes when it adds a manual decision. */
 export const MANUAL_DECISION_MESSAGE_PREFIX = 'Manual decision from Web UI';
 
+/** An alert message for display, without the prefix the Web UI adds to manual decisions. */
+export function formatAlertMessage(message: string | null | undefined): string | undefined {
+  if (typeof message !== 'string') return undefined;
+  const trimmed = message.trim();
+  const manualPrefix = `${MANUAL_DECISION_MESSAGE_PREFIX}:`;
+  const displayed = trimmed.startsWith(manualPrefix) ? trimmed.slice(manualPrefix.length).trim() : trimmed;
+  return displayed || undefined;
+}
+
 const DECISION_SCENARIO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
 export function isValidDecisionScenario(scenario: string): boolean {
@@ -984,6 +997,19 @@ export interface BulkAddDecisionResponse extends MultiInstanceOperationResponse 
   added: string[];
   /** Values skipped because they are allowlisted; resend them with `bypass_allowlist` to add them anyway. */
   allowlisted: Array<{ value: string; allowlisted: AllowlistMatch[] }>;
+}
+
+/** Most values one manual decision lookup accepts. */
+export const MANUAL_DECISION_LOOKUP_MAX = 500;
+
+/** Finds the active manual decisions, such as ones added in this Web UI or with cscli, for the given values. */
+export interface ManualDecisionLookupRequest {
+  values: string[];
+}
+
+export interface ManualDecisionLookupResponse {
+  /** One entry per value and instance, with the latest expiry. */
+  decisions: Array<{ value: string; instance_id: string; stop_at: string }>;
 }
 
 export type DeleteResourceKind = 'alert' | 'decision';

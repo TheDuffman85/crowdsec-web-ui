@@ -99,6 +99,7 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     emptyAlertDecisionSummary,
     escapeLike,
     facetQueryWorker,
+    decisionAlertMessageFreeTextCondition,
     freeTextSearchCondition,
     getAlertCountIndexHint,
     getAlertListFiltersFromValues,
@@ -777,6 +778,7 @@ async function queryAlertDecisionSummaries(alertIds: Array<string | number>): Pr
 type DecisionQueryRow = NormalizedDecisionRow & {
   is_duplicate?: number;
   alert_kind?: string | null;
+  alert_message?: string | null;
   latitude?: number | null;
   longitude?: number | null;
 };
@@ -832,6 +834,7 @@ async function queryPaginatedDecisions(
         queryWorker.all<DecisionQueryRow>(`
           SELECT ${DECISION_RECORD_COLUMNS}, (is_duplicate = 1) AS is_duplicate,
             (SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id) AS alert_kind,
+            (SELECT message FROM alerts WHERE alerts.id = decisions.alert_id) AS alert_message,
             (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
             (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
           FROM ${query.fromSql}
@@ -846,6 +849,7 @@ async function queryPaginatedDecisions(
     const decisions = rows.map((row) => {
       const decision = decisionFromRow(row);
       if (row.alert_kind) decision.kind = row.alert_kind;
+      if (row.alert_message) decision.message = row.alert_message;
       decision.instance_name = instanceName(String(decision.instance_id || primaryInstance.id));
       const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
       const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
@@ -886,6 +890,7 @@ async function queryPromotedDecisionRowsByInternalIds(internalIds: string[]): Pr
   return queryWorker.all<DecisionQueryRow>(`
     SELECT ${DECISION_RECORD_COLUMNS}, 0 AS is_duplicate,
       (SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id) AS alert_kind,
+      (SELECT message FROM alerts WHERE alerts.id = decisions.alert_id) AS alert_message,
       (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
       (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
     FROM decisions AS decisions
@@ -2045,11 +2050,19 @@ function compileDecisionSearchSql(
     // The default decision view contains only one row per duplicate group.
     // Scanning that small indexed set is substantially cheaper than asking
     // FTS to materialize every matching duplicate ID from large blocklists.
-    freeTextCondition: (value) => freeTextSearchCondition(
-      'decisions',
-      value,
-      database.searchIndexAvailable && filters.showDuplicates,
-    ),
+    freeTextCondition: (value) => {
+      const decisionMatch: SqlCondition = freeTextSearchCondition(
+        'decisions',
+        value,
+        database.searchIndexAvailable && filters.showDuplicates,
+      );
+      // The linked alert's message is shown in the table, so free text matches it too.
+      const messageMatch: SqlCondition = decisionAlertMessageFreeTextCondition(value);
+      return {
+        sql: `(${decisionMatch.sql} OR ${messageMatch.sql})`,
+        params: [...decisionMatch.params, ...messageMatch.params],
+      };
+    },
   });
 }
 

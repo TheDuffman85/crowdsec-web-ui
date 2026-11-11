@@ -22,7 +22,7 @@ import { ResizableColumnHeader, TableColumnGroup } from "../components/ui/Resiza
 import { useTableColumnWidths, type TableLayoutColumn } from "../lib/useTableColumnWidths";
 import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
-import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
+import { TABLE_COLUMN_DEFINITIONS, formatAlertMessage } from "../../../shared/contracts";
 import {
     loadStoredTableColumnOrders,
     loadStoredTableColumnPreferences,
@@ -1582,6 +1582,14 @@ export function Decisions() {
                                                                 {decision.detail.origin || "-"}
                                                             </td>
                                                         );
+                                                    case 'message': {
+                                                        const message = formatAlertMessage(decision.message);
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[260px] truncate" title={message}>
+                                                                {message || "-"}
+                                                            </td>
+                                                        );
+                                                    }
                                                     case 'kind':
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">

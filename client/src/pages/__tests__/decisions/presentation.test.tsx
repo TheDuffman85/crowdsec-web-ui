@@ -105,6 +105,46 @@ describe('Decisions page presentation and columns', () => {
     expect(screen.queryByText('State of Berlin')).not.toBeInTheDocument();
   });
 
+  test('shows the linked alert message when the message column is enabled', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      decisions: ['time', 'scenario', 'message', 'source', 'action', 'expiration', 'alert'],
+    }));
+    vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedDecisions([
+        {
+          id: 92,
+          created_at: '2026-03-23T10:00:00.000Z',
+          value: '203.0.113.92',
+          message: 'Manual decision from Web UI: noisy scanner',
+          expired: false,
+          is_duplicate: false,
+          detail: { origin: 'cscli', reason: 'manual/web-ui' },
+        },
+        {
+          id: 93,
+          created_at: '2026-03-23T09:00:00.000Z',
+          value: '203.0.113.93',
+          expired: false,
+          is_duplicate: false,
+          detail: { origin: 'CAPI', reason: 'crowdsecurity/http-probing' },
+        },
+      ], page, pageSize),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Message' })).toBeInTheDocument());
+    const messageCell = await screen.findByText('noisy scanner');
+    expect(messageCell).toHaveAttribute('title', 'noisy scanner');
+    expect(screen.queryByText(/Manual decision from Web UI/)).not.toBeInTheDocument();
+    const headers = getVisibleColumnHeaderNames();
+    expect(headers.indexOf('Message')).toBe(headers.indexOf('Scenario') + 1);
+  });
+
   test('shows the primary target and distinct target count', async () => {
     vi.mocked(api.fetchDecisionsPaginated).mockImplementationOnce(async (page, pageSize) =>
       toPaginatedDecisions([{

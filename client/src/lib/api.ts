@@ -2,6 +2,7 @@ import type {
   AddDecisionRequest,
   BulkAddDecisionRequest,
   BulkAddDecisionResponse,
+  ManualDecisionLookupResponse,
   AlertRecord,
   AlertSessionsResponse,
   AllowlistCheckResponse,
@@ -366,6 +367,18 @@ export async function addDecisions(data: BulkAddDecisionRequest): Promise<BulkAd
     }
     clearGetCaches();
     return payload as BulkAddDecisionResponse;
+}
+
+/** Returns the active manual decisions for the given values, at most `MANUAL_DECISION_LOOKUP_MAX`. */
+export async function lookupManualDecisions(values: string[], signal?: AbortSignal): Promise<ManualDecisionLookupResponse> {
+    const res = await sessionFetch(apiUrl('/api/decisions/manual-lookup'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+        signal,
+    });
+    if (!res.ok) throw new Error('Failed to look up manual decisions');
+    return await res.json() as ManualDecisionLookupResponse;
 }
 
 export async function fetchAllowlists(instanceScope: string, query = ''): Promise<AllowlistsResponse> {

@@ -55,7 +55,7 @@ Alert search fields: `id`, `instance`, `scenario`, `kind`, `message`, `ip`/`sour
 
 Use a quoted empty value to match an empty field, such as `origin:""`. Use `origin<>""` or `-origin:""` to require a non-empty value.
 
-Decision search fields: `id`, `instance`, `alert`/`alert_id`, `scenario`/`reason`, `kind`, `ip`/`value`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`. Decision `kind` is inherited from the linked alert.
+Decision search fields: `id`, `instance`, `alert`/`alert_id`, `scenario`/`reason`, `kind`, `message`, `ip`/`value`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`. Decision `kind` and `message` are inherited from the linked alert. Decision free text also matches the linked alert's message.
 
 Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day buckets or values containing `T` for hour-level comparisons. `tz_offset` is an offset in minutes; `browser_tz` accepts an IANA timezone. They control local bucket comparisons when the server has no fixed timezone configured.
 
@@ -197,6 +197,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 | GET | `/api/decisions/facets` | Return one bounded quick-filter facet across the complete effective decision result set. |
 | POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Returns `409` when a target instance allowlists the value, unless `bypass_allowlist: true` is sent. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-add` | Add the same manual decision for up to 500 IPs or ranges in one LAPI request per target instance. Body: `{ "values": ["1.2.3.4", "198.51.100.0/24"], "duration": "4h" }` plus the optional fields of `POST /api/decisions` except `ip`. Duplicates are ignored. Allowlisted values are skipped instead of refusing the request: the response lists them in `allowlisted` (each with its matching instances) next to `added`, `results`, `succeeded`, and `failed`; resend them with `bypass_allowlist: true` to add them anyway. Blocked in read-only mode. |
+| POST | `/api/decisions/manual-lookup` | Find the active manual decisions (origins `cscli`, `cscli-import`, and `console`; this Web UI adds decisions as `cscli`) for up to 500 IPs or ranges. Body: `{ "values": ["1.2.3.4"] }`. Returns `{ "decisions": [{ "value": "1.2.3.4", "instance_id": "default", "stop_at": "..." }] }` with one entry per value and instance and the latest expiry. Values match exactly; a range decision does not cover the IPs inside it. Simulated decisions are ignored. The Statistics page uses it to mark values that already received a decision. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
 | DELETE | `/api/instances/:instanceId/decisions/:id` | Delete one decision from a specific instance and its local cache. Blocked in read-only mode. |
@@ -204,6 +205,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 Supported decision query parameters: `instance`, `include_expired`, `page`, `page_size`, `q`, `alert_id`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `hide_duplicates`, `tz_offset`, `browser_tz`.
 
 - `include_expired=true` includes expired decisions within the configured lookback window.
+- Paginated rows include `message`, the linked alert's message, when it has one. The non-paginated list omits it.
 - Duplicate decisions are hidden by default in paginated results. Deduplication is applied after active filters, so the preferred matching row remains visible even when the globally preferred row does not match. Set `hide_duplicates=false` or filter by `alert_id` to show every row.
 - `alert_id` accepts one alert ID or a comma-separated list. Combine it with `instance` when instances can share alert IDs.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.

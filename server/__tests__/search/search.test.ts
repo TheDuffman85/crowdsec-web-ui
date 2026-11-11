@@ -256,6 +256,30 @@ describe('shared search compiler', () => {
     expect(emptyKind.predicate({ ...baseDecision, kind: undefined })).toBe(true);
   });
 
+  test('matches decisions by their linked alert message', () => {
+    const broadMessage = compileDecisionSearch('message:scanner');
+    const exactMessage = compileDecisionSearch('message="manual decision from web ui: noisy scanner"');
+    const emptyMessage = compileDecisionSearch('message:""');
+    expect(broadMessage.ok).toBe(true);
+    expect(exactMessage.ok).toBe(true);
+    expect(emptyMessage.ok).toBe(true);
+    if (!broadMessage.ok || !exactMessage.ok || !emptyMessage.ok) return;
+
+    const manualDecision = { ...baseDecision, message: 'Manual decision from Web UI: noisy scanner' };
+    expect(broadMessage.predicate(manualDecision)).toBe(true);
+    expect(broadMessage.predicate(baseDecision)).toBe(false);
+    expect(exactMessage.predicate(manualDecision)).toBe(true);
+    expect(exactMessage.predicate({ ...baseDecision, message: 'noisy scanner' })).toBe(false);
+    expect(emptyMessage.predicate({ ...baseDecision, message: undefined })).toBe(true);
+    expect(emptyMessage.predicate(manualDecision)).toBe(false);
+
+    const freeText = compileDecisionSearch('"noisy scanner"');
+    expect(freeText.ok).toBe(true);
+    if (!freeText.ok) return;
+    expect(freeText.predicate(manualDecision)).toBe(true);
+    expect(freeText.predicate(baseDecision)).toBe(false);
+  });
+
   test('supports simulation inequality without broadening invalid values', () => {
     const liveAlerts = compileAlertSearch('sim<>simulated');
     expect(liveAlerts.ok).toBe(true);

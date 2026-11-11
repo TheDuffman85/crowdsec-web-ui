@@ -10,6 +10,8 @@ import type {
   BulkDeleteRequest,
   CleanupByIpRequest,
   ConfigResponse,
+  ManualDecisionLookupRequest,
+  ManualDecisionLookupResponse,
   CrowdsecMetricsResponse,
   CrowdsecMetricsSource,
   InstanceEntityRef,
@@ -25,7 +27,7 @@ import type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../../shared/contracts';
-import { BULK_ADD_DECISIONS_MAX, DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from '../../shared/contracts';
+import { BULK_ADD_DECISIONS_MAX, DEFAULT_MANUAL_DECISION_SCENARIO, MANUAL_DECISION_LOOKUP_MAX, isValidDecisionScenario } from '../../shared/contracts';
 import type { AuditOutcome } from '../audit-log';
 import { resolveManagedSettingSource, type RuntimeConfig } from '../config';
 import type { CrowdsecDatabase } from '../database';
@@ -38,6 +40,8 @@ import type { DashboardStatsFilters } from './types';
 type HonoContext = any;
 /** Live LAPI allowlist checks in flight at once during a bulk add. */
 const BULK_ALLOWLIST_CHECK_CONCURRENCY = 8;
+/** Origins of decisions that a person added: this Web UI and cscli use `cscli`. */
+const MANUAL_DECISION_ORIGINS = ['cscli', 'cscli-import', 'console'];
 type AnyError = Error & {
   code?: string;
   response?: { data?: unknown; status: number };
@@ -1519,6 +1523,42 @@ app.get(`${config.basePath}/api/stats/decisions`, ensureAuth, ensurePublishedRev
     }
     console.error('Error serving stats decisions from database:', error.message);
     return context.json({ error: 'Failed to retrieve decision statistics' }, 500);
+  }
+});
+
+// Lets the Statistics page show which listed values already received a manual decision.
+// Like the statistics routes, it reads the cache as it is: an on-demand LAPI refresh per lookup would make
+// opening the page or a finding sync, and decisions added in this UI reach the cache before their request returns.
+app.post(`${config.basePath}/api/decisions/manual-lookup`, ensureAuth, async (context) => {
+  let body: ManualDecisionLookupRequest;
+  try { body = await context.req.json<ManualDecisionLookupRequest>(); } catch { return context.json({ error: 'Invalid JSON body' }, 400); }
+  if (!Array.isArray(body?.values) || !body.values.every((value) => typeof value === 'string')) {
+    return context.json({ error: 'values must be an array of strings' }, 400);
+  }
+  const values = [...new Set(body.values.map((value) => value.trim()).filter(Boolean))];
+  if (values.length > MANUAL_DECISION_LOOKUP_MAX) {
+    return context.json({ error: `At most ${MANUAL_DECISION_LOOKUP_MAX} values can be looked up at once` }, 400);
+  }
+  if (values.length === 0) return context.json({ decisions: [] } satisfies ManualDecisionLookupResponse);
+  try {
+    await prepareReadCache('manual decision lookup');
+    const rows = await analyticsQueryWorker.all<{ value: string; instance_id: string; stop_at: string }>(`
+      SELECT value, instance_id, MAX(stop_at) AS stop_at
+      FROM decisions
+      WHERE value IN (${values.map(() => '?').join(', ')})
+        AND stop_at > ?
+        AND simulated = 0
+        AND origin IN (${MANUAL_DECISION_ORIGINS.map(() => '?').join(', ')})
+      GROUP BY value, instance_id
+    `, [...values, new Date().toISOString(), ...MANUAL_DECISION_ORIGINS], { label: 'manual decision lookup' });
+    return context.json({ decisions: rows } satisfies ManualDecisionLookupResponse);
+  } catch (error: any) {
+    if (error instanceof QueryWorkerTimeoutError) {
+      console.warn('Timed out looking up manual decisions:', error.message);
+      return context.json({ error: 'Manual decision lookup timed out' }, 504);
+    }
+    console.error('Error looking up manual decisions:', error.message);
+    return context.json({ error: 'Failed to look up manual decisions' }, 500);
   }
 });
 
