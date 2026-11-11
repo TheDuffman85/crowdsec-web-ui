@@ -1203,6 +1203,7 @@
   "pages.statistics.reasonNetwork": "Angriffe von {network}",
   "pages.statistics.reasonReturned": "Nach Maßnahme zurückgekehrt",
   "pages.statistics.reasonScanner": "Mehrere Maschinen angegriffen",
+  "pages.statistics.reasonTopAttacker": "Top-Angreifer",
   "pages.statistics.repeatAttackers": "Wiederkehrende IPs",
   "pages.statistics.repeatAttackersHelp": "An mehr als einem Tag aktiv",
   "pages.statistics.retainedDays": "{count} Tage Aufbewahrung",

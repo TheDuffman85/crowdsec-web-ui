@@ -1206,6 +1206,7 @@
   "pages.statistics.reasonNetwork": "Attacks from {network}",
   "pages.statistics.reasonReturned": "Returned after remediation",
   "pages.statistics.reasonScanner": "Attacked several machines",
+  "pages.statistics.reasonTopAttacker": "Top attacker",
   "pages.statistics.repeatAttackers": "Recurring IPs",
   "pages.statistics.repeatAttackersHelp": "Active on more than one day",
   "pages.statistics.retainedDays": "{count} days retention",

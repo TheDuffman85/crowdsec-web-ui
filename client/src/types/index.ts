@@ -53,6 +53,7 @@ export type {
   BulkAddDecisionRequest,
   BulkAddDecisionResponse,
   BulkDeleteRequest,
+  ManualDecisionLookupResponse,
   BulkDeleteResult,
   CleanupByIpRequest,
   NotificationChannel,

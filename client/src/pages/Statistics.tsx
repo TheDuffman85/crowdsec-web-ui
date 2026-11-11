@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -20,8 +20,9 @@ import { PeriodChangeRow } from '../components/PeriodChange';
 import { RemediationPills } from '../components/RemediationPills';
 import { useRemediationTypeLabel } from '../lib/remediationTypes';
 import { usePeriodChange } from '../lib/periodChange';
-import { DecisionAddedBadge, DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
-import { fetchConfig } from '../lib/api';
+import { BanAllButton, DecisionAddedBadge, DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
+import { fetchConfig, lookupManualDecisions } from '../lib/api';
+import { pendingBanValues } from '../lib/pendingBans';
 import { sessionFetch } from '../lib/sessionFetch';
 import { apiUrl } from '../lib/basePath';
 import { useI18n } from '../lib/i18n';
@@ -33,6 +34,7 @@ import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { formatCustomDate } from '../../../shared/date-format';
 import type { ConfigResponse, FacetField } from '../types';
 import type { SearchDateRange } from '../../../shared/search';
+import { MANUAL_DECISION_LOOKUP_MAX } from '../../../shared/contracts';
 import {
   addStatisticsDays, statisticsDay, statisticsDayStart, type StatisticsRanking, type StatisticsResponse, type StatisticsScenario,
 } from '../../../shared/statistics';
@@ -41,7 +43,7 @@ const HOUR = 3_600_000;
 
 const TABLE_HEADER_CELL = 'whitespace-nowrap px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 first:pl-6 last:pr-6';
 const TABLE_RIGHT_HEADER_CELL = `${TABLE_HEADER_CELL} text-right`;
-// Fits the ban button. Once the widths are fixed, the decision badge wraps instead.
+// Fits the ban button and the decision badge that replaces it.
 const ACTIONS_COLUMN_WIDTH = 128;
 
 /**
@@ -146,7 +148,8 @@ const toneClasses: Record<Tone, string> = {
 
 function SectionHeader({ icon: Icon, title, description, actions }: { icon: LucideIcon; title: string; description?: ReactNode; actions?: ReactNode }) {
   return (
-    <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    // Actions line up with the description below the title.
+    <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div className="min-w-0">
         <CardTitle className="flex items-center gap-2">
           <Icon className="h-5 w-5 shrink-0 text-primary-600 dark:text-primary-400" aria-hidden="true" />
@@ -498,9 +501,19 @@ export function Statistics() {
     const title = t(attackers ? 'pages.dashboard.topIps' : 'pages.dashboard.topMachines');
     const table = attackers ? attackerTable : machineTable;
     const cell = 'px-4 py-4 align-top first:pl-6 last:pr-6';
+    // Like a single ban, IPs that all returned after a remediation get the longer duration.
+    const pending = actions ? pendingBanValues(rows.map((row) => row.value), decided) : [];
+    const returned = pending.every((value) => rows.find((row) => row.value === value)?.returnedAfterRemediation);
+    const banAll = pending.length > 0 && (
+      <BanAllButton count={pending.length} onClick={() => setPendingDecision({
+        value: '', values: pending, reason: t(returned ? 'pages.statistics.reasonReturned' : 'pages.statistics.reasonTopAttacker'), duration: returned ? '7d' : '4h',
+      })} />
+    );
+    const reset = resetWidths(table);
     return (
       <Card className="flex flex-col overflow-clip">
-        <SectionHeader icon={attackers ? Crosshair : Server} title={title} description={rangeLabel} actions={resetWidths(table)} />
+        <SectionHeader icon={attackers ? Crosshair : Server} title={title} description={rangeLabel}
+          actions={(reset || banAll) && <div className="flex flex-wrap items-center justify-end gap-2">{reset}{banAll}</div>} />
         {rows.length === 0 ? <CardContent><EmptyState>{t('common.noDataAvailable')}</EmptyState></CardContent> : (
           <ResizableTable table={table} bodyClassName="divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => {
@@ -616,12 +629,32 @@ export function Statistics() {
   ]);
   const resetWidths = (table: ResizableTableController) => table.columnWidths.hasCustomWidths && <ResetColumnWidthsButton table={table} />;
   const [pendingDecision, setPendingDecision] = useState<{ value: string; values?: string[]; reason: string; duration: string } | null>(null);
+  // Decisions added on this page, and active manual decisions found on the server for the listed values,
+  // so the badges survive a reload and disappear once the decisions expire.
   const [decidedByValue, setDecidedByValue] = useState<Map<string, Set<string>>>(() => new Map());
+  const [activeByValue, setActiveByValue] = useState<Map<string, Set<string>>>(() => new Map());
+  const loadDecided = useCallback((values: string[]) => {
+    const unique = [...new Set(values)].slice(0, MANUAL_DECISION_LOOKUP_MAX);
+    if (!unique.length) return;
+    void lookupManualDecisions(unique).then(({ decisions }) => setActiveByValue((current) => {
+      const next = new Map(current);
+      for (const value of unique) next.delete(value);
+      for (const { value, instance_id } of decisions) next.set(value, new Set([...(next.get(value) ?? []), instance_id]));
+      return next;
+    }), () => {
+      // The ban buttons stay available when the lookup fails.
+    });
+  }, []);
   const visibleInstanceIds = instance === 'all' ? instances.map(({ id }) => id) : [instance];
   const decided = new Set<string>();
-  for (const [value, instanceIds] of decidedByValue) {
+  for (const value of new Set([...decidedByValue.keys(), ...activeByValue.keys()])) {
+    const instanceIds = new Set([...(decidedByValue.get(value) ?? []), ...(activeByValue.get(value) ?? [])]);
     if (visibleInstanceIds.length > 0 && visibleInstanceIds.every((id) => instanceIds.has(id))) decided.add(value);
   }
+  const attackerValues = canBan ? (data?.attackers ?? []).map((row) => row.value).join('\n') : '';
+  useEffect(() => {
+    if (attackerValues) loadDecided(attackerValues.split('\n'));
+  }, [attackerValues, loadDecided]);
   const findings: Finding[] = [];
   if (data) {
     const compare = !data.coverage.comparisonPartial;
@@ -681,7 +714,7 @@ export function Statistics() {
       detail: { kind: 'scanners', rows: scanners, decision: { reason: t('pages.statistics.reasonScanner'), duration: '4h' } } });
   }
   const findingContext = {
-    query: queryString, canBan, decided, formatTimestamp, machineName: (value: string) => machineName(value),
+    query: queryString, canBan, decided, loadDecided, formatTimestamp, machineName: (value: string) => machineName(value),
     formatDay: (day: string) => formatDay(day),
     onFilter: toggleFilters,
     onBan: (value: string, draft: DecisionDraft, range: boolean) => setPendingDecision({ value, reason: draft.reason, duration: range ? draft.rangeDuration || draft.duration : draft.duration }),

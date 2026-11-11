@@ -1203,6 +1203,7 @@
   "pages.statistics.reasonNetwork": "来自 {network} 的攻击",
   "pages.statistics.reasonReturned": "处置后再次出现",
   "pages.statistics.reasonScanner": "攻击了多台机器",
+  "pages.statistics.reasonTopAttacker": "主要攻击者",
   "pages.statistics.repeatAttackers": "重复出现的 IP",
   "pages.statistics.repeatAttackersHelp": "在多于一天内活跃",
   "pages.statistics.retainedDays": "保留 {count} 天",

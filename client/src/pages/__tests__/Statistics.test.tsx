@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Statistics } from '../Statistics';
 import { StatisticsSettings } from '../../components/StatisticsSettings';
 import { I18nContext, type I18nContextValue } from '../../lib/i18n';
-import { addDecision, addDecisions, checkAllowlist, fetchConfig } from '../../lib/api';
+import { addDecision, addDecisions, checkAllowlist, fetchConfig, lookupManualDecisions } from '../../lib/api';
 import { sessionFetch } from '../../lib/sessionFetch';
 import en from '../../locales/en.json';
 import { createDateTimeContextValue, DateTimeContext, DEFAULT_DATE_TIME_SETTINGS } from '../../lib/dateTime';
@@ -13,7 +13,7 @@ import { loadStoredQuickFilters, saveStoredQuickFilters } from '../../lib/quickF
 import type { ConfigResponse } from '../../types';
 import { DEFAULT_STATISTICS_SETTINGS, type StatisticsConfiguration, type StatisticsResponse } from '../../../../shared/statistics';
 
-vi.mock('../../lib/api', () => ({ fetchConfig: vi.fn(), addDecision: vi.fn(), addDecisions: vi.fn(), checkAllowlist: vi.fn() }));
+vi.mock('../../lib/api', () => ({ fetchConfig: vi.fn(), addDecision: vi.fn(), addDecisions: vi.fn(), checkAllowlist: vi.fn(), lookupManualDecisions: vi.fn() }));
 vi.mock('../../lib/sessionFetch', () => ({ sessionFetch: vi.fn() }));
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -41,6 +41,7 @@ function mount(content = <Statistics />, url = '/statistics?from=2026-10-09&to=2
 beforeEach(() => {
   vi.mocked(fetchConfig).mockResolvedValue({ statistics: configuration, lookback_days: 7, instances: [{ id: 'default', name: 'Production' }] } as ConfigResponse);
   vi.mocked(sessionFetch).mockImplementation(async () => Response.json(payload()));
+  vi.mocked(lookupManualDecisions).mockResolvedValue({ decisions: [] });
 });
 afterEach(() => { vi.clearAllMocks(); localStorage.clear(); });
 
@@ -251,6 +252,62 @@ describe('Statistics page', () => {
     }
     fireEvent.click(screen.getByRole('link', { name: 'Switch to Production' }));
     expect(within(await row()).getByText('Decision added')).toBeInTheDocument();
+  });
+
+  test('shows active manual decisions from the server after a reload, per instance', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue({
+      statistics: configuration, instances: [{ id: 'default', name: 'Production' }, { id: 'edge', name: 'Edge' }],
+    } as ConfigResponse);
+    vi.mocked(lookupManualDecisions).mockResolvedValue({ decisions: [{ value: '192.0.2.7', instance_id: 'default', stop_at: '2026-11-20T00:00:00Z' }] });
+    const path = '/statistics?from=2026-10-09&to=2026-11-07';
+    mount(<><Statistics /><Link to={path + '&instance=all'}>Show all instances</Link></>, path + '&instance=default');
+    const row = () => screen.findByRole('row', { name: '192.0.2.7' });
+    expect(await within(await row()).findByText('Decision added')).toBeInTheDocument();
+    expect(lookupManualDecisions).toHaveBeenCalledWith(['192.0.2.7']);
+
+    // The decision covers only one of the shown instances.
+    fireEvent.click(screen.getByRole('link', { name: 'Show all instances' }));
+    expect(within(await row()).getByRole('button', { name: 'Ban' })).toBeInTheDocument();
+  });
+
+  test('bans every top IP without a decision at once', async () => {
+    const data = payload();
+    const attacker = (value: string, returnedAfterRemediation: boolean) => ({ ...data.attackers[0], value, label: value, returnedAfterRemediation });
+    vi.mocked(sessionFetch).mockImplementation(async () => Response.json({
+      ...data, attackers: [attacker('192.0.2.7', false), attacker('192.0.2.8', true), attacker('192.0.2.9', true)],
+    } satisfies StatisticsResponse));
+    vi.mocked(lookupManualDecisions).mockResolvedValue({ decisions: [{ value: '192.0.2.7', instance_id: 'default', stop_at: '2026-11-20T00:00:00Z' }] });
+    vi.mocked(addDecisions).mockResolvedValue({ added: ['192.0.2.8', '192.0.2.9'], allowlisted: [], results: [{ instance_id: 'default', instance_name: 'Production', success: true }], succeeded: 1, failed: 0 });
+    mount();
+    const card = (await screen.findByRole('heading', { name: 'Top IPs' })).closest('.rounded-xl') as HTMLElement;
+    // The IP with an active decision is left out, and returned IPs get the longer duration.
+    fireEvent.click(await within(card).findByRole('button', { name: 'Ban all (2)' }));
+    expect(await screen.findByText('Values (2)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Duration')).toHaveValue('7d');
+    fireEvent.click(screen.getByRole('button', { name: 'Add 2 Decisions' }));
+    await waitFor(() => expect(within(card).getAllByText('Decision added')).toHaveLength(3));
+    expect(addDecisions).toHaveBeenCalledWith(expect.objectContaining({ values: ['192.0.2.8', '192.0.2.9'], duration: '7d', reason: 'Returned after remediation' }));
+    expect(within(card).queryByRole('button', { name: /Ban all/ })).not.toBeInTheDocument();
+  });
+
+  test('shows active manual decisions for the rows of a finding', async () => {
+    const data = payload();
+    const ip = (value: string) => ({ ip: value, alerts: 7, remediations: 1, remediationTypes: [{ label: 'ban', count: 1 }], machines: 1, firstRemediation: '2026-11-02' });
+    vi.mocked(lookupManualDecisions).mockImplementation(async (values) => ({
+      decisions: values.filter((value) => value === '203.0.113.9').map((value) => ({ value, instance_id: 'default', stop_at: '2026-11-20T00:00:00Z' })),
+    }));
+    vi.mocked(sessionFetch).mockImplementation(async (url) => String(url).includes('/api/statistics/details')
+      ? Response.json({ kind: 'returned', ips: [ip('203.0.113.9'), ip('203.0.113.10')], total: 2 })
+      : Response.json({ ...data, totals: { ...data.totals, returnedAfterRemediation: 2 } }));
+    mount();
+    const summary = await screen.findByRole('button', { name: /2 IPs attacked again/ });
+    fireEvent.click(summary);
+    const finding = summary.closest('li')!;
+    expect(await within(finding).findByText('Decision added')).toBeInTheDocument();
+    expect(lookupManualDecisions).toHaveBeenCalledWith(['203.0.113.9', '203.0.113.10']);
+    expect(within(within(finding).getByRole('row', { name: '203.0.113.10' })).getByRole('button', { name: 'Ban' })).toBeInTheDocument();
+    // A single pending value does not need a bulk action.
+    expect(within(finding).queryByRole('button', { name: /Ban all/ })).not.toBeInTheDocument();
   });
 
   test('turns the statistics into findings and compares tiles only with a complete preceding period', async () => {

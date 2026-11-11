@@ -1203,6 +1203,7 @@
   "pages.statistics.reasonNetwork": "Атаки из {network}",
   "pages.statistics.reasonReturned": "Вернулся после мер",
   "pages.statistics.reasonScanner": "Атаковал несколько машин",
+  "pages.statistics.reasonTopAttacker": "Основной атакующий",
   "pages.statistics.repeatAttackers": "Повторяющиеся IP",
   "pages.statistics.repeatAttackersHelp": "Активны более одного дня",
   "pages.statistics.retainedDays": "Хранение: {count} дней",

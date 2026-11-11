@@ -1,7 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import { AlertCircle, ChevronRight, ExternalLink, Filter, Gavel, Info, ListChecks, type LucideIcon } from 'lucide-react';
+import { AlertCircle, ChevronRight, CircleCheck, ExternalLink, Filter, Gavel, Info, ListChecks, type LucideIcon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { Badge } from './ui/Badge';
 import { ClickableTableRow } from './ui/ClickableTableRow';
 import { ResetColumnWidthsButton, ResizableTable } from './ui/ResizableTable';
 import { useResizableTable, type ResizableTableColumn } from '../lib/useResizableTable';
@@ -13,7 +12,7 @@ import { sessionFetch } from '../lib/sessionFetch';
 import { apiUrl } from '../lib/basePath';
 import { useI18n } from '../lib/i18n';
 import { getCountryName } from '../lib/utils';
-import { BULK_ADD_DECISIONS_MAX } from '../../../shared/contracts';
+import { pendingBanValues } from '../lib/pendingBans';
 import { STICKY_ACTIONS_CELL_CLASS_NAME, STICKY_ACTIONS_HEADER_CLASS_NAME } from '../lib/tableColumns';
 import { STATISTICS_DETAIL_MAX, STATISTICS_DETAIL_PAGE, type StatisticsDetailIP, type StatisticsDetails, type StatisticsRanking } from '../../../shared/statistics';
 
@@ -41,8 +40,10 @@ interface DetailContext {
   query: string;
   archiveKey: string;
   canBan: boolean;
-  /** Values that received a decision on this page. */
+  /** Values that received a decision on this page or have an active manual decision. */
   decided: Set<string>;
+  /** Looks up active manual decisions for values shown in a detail table. */
+  loadDecided: (values: string[]) => void;
   onBan: (value: string, draft: DecisionDraft, range: boolean) => void;
   /** Opens one decision dialog for several values. */
   onBanAll: (values: string[], draft: DecisionDraft, range: boolean) => void;
@@ -58,7 +59,7 @@ const linkClass = 'cursor-pointer font-medium text-primary-600 hover:text-primar
 const headerCell = 'whitespace-nowrap px-3 py-2 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400';
 const cell = 'px-3 py-2 align-top';
 const rightHeaderCell = `${headerCell} text-right`;
-// Fits the ban button. Once the widths are fixed, the decision badge wraps instead.
+// Fits the ban button and the decision badge that replaces it.
 const ACTIONS_COLUMN_WIDTH = 112;
 const formatNumber = (value: number) => value.toLocaleString();
 
@@ -93,10 +94,16 @@ function FindingActionButton({ icon: Icon, primary = false, onClick, children }:
   );
 }
 
-/** Replaces the ban button once a decision was added. Wraps when the column widths are fixed, since the Actions column is sized for the button. */
+/** Replaces the ban button once a decision was added. Takes the button's place, so it fits the Actions column in every language. */
 export function DecisionAddedBadge() {
   const { t } = useI18n();
-  return <Badge variant="success" className="[table[data-column-widths=fixed]_&]:whitespace-normal">{t('pages.statistics.decisionAdded')}</Badge>;
+  const label = t('pages.statistics.decisionAdded');
+  return (
+    <span title={label} className="-my-2 inline-flex rounded-full p-2 text-green-600 dark:text-green-400">
+      <CircleCheck size={16} aria-hidden="true" />
+      <span className="sr-only">{label}</span>
+    </span>
+  );
 }
 
 function BanButton({ value, draft, range = false, context }: { value: string; draft: DecisionDraft; range?: boolean; context: DetailContext }) {
@@ -105,16 +112,20 @@ function BanButton({ value, draft, range = false, context }: { value: string; dr
   return <DecisionIconButton label={t(range ? 'pages.statistics.blockRange' : 'pages.statistics.ban')} onClick={() => context.onBan(value, draft, range)} className="-my-2" />;
 }
 
-/** Bans every listed value without a decision from this page; shown above its table. */
-function BanAllButton({ values, draft, range = false, context }: { values: string[]; draft: DecisionDraft; range?: boolean; context: DetailContext }) {
+/** Opens one decision dialog for every listed value without a decision; shown above its table. */
+export function BanAllButton({ count, range = false, onClick }: { count: number; range?: boolean; onClick: () => void }) {
   const { t } = useI18n();
-  const pending = values.filter((value) => !context.decided.has(value)).slice(0, BULK_ADD_DECISIONS_MAX);
-  if (pending.length < 2) return null;
   return (
-    <FindingActionButton icon={Gavel} primary onClick={() => context.onBanAll(pending, draft, range)}>
-      {t(range ? 'pages.statistics.blockAllRanges' : 'pages.statistics.banAll', { count: pending.length })}
+    <FindingActionButton icon={Gavel} primary onClick={onClick}>
+      {t(range ? 'pages.statistics.blockAllRanges' : 'pages.statistics.banAll', { count })}
     </FindingActionButton>
   );
+}
+
+function FindingBanAllButton({ values, draft, range = false, context }: { values: string[]; draft: DecisionDraft; range?: boolean; context: DetailContext }) {
+  const pending = pendingBanValues(values, context.decided);
+  if (!pending.length) return null;
+  return <BanAllButton count={pending.length} range={range} onClick={() => context.onBanAll(pending, draft, range)} />;
 }
 
 /** The Actions column, like on the Alerts and Decisions pages. */
@@ -167,7 +178,7 @@ function IPTable({ title, actions, rows, draft, returned = false, context, foote
   const { t, language } = useI18n();
   const selectedIP = new URLSearchParams(context.query).get('ip');
   return (
-    <Table title={title} actions={actions} footer={footer} bulk={context.canBan && <BanAllButton values={rows.map((row) => row.ip)} draft={draft} context={context} />} widthsKey="statistics-finding-ips" columns={[
+    <Table title={title} actions={actions} footer={footer} bulk={context.canBan && <FindingBanAllButton values={rows.map((row) => row.ip)} draft={draft} context={context} />} widthsKey="statistics-finding-ips" columns={[
       { id: 'ip', label: t('pages.dashboard.ip'), className: headerCell },
       { id: 'alerts', label: t('pages.statistics.alerts'), className: rightHeaderCell },
       { id: 'remediations', label: t('pages.statistics.remediations'), className: rightHeaderCell },
@@ -234,10 +245,16 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
     }).catch(() => { if (!abort.signal.aborted) setResult({ data: null, archiveKey, url }); });
     return () => abort.abort();
   }, [url, attempt, archiveKey]);
+  const shownData = state?.data;
+  const { canBan, loadDecided } = context;
+  useEffect(() => {
+    if (!canBan || !shownData || shownData.kind === 'machines') return;
+    loadDecided([...shownData.ips.map((row) => row.ip), ...(shownData.kind === 'ips' ? shownData.ranges.map((range) => range.range) : [])]);
+  }, [shownData, canBan, loadDecided]);
 
   if (detail.kind === 'scanners') {
     return (
-      <Table actions={actions} bulk={context.canBan && <BanAllButton values={detail.rows.map((row) => row.value)} draft={detail.decision} context={context} />} widthsKey="statistics-finding-scanners" columns={[
+      <Table actions={actions} bulk={context.canBan && <FindingBanAllButton values={detail.rows.map((row) => row.value)} draft={detail.decision} context={context} />} widthsKey="statistics-finding-scanners" columns={[
         { id: 'ip', label: t('pages.dashboard.ip'), className: headerCell },
         { id: 'alerts', label: t('pages.statistics.alerts'), className: rightHeaderCell },
         { id: 'targetedMachines', label: t('pages.statistics.targetedMachines'), className: headerCell },
@@ -320,7 +337,7 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
     <div className="space-y-3">
       {data.kind === 'ips' && data.ranges.length > 0 && (
         <>
-          <Table title={t('pages.statistics.addressRanges')} actions={actions} footer={more(data.ranges.length, data.rangeTotal)} bulk={context.canBan && <BanAllButton values={data.ranges.map((range) => range.range)} draft={detail.decision} range context={context} />} widthsKey="statistics-finding-ranges" columns={[
+          <Table title={t('pages.statistics.addressRanges')} actions={actions} footer={more(data.ranges.length, data.rangeTotal)} bulk={context.canBan && <FindingBanAllButton values={data.ranges.map((range) => range.range)} draft={detail.decision} range context={context} />} widthsKey="statistics-finding-ranges" columns={[
             { id: 'range', label: t('pages.statistics.addressRange'), className: headerCell },
             { id: 'uniqueIPs', label: t('pages.statistics.uniqueIPs'), className: rightHeaderCell },
             { id: 'alerts', label: t('pages.statistics.alerts'), className: rightHeaderCell },

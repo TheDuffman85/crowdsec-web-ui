@@ -1203,6 +1203,7 @@
   "pages.statistics.reasonNetwork": "{network} से हमले",
   "pages.statistics.reasonReturned": "कार्रवाई के बाद लौटा",
   "pages.statistics.reasonScanner": "कई मशीनों पर हमला किया",
+  "pages.statistics.reasonTopAttacker": "शीर्ष हमलावर",
   "pages.statistics.repeatAttackers": "बार-बार आने वाले IP",
   "pages.statistics.repeatAttackersHelp": "एक से अधिक दिन सक्रिय",
   "pages.statistics.retainedDays": "{count} दिन अवधारण",

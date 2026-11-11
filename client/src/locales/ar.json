@@ -1203,6 +1203,7 @@
   "pages.statistics.reasonNetwork": "هجمات من {network}",
   "pages.statistics.reasonReturned": "عاد بعد المعالجة",
   "pages.statistics.reasonScanner": "هاجم عدة أجهزة",
+  "pages.statistics.reasonTopAttacker": "مهاجم رئيسي",
   "pages.statistics.repeatAttackers": "عناوين IP متكررة",
   "pages.statistics.repeatAttackersHelp": "نشطة في أكثر من يوم",
   "pages.statistics.retainedDays": "الاحتفاظ لمدة {count} يوم",

@@ -1206,6 +1206,7 @@
   "pages.statistics.reasonNetwork": "{network}의 공격",
   "pages.statistics.reasonReturned": "조치 후 재공격",
   "pages.statistics.reasonScanner": "여러 머신을 공격함",
+  "pages.statistics.reasonTopAttacker": "주요 공격자",
   "pages.statistics.repeatAttackers": "반복 IP",
   "pages.statistics.repeatAttackersHelp": "하루 넘게 활동",
   "pages.statistics.retainedDays": "{count}일 보관",

@@ -656,6 +656,52 @@ describe('createApp API responses', () => {
     destroyTempDir();
   });
 
+  test('looks up active manual decisions per value and instance without an on-demand refresh', async () => {
+    const { controller, database, lapiClient, fetchCalls } = createController({ env: { CROWDSEC_REFRESH_INTERVAL: '0' } });
+    try {
+      const now = Date.now();
+      const at = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
+      const decisions: Array<[id: string, value: string, origin: string, stopAt: string]> = [
+        ['1', '198.51.100.1', 'cscli', at(60)],
+        ['2', '198.51.100.1', 'cscli', at(120)],
+        ['3', '198.51.100.2', 'crowdsec', at(60)],
+        ['4', '198.51.100.3', 'cscli', at(-1)],
+        ['5', '198.51.100.4', 'console', at(30)],
+        ['6', '198.51.100.5', 'cscli', at(60)],
+      ];
+      for (const [id, value, origin, stopAt] of decisions) {
+        database.insertDecision({ $id: id, $uuid: id, $alert_id: Number(id), $created_at: at(-10), $stop_at: stopAt, $value: value, $type: 'ban', $origin: origin, $scenario: 'manual/web-ui' });
+      }
+      await lapiClient.login();
+      const lookup = (body: unknown) => controller.fetch(new Request('http://localhost/crowdsec/api/decisions/manual-lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }));
+
+      // The first request waits for the initial sync; later lookups must not sync with LAPI on demand.
+      expect((await lookup({ values: ['198.51.100.1'] })).status).toBe(200);
+      const lapiCalls = fetchCalls.length;
+      const response = await lookup({ values: ['198.51.100.1', '198.51.100.2', '198.51.100.3', ' 198.51.100.4 ', '198.51.100.1'] });
+      expect(response.status).toBe(200);
+      expect(fetchCalls).toHaveLength(lapiCalls);
+      const { decisions: found } = await response.json() as { decisions: Array<{ value: string; instance_id: string; stop_at: string }> };
+      expect(found.sort((a, b) => a.value.localeCompare(b.value))).toEqual([
+        { value: '198.51.100.1', instance_id: 'default', stop_at: at(120) },
+        { value: '198.51.100.4', instance_id: 'default', stop_at: at(30) },
+      ]);
+
+      expect(await (await lookup({ values: [] })).json()).toEqual({ decisions: [] });
+      expect((await lookup({ values: '198.51.100.1' })).status).toBe(400);
+      expect((await lookup({ values: [42] })).status).toBe(400);
+      expect((await lookup({ values: Array.from({ length: 501 }, (_, index) => `10.0.${Math.floor(index / 256)}.${index % 256}`) })).status).toBe(400);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('exposes configured manual decision scenarios without restricting the decision API to them', async () => {
     const { controller, database, lapiClient, fetchCalls } = createController({
       env: { CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS: '[custom/abuse-report]' },

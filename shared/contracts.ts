@@ -986,6 +986,19 @@ export interface BulkAddDecisionResponse extends MultiInstanceOperationResponse 
   allowlisted: Array<{ value: string; allowlisted: AllowlistMatch[] }>;
 }
 
+/** Most values one manual decision lookup accepts. */
+export const MANUAL_DECISION_LOOKUP_MAX = 500;
+
+/** Finds the active manual decisions, such as ones added in this Web UI or with cscli, for the given values. */
+export interface ManualDecisionLookupRequest {
+  values: string[];
+}
+
+export interface ManualDecisionLookupResponse {
+  /** One entry per value and instance, with the latest expiry. */
+  decisions: Array<{ value: string; instance_id: string; stop_at: string }>;
+}
+
 export type DeleteResourceKind = 'alert' | 'decision';
 
 export interface BulkDeleteFailure {
