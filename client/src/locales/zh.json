@@ -1139,6 +1139,8 @@
   "pages.statistics.alerts": "告警",
   "pages.statistics.backfilling": "正在导入缓存历史",
   "pages.statistics.backlog": "待处理记录",
+  "pages.statistics.jobFailed": "统计任务失败",
+  "pages.statistics.jobFailedHelp": "上一次统计任务失败。待处理记录会被保留，并在下一次计划运行时重新处理。错误：{error}",
   "pages.statistics.ban": "封禁",
   "pages.statistics.banAll": "全部封禁（{count}）",
   "pages.statistics.blockAllRanges": "全部封锁（{count}）",

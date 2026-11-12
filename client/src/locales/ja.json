@@ -1139,6 +1139,8 @@
   "pages.statistics.alerts": "アラート",
   "pages.statistics.backfilling": "キャッシュ履歴を取り込み中",
   "pages.statistics.backlog": "未処理の観測",
+  "pages.statistics.jobFailed": "統計ジョブが失敗しました",
+  "pages.statistics.jobFailedHelp": "前回の統計ジョブが失敗しました。未処理の観測は保持され、次回の定期実行で再処理されます。エラー: {error}",
   "pages.statistics.ban": "BAN",
   "pages.statistics.banAll": "すべて BAN ({count})",
   "pages.statistics.blockAllRanges": "すべてブロック ({count})",

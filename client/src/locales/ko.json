@@ -1142,6 +1142,8 @@
   "pages.statistics.alerts": "알림",
   "pages.statistics.backfilling": "캐시 기록 가져오는 중",
   "pages.statistics.backlog": "대기 중인 관측",
+  "pages.statistics.jobFailed": "통계 작업 실패",
+  "pages.statistics.jobFailedHelp": "마지막 통계 작업이 실패했습니다. 대기 중인 관측은 유지되며 다음 예약 실행 때 다시 처리됩니다. 오류: {error}",
   "pages.statistics.ban": "차단",
   "pages.statistics.banAll": "모두 차단 ({count})",
   "pages.statistics.blockAllRanges": "모두 차단 ({count})",

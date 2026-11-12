@@ -131,6 +131,29 @@ export function readStatisticsBatch(db: any, backfill: boolean, limit = 500): {
   };
 }
 
+export interface StatisticsPendingBound {
+  /** Earliest UTC day the scanned observations add to, or null when none was scanned. */
+  day: string | null;
+  /** Highest outbox sequence ever assigned; rows above it were not scanned. */
+  seq: number;
+}
+
+/**
+ * Earliest UTC day that pending observations after `afterSeq` still add to. A
+ * decision also counts on its alert's day, which can be earlier than the outbox
+ * `day` (the later of both, kept for retention). Sequences only grow, so callers
+ * can extend a bound with the rows captured since they last scanned.
+ */
+export function statisticsPendingFrom(db: any, afterSeq = 0): StatisticsPendingBound {
+  // One statement reads both from the same snapshot.
+  const row = db.prepare(`SELECT
+      (SELECT MIN(min(day, substr(json_extract(payload, '$[2]'), 1, 10),
+        CASE WHEN json_extract(payload, '$[1]') = 'd' THEN COALESCE(substr(json_extract(payload, '$[12]'), 1, 10), day) ELSE day END))
+        FROM statistics_outbox WHERE seq > ?) AS day,
+      (SELECT seq FROM sqlite_sequence WHERE name = 'statistics_outbox') AS seq`).get(afterSeq) as { day: string | null; seq: number | null };
+  return { day: row.day, seq: Math.max(afterSeq, Number(row.seq) || 0) };
+}
+
 export function acknowledgeStatisticsBatch(db: any, ids: number[], cutoff: string): boolean {
   return db.transaction(() => {
     const remove = db.prepare('DELETE FROM statistics_outbox WHERE seq = ?');

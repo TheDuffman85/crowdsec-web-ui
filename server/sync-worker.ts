@@ -1,4 +1,4 @@
-import { configureStatisticsCapture, readStatisticsBatch, acknowledgeStatisticsBatch, resetStatisticsCapture } from './statistics-capture';
+import { configureStatisticsCapture, readStatisticsBatch, acknowledgeStatisticsBatch, resetStatisticsCapture, statisticsPendingFrom } from './statistics-capture';
 import { CrowdsecDatabase, type CachedAllowlist } from './database';
 import { installTimestampedConsole } from './logging';
 import type { WorkerReadyMessage } from './worker-lifecycle';
@@ -51,6 +51,7 @@ function execute(request: WorkerRequest['request']): unknown {
   if (request.type === 'statistics-reset') { resetStatisticsCapture(database.db); return; }
   if (request.type === 'statistics-batch') return readStatisticsBatch(database.db, Boolean(request.backfill));
   if (request.type === 'statistics-ack') return acknowledgeStatisticsBatch(database.db, request.ids as number[], String(request.cutoff));
+  if (request.type === 'statistics-pending-from') return statisticsPendingFrom(database.db, Number(request.afterSeq) || 0);
   if (request.type === 'set-meta') {
     database.setMeta(String(request.key), String(request.value));
     return undefined;

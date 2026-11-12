@@ -1139,6 +1139,8 @@
   "pages.statistics.alerts": "التنبيهات",
   "pages.statistics.backfilling": "جارٍ استيراد السجل المؤقت",
   "pages.statistics.backlog": "ملاحظات قيد الانتظار",
+  "pages.statistics.jobFailed": "فشلت مهمة الإحصاءات",
+  "pages.statistics.jobFailedHelp": "فشلت آخر مهمة للإحصاءات. يتم الاحتفاظ بالملاحظات قيد الانتظار وستتم معالجتها مرة أخرى في التشغيل المجدول التالي. الخطأ: {error}",
   "pages.statistics.ban": "حظر",
   "pages.statistics.banAll": "حظر الكل ({count})",
   "pages.statistics.blockAllRanges": "حظر الكل ({count})",

@@ -1139,6 +1139,8 @@
   "pages.statistics.alerts": "Alertas",
   "pages.statistics.backfilling": "Importando caché",
   "pages.statistics.backlog": "Observaciones pendientes",
+  "pages.statistics.jobFailed": "Error en la tarea de estadísticas",
+  "pages.statistics.jobFailedHelp": "La última tarea de estadísticas falló. Las observaciones pendientes se conservan y se procesarán de nuevo en la próxima ejecución programada. Error: {error}",
   "pages.statistics.ban": "Bloquear",
   "pages.statistics.banAll": "Bloquear todas ({count})",
   "pages.statistics.blockAllRanges": "Bloquear todos ({count})",

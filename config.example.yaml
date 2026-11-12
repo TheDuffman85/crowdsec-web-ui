@@ -24,7 +24,7 @@
 #   enabled: true # Durable historical attack and decision summaries; on for new installations, opt-in for existing ones.
 #   retentionDays: 90 # 1–3650 UTC calendar days, including today.
 #   jobInterval: 1h # 5m–24h; reads never trigger collection.
-#   jobTimeBudget: 30s # 1s–60s per consolidation run; maintenance runs independently.
+#   jobTimeBudget: 30s # 1s–60s per consolidation run; a remaining backlog continues each minute. Maintenance runs independently.
 
 # storage:
 #   dataDir: /app/data # state.db with users, notification rules, and settings; back this up.
