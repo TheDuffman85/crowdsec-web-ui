@@ -1139,6 +1139,8 @@
   "pages.statistics.alerts": "अलर्ट",
   "pages.statistics.backfilling": "कैश इतिहास आयात हो रहा है",
   "pages.statistics.backlog": "लंबित अवलोकन",
+  "pages.statistics.jobFailed": "आँकड़े जॉब विफल रहा",
+  "pages.statistics.jobFailedHelp": "पिछला आँकड़े जॉब विफल रहा। लंबित अवलोकन सुरक्षित रखे गए हैं और अगले निर्धारित रन में फिर से संसाधित किए जाएँगे। त्रुटि: {error}",
   "pages.statistics.ban": "बैन करें",
   "pages.statistics.banAll": "सभी को बैन करें ({count})",
   "pages.statistics.blockAllRanges": "सभी को ब्लॉक करें ({count})",

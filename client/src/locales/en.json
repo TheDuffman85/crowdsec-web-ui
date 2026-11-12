@@ -1142,6 +1142,8 @@
   "pages.statistics.alerts": "Alerts",
   "pages.statistics.backfilling": "Importing cached history",
   "pages.statistics.backlog": "Pending observations",
+  "pages.statistics.jobFailed": "Statistics job failed",
+  "pages.statistics.jobFailedHelp": "The last statistics job failed. Pending observations are kept and processed again at the next scheduled run. Error: {error}",
   "pages.statistics.ban": "Ban",
   "pages.statistics.banAll": "Ban all ({count})",
   "pages.statistics.blockAllRanges": "Block all ({count})",

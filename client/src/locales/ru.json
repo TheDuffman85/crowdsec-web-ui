@@ -1139,6 +1139,8 @@
   "pages.statistics.alerts": "Оповещения",
   "pages.statistics.backfilling": "Импорт кеша",
   "pages.statistics.backlog": "Наблюдений в очереди",
+  "pages.statistics.jobFailed": "Ошибка задачи статистики",
+  "pages.statistics.jobFailedHelp": "Последний запуск задачи статистики завершился ошибкой. Наблюдения в очереди сохранены и будут обработаны при следующем запланированном запуске. Ошибка: {error}",
   "pages.statistics.ban": "Забанить",
   "pages.statistics.banAll": "Забанить все ({count})",
   "pages.statistics.blockAllRanges": "Заблокировать все ({count})",

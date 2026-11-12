@@ -2,18 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
-  DEFAULT_STATISTICS_SETTINGS, addStatisticsDays, statisticsCutoff, validateStatisticsSettings,
+  DEFAULT_STATISTICS_SETTINGS, addStatisticsDays, statisticsCutoff, statisticsDay, validateStatisticsSettings,
   type StatisticsConfiguration, type StatisticsDetailRequest, type StatisticsDetails, type StatisticsFilters, type StatisticsResponse, type StatisticsSettings,
 } from '../shared/statistics';
 import { parseDurationMs } from '../shared/duration';
 import { parseLookbackToMs, resolveManagedSettingSource, type RuntimeConfig } from './config';
 import type { CrowdsecDatabase } from './database';
 import type { DatabaseSyncWorker } from './sync-worker-client';
-import { acknowledgeStatisticsBatch, configureStatisticsCapture, readStatisticsBatch, resetStatisticsCapture } from './statistics-capture';
+import { acknowledgeStatisticsBatch, configureStatisticsCapture, readStatisticsBatch, resetStatisticsCapture, statisticsPendingFrom } from './statistics-capture';
 import { StatisticsWorkerClient } from './statistics-worker-client';
 import type { StoredStatistics } from './statistics-store';
 
-type SyncQueue = Pick<DatabaseSyncWorker, 'runExclusive'> & Partial<Pick<DatabaseSyncWorker, 'configureStatistics' | 'resetStatistics' | 'statisticsBatch' | 'acknowledgeStatistics'>>;
+type SyncQueue = Pick<DatabaseSyncWorker, 'runExclusive'> & Partial<Pick<DatabaseSyncWorker, 'configureStatistics' | 'resetStatistics' | 'statisticsBatch' | 'acknowledgeStatistics' | 'statisticsPendingFrom'>>;
+/** How a job run ended: it yielded before reading anything, caught up, made progress with work left, or failed. */
+type RunOutcome = 'idle' | 'done' | 'more' | 'failed';
 const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 100));
 // Settings are validated before use, so an unparsable value cannot reach here.
 const durationMs = (value: string): number => parseDurationMs(value) ?? 0;
@@ -61,6 +63,16 @@ export class StatisticsService {
   private statusLoaded: Promise<void> = Promise.resolve();
   private updating = false;
   private lastRun = 0;
+  /** The last run made progress but left work behind, so the next tick continues it. */
+  private draining = false;
+  /**
+   * Earliest UTC day that pending observations add to, over the outbox rows up
+   * to `pendingSeq`. Acknowledgements only move the true value later, so it
+   * stays a lower bound; queries extend it with rows captured since, and each
+   * run replaces it with a fresh scan so it moves forward as rows are processed.
+   */
+  private pendingFrom: string | null = null;
+  private pendingSeq = 0;
   private active: Promise<void> | null = null;
   private maintaining: Promise<void> | null = null;
   /** Retention cutoff that maintenance last finished pruning to. */
@@ -125,7 +137,7 @@ export class StatisticsService {
       this.epoch = randomUUID(); this.epochStartedAt = new Date().toISOString(); this.coverageFrom = {}; this.resumeFrom = {};
       Object.assign(this.status, { lastSuccess: null, backlog: 0, backfillPending: this.settings.enabled, error: null });
       this.prunedCutoff = null;
-      this.lastRun = 0;
+      this.lastRun = 0; this.draining = false; this.pendingFrom = null; this.pendingSeq = 0;
     } finally { this.updating = false; }
     if (this.started) { if (!this.timer) this.start(); else void this.tick(); }
     return this.configuration();
@@ -205,8 +217,23 @@ export class StatisticsService {
       freshnessMs: 2 * durationMs(settings.jobInterval) });
     if (lastSuccess && (!this.status.lastSuccess || lastSuccess > this.status.lastSuccess)) this.status.lastSuccess = lastSuccess;
     if (data.revision > this.status.revision) this.status.revision = data.revision;
-    return { ...data, coverage: { ...data.coverage, partial: data.coverage.partial || this.status.backfillPending || this.status.backlog > 0 },
+    // Pending observations only change days from the earliest one they add to.
+    const pendingFrom = this.status.backlog > 0 ? this.pendingDay() : null;
+    const pending = pendingFrom !== null && filters.to >= pendingFrom;
+    return { ...data, coverage: { ...data.coverage, partial: data.coverage.partial || this.status.backfillPending || pending },
       configuration: { ...this.configuration(), settings: { ...settings } } };
+  }
+
+  /**
+   * Earliest day of the configured zone that pending observations add to,
+   * including rows captured since the last run. Outbox days are UTC dates:
+   * zones behind UTC put the start of one on the previous calendar day.
+   */
+  private pendingDay(): string | null {
+    const added = statisticsPendingFrom(this.options.database.db, this.pendingSeq);
+    if (added.day && (!this.pendingFrom || added.day < this.pendingFrom)) this.pendingFrom = added.day;
+    this.pendingSeq = added.seq;
+    return this.pendingFrom && statisticsDay(Date.parse(`${this.pendingFrom}T00:00:00.000Z`), this.timeZone);
   }
 
   async details(filters: StatisticsFilters, request: StatisticsDetailRequest): Promise<StatisticsDetails> {
@@ -223,15 +250,20 @@ export class StatisticsService {
       if (this.maintaining) await this.maintaining;
       await this.statusLoaded;
       // A run that yielded to source sync before doing anything is retried
-      // on the next tick instead of waiting a full job interval.
-      if (await this.collect()) this.lastRun = Date.now();
+      // on the next tick instead of waiting a full job interval. So is one
+      // that made progress but ran out of time with work left: the budget
+      // bounds each run, not how quickly a large import is processed. A failed
+      // run waits for the next interval instead of retrying every minute.
+      const outcome = await this.collect();
+      // Yielding leaves the previous run's continuation in place.
+      if (outcome !== 'idle') { this.lastRun = Date.now(); this.draining = outcome === 'more'; }
     })().finally(() => { this.active = null; });
     return this.active;
   }
 
   private async tick(): Promise<void> {
     if (this.stopped || this.updating || this.active || this.maintaining || this.options.busy()) return;
-    if ((this.options.ready() || !this.settings.enabled) && Date.now() - this.lastRun >= durationMs(this.settings.jobInterval)) await this.run();
+    if ((this.options.ready() || !this.settings.enabled) && (this.draining || Date.now() - this.lastRun >= durationMs(this.settings.jobInterval))) await this.run();
     else if (this.maintenanceDue()) {
       this.maintaining = this.maintain().catch((error) => this.recordError(error)).finally(() => { this.maintaining = null; });
       await this.maintaining;
@@ -269,15 +301,15 @@ export class StatisticsService {
     } while (!this.stopped && Date.now() < deadline);
   }
 
-  /** Returns false when the run yielded to source sync before reading any batch. */
-  private async collect(): Promise<boolean> {
+  private async collect(): Promise<RunOutcome> {
     const { sync, database, config } = this.options;
-    if (this.stopped) return true;
+    if (this.stopped) return 'done';
     // While disabled there is nothing to do once pending observations are consumed.
-    if (!this.settings.enabled && !database.db.prepare('SELECT 1 FROM statistics_outbox LIMIT 1').get()) return true;
+    if (!this.settings.enabled && !database.db.prepare('SELECT 1 FROM statistics_outbox LIMIT 1').get()) return 'done';
     this.status.running = true;
     const deadline = Date.now() + durationMs(this.settings.jobTimeBudget);
     let batches = 0;
+    let acknowledged = 0;
     try {
       do {
         if (this.options.busy()) break;
@@ -304,16 +336,24 @@ export class StatisticsService {
         const sourceCutoff = StatisticsService.sourceCutoff(cutoff);
         if (sync.acknowledgeStatistics) await sync.acknowledgeStatistics(batch.rows.map((r) => r.seq), sourceCutoff);
         else await sync.runExclusive(() => acknowledgeStatisticsBatch(database.db, batch.rows.map((r) => r.seq), sourceCutoff));
+        acknowledged += 1;
         this.status.lastSuccess = result.lastSuccess;
         this.status.revision = result.revision;
         this.status.backlog = Math.max(0, batch.backlog - batch.rows.length);
         if (!batch.backfillPending && !this.status.backlog) break;
         await pause();
       } while (!this.stopped && Date.now() < deadline);
+      if (!this.stopped && batches) {
+        // A full scan lets the bound move forward past processed rows.
+        const bound = sync.statisticsPendingFrom ? await sync.statisticsPendingFrom()
+          : await sync.runExclusive(() => statisticsPendingFrom(database.db));
+        this.pendingFrom = bound.day; this.pendingSeq = bound.seq;
+      }
       if (!this.stopped && this.maintenanceDue()) await this.maintain();
       this.status.error = null;
-    } catch (error) { this.recordError(error); }
+    } catch (error) { this.recordError(error); return batches ? 'failed' : 'idle'; }
     finally { this.status.running = false; }
-    return batches > 0;
+    if (!batches) return 'idle';
+    return acknowledged && (this.status.backfillPending || this.status.backlog > 0) ? 'more' : 'done';
   }
 }

@@ -1141,6 +1141,8 @@
   "pages.statistics.alerts": "Alertes",
   "pages.statistics.backfilling": "Importation du cache",
   "pages.statistics.backlog": "Observations en attente",
+  "pages.statistics.jobFailed": "Échec de la tâche de statistiques",
+  "pages.statistics.jobFailedHelp": "La dernière tâche de statistiques a échoué. Les observations en attente sont conservées et seront traitées à nouveau lors de la prochaine exécution planifiée. Erreur : {error}",
   "pages.statistics.ban": "Bannir",
   "pages.statistics.banAll": "Tout bannir ({count})",
   "pages.statistics.blockAllRanges": "Tout bloquer ({count})",

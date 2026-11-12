@@ -1,4 +1,4 @@
-import type { StatisticsOutboxRow } from './statistics-capture';
+import type { StatisticsOutboxRow, StatisticsPendingBound } from './statistics-capture';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseWorker as Worker } from './database-worker';
 import { isWorkerReadyMessage, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
@@ -54,6 +54,7 @@ type SyncWorkerRequest =
   | { type: 'statistics-reset' }
   | { type: 'statistics-batch'; backfill: boolean }
   | { type: 'statistics-ack'; ids: number[]; cutoff: string }
+  | { type: 'statistics-pending-from'; afterSeq: number }
   | { type: 'set-meta'; key: string; value: string }
   | { type: 'persist-alerts'; mutations: SyncAlertMutation[] }
   | { type: 'compare-alert-decisions'; comparisons: AlertDecisionComparison[] }
@@ -128,6 +129,10 @@ export class DatabaseSyncWorker {
 
   acknowledgeStatistics(ids: number[], cutoff: string): Promise<boolean> {
     return this.execute({ type: 'statistics-ack', ids, cutoff });
+  }
+
+  statisticsPendingFrom(afterSeq = 0): Promise<StatisticsPendingBound> {
+    return this.execute({ type: 'statistics-pending-from', afterSeq });
   }
 
   persistAlerts(mutations: SyncAlertMutation[]): Promise<{ changed: boolean }> {

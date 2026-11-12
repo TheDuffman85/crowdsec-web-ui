@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useEffectEvent, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useId, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
   AlertCircle, Clock3, Crosshair, Database, Gavel, Globe, Info, ListChecks, Network,
-  RefreshCw, Repeat, RotateCcw, Server, ShieldAlert, ShieldCheck, Target, TrendingUp, Users, X,
+  RefreshCw, Repeat, RotateCcw, Server, ShieldAlert, ShieldCheck, Target, TrendingUp, TriangleAlert, Users, X,
 } from 'lucide-react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
@@ -212,6 +212,30 @@ function Notice({ tone, role, children }: { tone: 'info' | 'warning'; role?: 'al
 
 function EmptyState({ children }: { children: ReactNode }) {
   return <p className="py-4 text-center text-sm text-gray-500 dark:text-gray-400">{children}</p>;
+}
+
+/** Warning icon whose tooltip explains why the last statistics job failed; also shown on keyboard focus. */
+function JobErrorIndicator({ label, children }: { label: string; children: ReactNode }) {
+  const tooltipId = useId();
+  return (
+    <span className="group relative inline-flex shrink-0">
+      <span
+        tabIndex={0}
+        aria-describedby={tooltipId}
+        className="inline-flex items-center gap-1 rounded font-medium text-amber-600 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-amber-400"
+      >
+        <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+        {label}
+      </span>
+      <span
+        id={tooltipId}
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 hidden w-80 max-w-[calc(100vw-2rem)] break-words rounded-lg bg-gray-900 px-3 py-2 text-left text-xs font-normal leading-5 text-white shadow-lg group-hover:block group-focus-within:block dark:bg-gray-700"
+      >
+        {children}
+      </span>
+    </span>
+  );
 }
 
 interface ChartTooltipProps {
@@ -828,6 +852,11 @@ export function Statistics() {
             <span className="inline-flex items-center gap-1.5"><Database className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.retainedDays', { count: configuration.settings.retentionDays })}</span>
             <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" aria-hidden="true" />{t('pages.statistics.lastUpdate')}: {formatTimestamp(configuration.status.lastSuccess)}</span>
             <span>{t('pages.statistics.backlog')}: <span className="tabular-nums">{formatNumber(configuration.status.backlog)}</span></span>
+            {configuration.status.error && (
+              <JobErrorIndicator label={t('pages.statistics.jobFailed')}>
+                {t('pages.statistics.jobFailedHelp', { error: configuration.status.error })}
+              </JobErrorIndicator>
+            )}
             {configuration.status.backfillPending && <Badge variant="info">{t('pages.statistics.backfilling')}</Badge>}
             {!configuration.settings.enabled && <Badge>{t('common.disabled')}</Badge>}
           </div>

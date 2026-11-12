@@ -590,6 +590,19 @@ describe('Statistics polling', () => {
     expect(sessionFetch).toHaveBeenCalledTimes(1);
   });
 
+  test('warns when the background job failed and explains why in a tooltip', async () => {
+    mount();
+    await screen.findByRole('heading', { name: 'Top IPs' });
+    expect(screen.queryByText('Statistics job failed')).not.toBeInTheDocument();
+    vi.mocked(fetchConfig).mockResolvedValueOnce({ statistics: { ...configuration, status: { ...configuration.status, backlog: 55715, error: 'Statistics worker exceeded its 30-second timeout' } } } as ConfigResponse);
+
+    fireEvent(document, new Event('visibilitychange'));
+    const warning = await screen.findByText('Statistics job failed');
+    const tooltip = screen.getByRole('tooltip');
+    expect(warning.closest('[tabindex="0"]')).toHaveAttribute('aria-describedby', tooltip.id);
+    expect(tooltip).toHaveTextContent('Pending observations are kept and processed again at the next scheduled run. Error: Statistics worker exceeded its 30-second timeout');
+  });
+
   test('refreshes details in an open finding when the archive changes', async () => {
     let revision = 1;
     vi.mocked(sessionFetch).mockImplementation(async (url) => {

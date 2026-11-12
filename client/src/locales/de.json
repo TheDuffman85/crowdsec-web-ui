@@ -1139,6 +1139,8 @@
   "pages.statistics.alerts": "Alarme",
   "pages.statistics.backfilling": "Cacheverlauf wird übernommen",
   "pages.statistics.backlog": "Ausstehende Beobachtungen",
+  "pages.statistics.jobFailed": "Statistik-Job fehlgeschlagen",
+  "pages.statistics.jobFailedHelp": "Der letzte Statistik-Job ist fehlgeschlagen. Ausstehende Beobachtungen bleiben erhalten und werden beim nächsten geplanten Lauf erneut verarbeitet. Fehler: {error}",
   "pages.statistics.ban": "Bannen",
   "pages.statistics.banAll": "Alle bannen ({count})",
   "pages.statistics.blockAllRanges": "Alle sperren ({count})",
