@@ -15,6 +15,8 @@ interface Observation {
   machineId?: string; machineName?: string; scenario?: string; target?: string;
   simulated: number; events?: number; alertAt?: string; alertSimulated?: number;
   type?: string; origin?: string; alertIdentity?: unknown[];
+  /** When an alert's copied source enrichment was observed, see server/source-enrichment.ts. */
+  enrichedAt?: string;
 }
 
 export function decodeStatisticsObservation(payload: string): Observation {
@@ -24,7 +26,7 @@ export function decodeStatisticsObservation(payload: string): Observation {
   const observation: Observation = { kind: value[1] === 'a' ? 'alert' : 'decision', at: value[2], instance: value[3],
     ip: value[4], country: value[5], asn: value[6], network: value[7], machineId: value[8], machineName: value[9],
     scenario: value[10], simulated: value[11] };
-  if (observation.kind === 'alert') Object.assign(observation, { events: value[12], target: value[13] });
+  if (observation.kind === 'alert') Object.assign(observation, { events: value[12], target: value[13], enrichedAt: value[14] ?? undefined });
   else Object.assign(observation, { alertAt: value[12], alertSimulated: value[13], type: value[14], origin: value[15], alertIdentity: value[16], target: value[17] });
   return observation;
 }
@@ -47,6 +49,12 @@ const digest = (value: string): Buffer => createHash('sha256').update(value).dig
 const CLOCK_SKEW_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
+/**
+ * When a cell's location (country, AS, network) was observed. Manual alerts
+ * carry location copied from an earlier alert of the IP, which is dated by
+ * that alert; cells archived before this column existed use their last time.
+ */
+const OBSERVED_AT = "COALESCE(NULLIF(observed_at, ''), last_at)";
 
 export function canonicalStatisticsIP(value: unknown): string {
   if (typeof value !== 'string' || !isIP(value)) return '';
@@ -83,6 +91,16 @@ const SINGLE_IP = "ip != '' AND instr(ip, '/') = 0";
 // Lookups for a few IPs across the archive. Without the hint SQLite prefers the
 // clustered (kind, day) key, which covers every column, and reads whole periods.
 const CELLS_BY_IP = 'cells INDEXED BY idx_statistics_cells_ip';
+// In a grouped pass, the location of the most recently observed enriched alert
+// cell, packed so one MAX() selects all its fields. Remediation cells carry
+// their alert's location dated by the alert, so they are not considered.
+const LOCATION_SEPARATOR = '\u001f';
+const LATEST_LOCATION = `MAX(CASE WHEN kind = 'alert' AND (country != '' OR asn != '' OR network != '')
+  THEN ${OBSERVED_AT} || char(31) || country || char(31) || asn || char(31) || network END)`;
+function unpackLocation(location: string | null): { country: string; asn: string; network: string } {
+  const [, country = '', asn = '', network = ''] = location ? location.split(LOCATION_SEPARATOR) : [];
+  return { country, asn, network };
+}
 
 export class StatisticsStore {
   readonly db: any;
@@ -132,9 +150,9 @@ export class StatisticsStore {
     else if (!(this.db.prepare('PRAGMA table_info(cells)').all() as Array<{ name: string; pk: number }>).some((column) => column.name === 'kind' && column.pk === 1)) this.clusterCells();
     // Targets were not captured by older versions. Preserve their counts and
     // leave that dimension empty rather than inventing historical targets.
-    if (!(this.db.prepare('PRAGMA table_info(cells)').all() as Array<{ name: string }>).some((column) => column.name === 'target')) {
-      this.db.exec("ALTER TABLE cells ADD COLUMN target TEXT NOT NULL DEFAULT ''");
-    }
+    const cellColumns = (this.db.prepare('PRAGMA table_info(cells)').all() as Array<{ name: string }>).map((column) => column.name);
+    if (!cellColumns.includes('target')) this.db.exec("ALTER TABLE cells ADD COLUMN target TEXT NOT NULL DEFAULT ''");
+    if (!cellColumns.includes('observed_at')) this.db.exec("ALTER TABLE cells ADD COLUMN observed_at TEXT NOT NULL DEFAULT ''");
     const hourColumns = (this.db.prepare('PRAGMA table_info(hours)').all() as Array<{ name: string }>).map((column) => column.name);
     for (const field of ['country', 'network', 'target']) {
       if (!hourColumns.includes(field)) this.db.exec(`ALTER TABLE hours ADD COLUMN ${field} TEXT NOT NULL DEFAULT ''`);
@@ -169,7 +187,7 @@ export class StatisticsStore {
       scenario TEXT NOT NULL, country TEXT NOT NULL, asn TEXT NOT NULL, network TEXT NOT NULL,
       type TEXT NOT NULL, origin TEXT NOT NULL,
       count INTEGER NOT NULL, events INTEGER NOT NULL, first_at TEXT NOT NULL, last_at TEXT NOT NULL,
-      target TEXT NOT NULL DEFAULT '',
+      target TEXT NOT NULL DEFAULT '', observed_at TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (kind, day, key)
     ) WITHOUT ROWID`);
   }
@@ -195,7 +213,7 @@ export class StatisticsStore {
       this.createCells();
       this.db.exec(`
         INSERT INTO cells SELECT kind, day, key, instance, simulated, alert_simulated, ip, machine, machine_id, machine_name,
-          scenario, country, asn, network, type, origin, count, events, first_at, last_at, '' FROM cells_unclustered;
+          scenario, country, asn, network, type, origin, count, events, first_at, last_at, '', '' FROM cells_unclustered;
         UPDATE seen SET cell_day = (SELECT day FROM cells_unclustered c WHERE c.key = seen.cell_key) WHERE cell_key IS NOT NULL AND cell_day IS NULL;
         DROP TABLE cells_unclustered;
       `);
@@ -238,9 +256,10 @@ export class StatisticsStore {
     const getParent = this.db.prepare("SELECT c.* FROM seen s JOIN cells c ON c.kind = 'alert' AND c.day = s.cell_day AND c.key = s.cell_key WHERE s.identity = ?");
     const linkParent = this.db.prepare('UPDATE seen SET cell_day = ?, cell_key = ? WHERE identity = ?');
     const upsert = this.db.prepare(`INSERT INTO cells (kind, day, key, instance, simulated, alert_simulated, ip, machine, machine_id, machine_name,
-        scenario, country, asn, network, type, origin, target, count, events, first_at, last_at) VALUES (${Array(21).fill('?').join(',')})
+        scenario, country, asn, network, type, origin, target, count, events, first_at, last_at, observed_at) VALUES (${Array(22).fill('?').join(',')})
       ON CONFLICT(kind, day, key) DO UPDATE SET count = count + excluded.count, events = events + excluded.events,
-        first_at = min(first_at, excluded.first_at), last_at = max(last_at, excluded.last_at)`);
+        first_at = min(first_at, excluded.first_at), last_at = max(last_at, excluded.last_at),
+        observed_at = max(${OBSERVED_AT}, excluded.observed_at)`);
     const putMeta = this.db.prepare('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)');
     const upsertHour = this.db.prepare(`INSERT INTO hours (kind, hour, key, instance, simulated, ip, machine, scenario, country, network, target, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(kind, hour, key) DO UPDATE SET count = count + 1`);
@@ -283,7 +302,8 @@ export class StatisticsStore {
           const key = digest(JSON.stringify(target ? [...dims, target] : dims));
           const events = kind === 'alert' && Number.isSafeInteger(o.events) && Number(o.events) >= 0 ? Number(o.events) : 0;
           const [cellKind, cellDay, ...rest] = dims;
-          upsert.run(cellKind, cellDay, key, ...rest, target, 1, events, at, at);
+          const observedAt = kind === 'alert' && Number.isFinite(Date.parse(text(o.enrichedAt))) ? text(o.enrichedAt) : at;
+          upsert.run(cellKind, cellDay, key, ...rest, target, 1, events, at, at, observedAt);
           // Only the chart uses hours, so they keep just the series dimensions.
           if (kind !== 'ban' && at.slice(0, 13) >= firstHour) {
             const hourDims = [kind, at.slice(0, 13), o.instance, o.simulated ? 1 : 0, ip, machine, text(o.scenario), text(o.country), text(o.network), target];
@@ -376,7 +396,7 @@ export class StatisticsStore {
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND machine != '' THEN machine END) AS machines,
         COUNT(DISTINCT CASE WHEN kind = 'alert' THEN day END) AS activeDays,
         MAX(CASE WHEN kind = 'alert' THEN last_at END) AS lastActivity, MAX(CASE WHEN kind = 'alert' THEN day END) AS lastDay,
-        MIN(CASE WHEN ${isRemediation} THEN day END) AS firstRemediation, MAX(country) AS country, MAX(asn) AS asn, MAX(network) AS network
+        MIN(CASE WHEN ${isRemediation} THEN day END) AS firstRemediation, ${LATEST_LOCATION} AS location
       FROM cells WHERE kind IN ('alert', 'ban') AND ${SINGLE_IP} AND ${where}${condition} GROUP BY ip HAVING alerts > 0`;
     /** Listed IPs with their remediations by type, looked up by the IP index for the remediated ones only. */
     const withTypes = (rows: any[]) => {
@@ -387,7 +407,7 @@ export class StatisticsStore {
     };
     const toIP = (row: any, remediationTypes: Array<{ label: string; count: number }>) => ({
       ip: row.ip, alerts: Number(row.alerts), remediations: Number(row.remediations), remediationTypes, machines: Number(row.machines), activeDays: Number(row.activeDays),
-      country: row.country || '', asn: row.asn || '', network: row.network || '', lastActivity: row.lastActivity || null,
+      ...unpackLocation(row.location), lastActivity: row.lastActivity || null,
       firstRemediation: row.firstRemediation || null, remediatedBefore: Boolean(row.remediatedBefore),
     });
     if (request.kind === 'ips') {
@@ -532,9 +552,12 @@ export class StatisticsStore {
         }
         return result;
       };
+      // An IP's location comes from its most recently observed enriched alert:
+      // manual alerts carry none or a copy dated by the alert it came from.
+      const order = field === 'ip' ? `(country = '' AND asn = '' AND network = ''), ${OBSERVED_AT} DESC` : 'last_at DESC';
       const latest = new Map(all(`SELECT owner, country, asn, network, machine_name FROM (
         SELECT ${field} AS owner, country, asn, network, machine_name,
-          ROW_NUMBER() OVER (PARTITION BY ${field} ORDER BY last_at DESC, key) AS position
+          ROW_NUMBER() OVER (PARTITION BY ${field} ORDER BY ${order}, key) AS position
         FROM ${source} WHERE kind = 'alert' AND ${inRanked}) WHERE position = 1`, args).map((row) => [row.owner, row]));
       // Remediations only: the latest alert day comes from the ranking itself.
       const outcomes = new Map<string, { remediations: number; firstRemediation: string }>();

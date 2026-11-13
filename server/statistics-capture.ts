@@ -1,3 +1,5 @@
+import { COPIED_ENRICHMENT_AT } from './source-enrichment';
+
 // The outbox belongs to cache.db so capture commits or rolls back with the
 // source mutation. It has no foreign keys: deleting an alert must not erase it.
 export function initStatisticsCaptureSchema(db: any): void {
@@ -20,10 +22,14 @@ const alertIdentity = (row: string) => `json_array('alert', ${row}.instance_id, 
 // whether the parent alert is cached when the decision is captured.
 const decisionIdentity = (row: string) => `json_array('decision', ${row}.instance_id, ${row}.upstream_id, ${row}.alert_upstream_id, ${row}.created_at)`;
 
-// Versioned tuples avoid repeating field names in the transient journal.
+// Versioned tuples avoid repeating field names in the transient journal. Fields
+// are only appended, so tuples already in the journal stay readable.
+// The last alert field is when copied source enrichment was observed (see
+// server/source-enrichment.ts), so the archive ranks a copy by its origin.
 const alertPayload = (row: string) => `json_array(1, 'a',
   ${row}.created_at, ${row}.instance_id, ${row}.source_ip, ${row}.country, ${row}.source_as_number,
-  ${row}.as_name, ${row}.machine_id, ${row}.machine, ${row}.scenario, ${row}.simulated, ${row}.events_count, ${row}.target
+  ${row}.as_name, ${row}.machine_id, ${row}.machine, ${row}.scenario, ${row}.simulated, ${row}.events_count, ${row}.target,
+  CASE WHEN json_valid(${row}.source_extra_data) THEN json_extract(${row}.source_extra_data, '$.${COPIED_ENRICHMENT_AT}') END
 )`;
 
 const decisionPayload = (row: string) => `json_array(1, 'd',

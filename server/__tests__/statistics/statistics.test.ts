@@ -165,6 +165,7 @@ describe('long-term statistics capture and aggregation', () => {
     const legacy = { seq: 1, identity: 'legacy', day: '2026-01-10', payload: JSON.stringify([1, 'a', '2026-01-10T10:00:00.000Z', 'default', '1.2.3.4', '', '', '', '', '', 'ssh', 0, 20]) };
     first.consolidate([legacy], context);
     first.db.exec('ALTER TABLE cells DROP COLUMN target');
+    first.db.exec('ALTER TABLE cells DROP COLUMN observed_at');
     for (const field of ['country', 'network', 'target']) first.db.exec(`ALTER TABLE hours DROP COLUMN ${field}`);
     first.close();
     const upgraded = new StatisticsStore(file);
@@ -199,6 +200,32 @@ describe('long-term statistics capture and aggregation', () => {
     ]);
     // The captcha counts as a remediation too.
     expect(result.remediationTypes).toEqual([{ label: 'ban', count: 2 }, { label: 'captcha', count: 1 }]);
+  });
+
+  it('keeps the location of a top IP from its latest enriched alert when a later manual ban has none', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    f.alert(1, { created_at: '2026-01-10T10:00:00.000Z' });
+    f.alert(2, { created_at: '2026-01-12T10:00:00.000Z', scenario: 'manual', source: { scope: 'ip', value: '1.2.3.4' } });
+    f.consolidate();
+    expect(f.query().attackers[0]).toMatchObject({ value: '1.2.3.4', alerts: 2, country: 'DE', asn: '42', network: 'Network' });
+  });
+
+  it('ranks copied manual alert locations by when they were observed, not by the manual alert', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    const located = (cn: string, asn: string, name: string) => ({ scope: 'Ip', ip: '1.2.3.4', value: '1.2.3.4', cn, as_number: asn, as_name: name });
+    f.alert(1, { created_at: '2026-01-11T10:00:00.000Z', source: located('DE', '42', 'German AS') });
+    f.consolidate();
+    // Sync copied the Jan 11 location onto a Jan 13 manual alert (see server/source-enrichment.ts).
+    f.alert(3, { created_at: '2026-01-13T10:00:00.000Z', scenario: 'manual', source: { ...located('DE', '42', 'German AS'), scope: 'ip', copied_enrichment_at: '2026-01-11T10:00:00.000Z' } });
+    f.decision(30, 3, { created_at: '2026-01-13T10:00:00.000Z' });
+    f.consolidate();
+    // A Jan 12 alert with another location is archived later, e.g. from a late sync window.
+    f.alert(5, { created_at: '2026-01-12T10:00:00.000Z', source: located('CA', '396982', 'Canadian AS') });
+    f.consolidate();
+    const canada = { country: 'CA', asn: '396982', network: 'Canadian AS' };
+    expect(f.query().attackers[0]).toMatchObject({ value: '1.2.3.4', alerts: 3, ...canada });
+    const details = f.store.details({ from: '2026-01-01', to: '2026-01-31', instance: 'all', simulation: 'all', limit: 10 }, { kind: 'ips' }, 365, ['default'], Date.parse(f.context.now));
+    expect(details.kind === 'ips' && details.ips).toEqual([expect.objectContaining({ ip: '1.2.3.4', ...canada })]);
   });
 
   it('skips unknown countries and scenarios in top lists and ranks IP ranges, like the dashboard', () => {
