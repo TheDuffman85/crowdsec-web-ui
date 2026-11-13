@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
 import { CrowdsecDatabase } from '../../database';
 import type { CreateAppOptions } from '../../app';
+import { DatabaseSyncWorker } from '../../sync-worker-client';
 import { parseGoDuration } from '../../utils/duration';
 import {
   createController,
@@ -60,6 +61,97 @@ describe('createApp synchronization consistency and pruning', () => {
       // Alert history still uses bucket start time to match LAPI window filters.
       expect(database.db.prepare('SELECT created_at FROM alerts WHERE upstream_id = ?').get('1'))
         .toEqual({ created_at: startedAt });
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('copies the latest known country and AS onto manual alerts without re-persisting them on later syncs', async () => {
+    const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    const olderEnriched = sampleAlert({
+      id: 1, uuid: 'alert-1', created_at: at(30), decisions: [],
+      source: { scope: 'Ip', ip: '1.2.3.4', value: '1.2.3.4', cn: 'FR', as_name: 'Old AS', latitude: 48.85, longitude: 2.35 },
+    });
+    const enriched = sampleAlert({
+      id: 2, uuid: 'alert-2', created_at: at(20), decisions: [],
+      source: { scope: 'Ip', ip: '1.2.3.4', value: '1.2.3.4', cn: 'CA', as_name: 'GOOGLE-CLOUD-PLATFORM', as_number: '396982', range: '1.2.0.0/16', latitude: 43.65, longitude: -79.38 },
+    });
+    // Like LAPI returns a `cscli decisions add` or web UI alert: unknown fields are empty.
+    const manual = sampleAlert({
+      id: 3, uuid: 'alert-3', created_at: at(1), scenario: 'manual/web-ui', message: 'Manual decision from Web UI: abuse', events: [],
+      source: { scope: 'ip', value: '1.2.3.4', cn: '', as_name: '', as_number: '', range: '', latitude: 0, longitude: 0 },
+      decisions: [{ id: 30, type: 'ban', value: '1.2.3.4', duration: '4h', origin: 'cscli', scenario: 'manual/web-ui', simulated: false }],
+    });
+    const unknownManual = sampleAlert({
+      id: 4, uuid: 'alert-4', created_at: at(1), scenario: 'manual/web-ui', events: [],
+      source: { scope: 'ip', value: '9.9.9.9' },
+      decisions: [{ id: 40, type: 'ban', value: '9.9.9.9', duration: '4h', origin: 'cscli', scenario: 'manual/web-ui', simulated: false }],
+    });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
+    const syncWorker = new DatabaseSyncWorker({ dbPath: database.cachePath });
+    const persistAlerts = vi.spyOn(syncWorker, 'persistAlerts');
+    const { controller } = createController({
+      database,
+      syncWorker,
+      env: { CROWDSEC_LOOKBACK_PERIOD: '1d', CROWDSEC_REFRESH_INTERVAL: '0' },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([olderEnriched, enriched, manual, unknownManual]) : undefined,
+    });
+    const row = (table: 'alerts' | 'decisions', id: string) => database.db.prepare(
+      `SELECT country, as_name${table === 'alerts' ? ', source_as_number, source_range, latitude, longitude, metadata_hash' : ''} FROM ${table} WHERE upstream_id = ?`,
+    ).get(id) as Record<string, unknown>;
+
+    try {
+      // The first import fills the manual alert from the newest enriched alert of the same batch.
+      expect((await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'))).status).toBe(200);
+      const manualRow = row('alerts', '3');
+      expect(manualRow).toMatchObject({
+        country: 'CA', as_name: 'GOOGLE-CLOUD-PLATFORM', source_as_number: '396982',
+        source_range: '1.2.0.0/16', latitude: 43.65, longitude: -79.38,
+      });
+      expect(row('decisions', '30')).toEqual({ country: 'CA', as_name: 'GOOGLE-CLOUD-PLATFORM' });
+      expect(row('alerts', '4')).toMatchObject({ country: null, as_name: null });
+
+      // A full refresh compares every alert again; unchanged LAPI data compares
+      // equal, so nothing is written again.
+      persistAlerts.mockClear();
+      const refresh = await controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'full' }),
+      }));
+      expect(refresh.status).toBe(200);
+      const persisted = persistAlerts.mock.calls.flatMap(([mutations]) => mutations.map((mutation) => String(mutation.alert?.$id ?? mutation.alertId)));
+      expect(persisted).toEqual([]);
+      expect(row('alerts', '3').metadata_hash).toBe(manualRow.metadata_hash);
+    } finally {
+      controller.stopBackgroundTasks();
+      syncWorker.close();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('repairs manual alerts cached without country and AS on their next sync', async () => {
+    const enriched = sampleAlert({ id: 1, uuid: 'alert-1', created_at: new Date(Date.now() - 20 * 60_000).toISOString(), decisions: [] });
+    const manual = sampleAlert({
+      id: 2, uuid: 'alert-2', scenario: 'manual/web-ui', events: [], source: { scope: 'ip', value: '1.2.3.4' },
+      decisions: [{ id: 20, type: 'ban', value: '1.2.3.4', duration: '4h', origin: 'cscli', scenario: 'manual/web-ui', simulated: false }],
+    });
+    const { controller, database } = createController({
+      env: { CROWDSEC_LOOKBACK_PERIOD: '1d', CROWDSEC_REFRESH_INTERVAL: '0' },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([enriched, manual]) : undefined,
+    });
+    seedAlert(database, enriched);
+    seedAlert(database, manual);
+    expect(database.db.prepare('SELECT country FROM decisions WHERE upstream_id = ?').get('20')).toEqual({ country: null });
+
+    try {
+      // Startup reconciles the existing cache with LAPI.
+      expect((await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'))).status).toBe(200);
+      expect(database.db.prepare('SELECT country, as_name FROM alerts WHERE upstream_id = ?').get('2')).toEqual({ country: 'DE', as_name: 'Hetzner' });
+      expect(database.db.prepare('SELECT country, as_name FROM decisions WHERE upstream_id = ?').get('20')).toEqual({ country: 'DE', as_name: 'Hetzner' });
     } finally {
       controller.stopBackgroundTasks();
       database.close();

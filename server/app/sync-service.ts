@@ -10,6 +10,7 @@ import type { AlertInsertParams, CrowdsecDatabase, DecisionInsertParams } from '
 import type { LapiClient } from '../lapi';
 import type { NormalizedAlertRow } from '../normalized-record';
 import type { DatabaseQueryWorker } from '../query-worker-client';
+import { enrichAlertSourcesFromCache, type SourceEnrichmentRow } from '../source-enrichment';
 import type {
   AlertDecisionComparison,
   AlertDecisionComparisonResult,
@@ -832,6 +833,11 @@ async function persistChangedAlerts(
   instanceId = primaryInstance.id,
   freshBulkImport = false,
 ): Promise<boolean> {
+  // Enrichment happens before the metadata fingerprint is taken, so a stored
+  // alert compares unchanged until its copied enrichment would change.
+  alerts = await enrichAlertSourcesFromCache(alerts, (sql, params) => queryWorker.all<SourceEnrichmentRow>(sql, params, {
+    label: `manual alert source enrichment (${instanceId})`,
+  }));
   alerts = await enrichAlertRecordLocations(alerts);
   if (freshBulkImport) {
     let changed = false;
