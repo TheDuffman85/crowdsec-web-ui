@@ -207,14 +207,15 @@ export class StatisticsService {
     this.writer.close(); this.reader.close();
   }
 
-  async query(filters: StatisticsFilters): Promise<StatisticsResponse> {
+  /** `manualScenarios` lists, by instance, the scenarios that label manual decisions rather than detected attacks. */
+  async query(filters: StatisticsFilters, manualScenarios: Record<string, string[]> = {}): Promise<StatisticsResponse> {
     if (!fs.existsSync(this.file)) throw new Error('Statistics are not available yet; enable collection and wait for the first background job');
     // Return the settings used by the query even if they change while it runs.
     const settings = this.settings;
     const { lastSuccess, ...data } = await this.reader.request<StoredStatistics>({ type: 'query', filters, retentionDays: settings.retentionDays,
       instances: this.options.config.instances.map((i) => i.id),
       // Allow one missed or delayed job before the latest coverage counts as stale.
-      freshnessMs: 2 * durationMs(settings.jobInterval) });
+      freshnessMs: 2 * durationMs(settings.jobInterval), manualScenarios });
     if (lastSuccess && (!this.status.lastSuccess || lastSuccess > this.status.lastSuccess)) this.status.lastSuccess = lastSuccess;
     if (data.revision > this.status.revision) this.status.revision = data.revision;
     // Pending observations only change days from the earliest one they add to.
@@ -236,10 +237,10 @@ export class StatisticsService {
     return this.pendingFrom && statisticsDay(Date.parse(`${this.pendingFrom}T00:00:00.000Z`), this.timeZone);
   }
 
-  async details(filters: StatisticsFilters, request: StatisticsDetailRequest): Promise<StatisticsDetails> {
+  async details(filters: StatisticsFilters, request: StatisticsDetailRequest, manualScenarios: Record<string, string[]> = {}): Promise<StatisticsDetails> {
     if (!fs.existsSync(this.file)) throw new Error('Statistics are not available yet; enable collection and wait for the first background job');
     return this.reader.request<StatisticsDetails>({ type: 'details', filters, request, retentionDays: this.settings.retentionDays,
-      instances: this.options.config.instances.map((i) => i.id) });
+      instances: this.options.config.instances.map((i) => i.id), manualScenarios });
   }
 
   run(): Promise<void> {

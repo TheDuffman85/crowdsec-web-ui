@@ -195,8 +195,8 @@ describe('long-term statistics capture and aggregation', () => {
     expect(result.machines[0]).toMatchObject({ alerts: 3, uniqueIPs: 1, remediations: 2 });
     expect(result.attackers[0].returnedAfterRemediation).toBe(true);
     expect(result.scenarios).toEqual([
-      { label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, remediations: 2, remediatedIPs: 1, remediationTypes: [{ label: 'ban', count: 2 }], activeDays: 2, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-11T10:00:00.000Z', previous: null },
-      { label: 'http', count: 1, uniqueIPs: 1, machines: 1, remediations: 1, remediatedIPs: 1, remediationTypes: [{ label: 'captcha', count: 1 }], activeDays: 1, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-10T10:00:00.000Z', previous: null },
+      { label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, remediations: 2, remediatedIPs: 1, remediatedIPsAnyScenario: 1, remediationTypes: [{ label: 'ban', count: 2 }], activeDays: 2, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-11T10:00:00.000Z', previous: null },
+      { label: 'http', count: 1, uniqueIPs: 1, machines: 1, remediations: 1, remediatedIPs: 1, remediatedIPsAnyScenario: 1, remediationTypes: [{ label: 'captcha', count: 1 }], activeDays: 1, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-10T10:00:00.000Z', previous: null },
     ]);
     // The captcha counts as a remediation too.
     expect(result.remediationTypes).toEqual([{ label: 'ban', count: 2 }, { label: 'captcha', count: 1 }]);
@@ -236,7 +236,7 @@ describe('long-term statistics capture and aggregation', () => {
     f.consolidate();
     const result = f.query();
     expect(result.countries).toEqual([{ label: 'DE', count: 1, uniqueIPs: 1 }]);
-    expect(result.scenarios).toEqual([{ label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, remediations: 0, remediatedIPs: 0, remediationTypes: [], activeDays: 1, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-10T10:00:00.000Z', previous: null }]);
+    expect(result.scenarios).toEqual([{ label: 'ssh', count: 3, uniqueIPs: 1, machines: 1, remediations: 0, remediatedIPs: 0, remediatedIPsAnyScenario: 0, remediationTypes: [], activeDays: 1, firstActivity: '2026-01-10T10:00:00.000Z', lastActivity: '2026-01-10T10:00:00.000Z', previous: null }]);
     expect(result.attackers.map((row) => [row.value, row.alerts])).toEqual([['192.0.2.0/24', 2], ['1.2.3.4', 1], ['1.2.3.5', 1]]);
     expect(result.totals).toMatchObject({ alerts: 4, uniqueIPs: 2, repeatAttackers: 0 });
     expect(f.query({ ip: '192.0.2.0/24' }).totals.alerts).toBe(2);
@@ -330,6 +330,99 @@ describe('long-term statistics capture and aggregation', () => {
       { value: web, lastActivity: at('11'), scenarios: [{ label: 'ssh', current: 0, previous: 1 }], ips: [] },
       { value: server, lastActivity: at('23'), scenarios: [{ label: 'http', current: 3, previous: 0 }, { label: 'ssh', current: 1, previous: 1 }], ips: expect.arrayContaining([{ ip: '1.2.3.4', alerts: 1 }]) },
     ] });
+  });
+
+  it('counts IPs of an AppSec rule that another scenario remediated, also in its finding details', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    const at = (day: string) => `2026-01-${day}T10:00:00.000Z`;
+    const rule = 'anomaly score block: lfi: 5, anomaly: 5';
+    const web = { machine_id: 'machine-2', machine_alias: 'Web' };
+    // AppSec blocks both IPs in-band without a decision; appsec-native bans one of them,
+    // raised by another machine. The other IP is only banned before the range.
+    f.alert(1, { created_at: at('09'), scenario: 'crowdsecurity/ssh-bf', source: { ip: '5.5.5.5' } }); f.decision(1, 1, { created_at: at('09'), value: '5.5.5.5' });
+    f.alert(2, { created_at: at('20'), scenario: rule, source: { ip: '1.2.3.4' }, ...web });
+    f.alert(3, { created_at: at('20'), scenario: rule, source: { ip: '5.5.5.5' }, ...web });
+    f.alert(4, { created_at: at('20'), scenario: 'crowdsecurity/appsec-native', source: { ip: '1.2.3.4' } }); f.decision(4, 4, { created_at: at('20') });
+    f.consolidate();
+    const range = { instance: 'default', from: '2026-01-15', to: '2026-01-31' } as const;
+    const byLabel = (overrides: Partial<StatisticsFilters> = {}) => new Map(f.query({ ...range, ...overrides }).scenarios.map((row) => [row.label, row]));
+    expect(byLabel().get(rule)).toMatchObject({ uniqueIPs: 2, remediations: 0, remediatedIPs: 0, remediatedIPsAnyScenario: 1 });
+    expect(byLabel().get('crowdsecurity/appsec-native')).toMatchObject({ remediations: 1, remediatedIPs: 1, remediatedIPsAnyScenario: 1 });
+    // Scenario and machine filters select the alerts, not the remediations.
+    expect(byLabel({ scenario: rule, machine: JSON.stringify(['default', 'machine-2']) }).get(rule)).toMatchObject({ remediatedIPsAnyScenario: 1 });
+    expect(byLabel({ simulation: 'simulated' }).get(rule)).toBeUndefined();
+
+    const details = f.store.details({ simulation: 'all', limit: 10, ...range, scenario: rule } as StatisticsFilters, { kind: 'ips' }, 365, ['default'], Date.parse(f.context.now));
+    expect(details.kind === 'ips' && details.ips.map(({ ip, alerts, remediations, remediationTypes, firstRemediation }) => ({ ip, alerts, remediations, remediationTypes, firstRemediation }))).toEqual([
+      { ip: '1.2.3.4', alerts: 1, remediations: 1, remediationTypes: [{ label: 'ban', count: 1 }], firstRemediation: '2026-01-20' },
+      { ip: '5.5.5.5', alerts: 1, remediations: 0, remediationTypes: [], firstRemediation: null },
+    ]);
+  });
+
+  it('counts an AppSec rule IP as remediated only by remediations on the instance that raised its alerts', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    const at = '2026-01-20T10:00:00.000Z';
+    const rule = 'anomaly score block: lfi: 5, anomaly: 5';
+    const other = { instance_id: 'other', machine_id: 'machine-9', machine_alias: 'Other' };
+    // 1.2.3.4 hits the rule on default but is banned only on other. 6.6.6.6 is banned
+    // where it hit the rule. 7.7.7.7 hits the rule on both and is banned only on other.
+    f.alert(1, { created_at: at, scenario: rule, source: { ip: '1.2.3.4' } });
+    f.alert(2, { created_at: at, scenario: 'crowdsecurity/appsec-native', source: { ip: '1.2.3.4' }, ...other }); f.decision(2, 2, { created_at: at, value: '1.2.3.4', ...other });
+    f.alert(3, { created_at: at, scenario: rule, source: { ip: '6.6.6.6' }, ...other });
+    f.alert(4, { created_at: at, scenario: 'crowdsecurity/appsec-native', source: { ip: '6.6.6.6' }, ...other }); f.decision(4, 4, { created_at: at, value: '6.6.6.6', ...other });
+    f.alert(5, { created_at: at, scenario: rule, source: { ip: '7.7.7.7' } });
+    f.alert(6, { created_at: at, scenario: rule, source: { ip: '7.7.7.7' }, ...other });
+    f.alert(7, { created_at: at, scenario: 'crowdsecurity/appsec-native', source: { ip: '7.7.7.7' }, ...other }); f.decision(7, 7, { created_at: at, value: '7.7.7.7', ...other });
+    f.consolidate();
+    const range = { from: '2026-01-15', to: '2026-01-31' } as const;
+    const ruleRow = (overrides: Partial<StatisticsFilters> = {}) => f.query({ ...range, ...overrides }).scenarios.find((row) => row.label === rule);
+    expect(ruleRow()).toMatchObject({ uniqueIPs: 3, remediatedIPsAnyScenario: 1 });
+    expect(ruleRow({ machine: JSON.stringify(['default', 'machine-1']) })).toMatchObject({ uniqueIPs: 2, remediatedIPsAnyScenario: 0 });
+    expect(ruleRow({ instance: 'other' })).toMatchObject({ uniqueIPs: 2, remediatedIPsAnyScenario: 2 });
+
+    const details = (overrides: Partial<StatisticsFilters> = {}) => {
+      const result = f.store.details({ simulation: 'all', limit: 10, instance: 'all', ...range, scenario: rule, ...overrides } as StatisticsFilters, { kind: 'ips' }, 365, ['default', 'other'], Date.parse(f.context.now));
+      return result.kind === 'ips' ? Object.fromEntries(result.ips.map(({ ip, remediations }) => [ip, remediations])) : null;
+    };
+    expect(details()).toEqual({ '1.2.3.4': 0, '6.6.6.6': 1, '7.7.7.7': 1 });
+    expect(details({ machine: JSON.stringify(['default', 'machine-1']) })).toEqual({ '1.2.3.4': 0, '7.7.7.7': 0 });
+  });
+
+  it('separates the alerts of scenarios that an instance uses to label manual decisions', () => {
+    const f = fixture(); configureStatisticsCapture(f.source.db, true);
+    f.context.instances = ['default', 'other']; f.context.coverageFrom.other = '2026-01-01T00:00:00.000Z';
+    const at = '2026-01-25T10:00:00.000Z';
+    const other = { instance_id: 'other', machine_id: 'machine-9', machine_alias: 'Other' };
+    // custom/edge labels manual decisions on other, but default detects it without a remediation.
+    f.alert(1, { created_at: at, scenario: 'custom/edge', source: { ip: '1.2.3.4' } });
+    f.alert(2, { created_at: at, scenario: 'custom/edge', source: { ip: '1.2.3.5' } });
+    f.alert(3, { created_at: at, scenario: 'custom/edge', source: { ip: '9.9.9.9' }, ...other }); f.decision(3, 3, { created_at: at, value: '9.9.9.9', ...other });
+    f.alert(4, { created_at: '2026-01-12T10:00:00.000Z', scenario: 'custom/edge', source: { ip: '9.9.9.9' }, ...other });
+    f.alert(5, { created_at: at, scenario: 'manual/web-ui', source: { ip: '8.8.8.8' } }); f.decision(5, 5, { created_at: at, value: '8.8.8.8' });
+    f.alert(6, { created_at: at, scenario: 'ssh', source: { ip: '7.7.7.7' } });
+    // custom/manual only labeled manual decisions on other in the compared period; default detects it for the first time.
+    f.alert(7, { created_at: '2026-01-12T10:00:00.000Z', scenario: 'custom/manual', source: { ip: '6.6.6.6' }, ...other });
+    f.alert(8, { created_at: at, scenario: 'custom/manual', source: { ip: '6.6.6.7' } });
+    f.consolidate();
+    const manual = { default: ['manual/web-ui'], other: ['manual/web-ui', 'custom/edge', 'custom/manual'] };
+    const rows = (filters: Partial<StatisticsFilters> = {}) => new Map(f.store.query({ from: '2026-01-20', to: '2026-01-31', instance: 'all', simulation: 'all', limit: 10, ...filters },
+      365, ['default', 'other'], Date.parse(f.context.now), 0, manual).scenarios.map((row) => [row.label, row]));
+    // The manual ban of 9.9.9.9 on other does not count towards the detected IPs' coverage.
+    expect(rows().get('custom/edge')).toMatchObject({ count: 3, uniqueIPs: 3, remediations: 1, remediatedIPsAnyScenario: 1, previous: 1,
+      detected: { count: 2, uniqueIPs: 2, remediations: 0, remediatedIPsAnyScenario: 0, previous: 0 } });
+    expect(rows().get('custom/manual')).toMatchObject({ count: 1, previous: 1, detected: { count: 1, previous: 0 } });
+    expect(rows().get('manual/web-ui')).toMatchObject({ count: 1, detected: { count: 0, uniqueIPs: 0, remediations: 0, previous: 0 } });
+    expect(rows().get('ssh')).not.toHaveProperty('detected');
+    expect(rows({ instance: 'default' }).get('custom/edge')).not.toHaveProperty('detected');
+    expect(rows({ instance: 'other' }).get('custom/edge')).toMatchObject({ detected: { count: 0 } });
+
+    const details = (request: { detected?: boolean }) => {
+      const result = f.store.details({ from: '2026-01-20', to: '2026-01-31', instance: 'all', simulation: 'all', limit: 10, scenario: 'custom/edge' },
+        { kind: 'ips', ...request }, 365, ['default', 'other'], Date.parse(f.context.now), manual);
+      return result.kind === 'ips' ? { ips: result.ips.map(({ ip, remediations }) => [ip, remediations]), total: result.total } : null;
+    };
+    expect(details({})).toEqual({ ips: [['1.2.3.4', 0], ['1.2.3.5', 0], ['9.9.9.9', 1]], total: 3 });
+    expect(details({ detected: true })).toEqual({ ips: [['1.2.3.4', 0], ['1.2.3.5', 0]], total: 2 });
   });
 
   it('counts blocklist decisions as issued decisions but not as attack remediations', () => {

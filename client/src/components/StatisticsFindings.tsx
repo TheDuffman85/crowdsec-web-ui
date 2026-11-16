@@ -18,7 +18,8 @@ import { STATISTICS_DETAIL_MAX, STATISTICS_DETAIL_PAGE, type StatisticsDetailIP,
 
 /** What an expanded finding shows. Server-backed kinds load only when opened. */
 export type FindingDetail =
-  | { kind: 'ips'; scenario?: string; network?: string; decision: DecisionDraft }
+  /** `detected` leaves out alerts of scenarios that their instance uses to label manual decisions. */
+  | { kind: 'ips'; scenario?: string; network?: string; detected?: boolean; decision: DecisionDraft }
   | { kind: 'returned'; history: boolean; decision: DecisionDraft }
   | { kind: 'machines'; machines: string[] }
   | { kind: 'scanners'; rows: StatisticsRanking[]; decision: DecisionDraft };
@@ -226,6 +227,7 @@ function DetailBody({ detail, context, actions }: { detail: FindingDetail; conte
     parameters.set('kind', 'ips');
     if (detail.scenario) parameters.set('scenario', detail.scenario);
     if (detail.network) parameters.set('network', detail.network);
+    if (detail.detected) parameters.set('detected', '1');
   } else if (detail.kind === 'returned') {
     parameters.set('kind', 'returned');
     if (detail.history) parameters.set('history', '1');

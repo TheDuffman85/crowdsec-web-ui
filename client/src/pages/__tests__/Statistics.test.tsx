@@ -11,7 +11,7 @@ import en from '../../locales/en.json';
 import { createDateTimeContextValue, DateTimeContext, DEFAULT_DATE_TIME_SETTINGS } from '../../lib/dateTime';
 import { loadStoredQuickFilters, saveStoredQuickFilters } from '../../lib/quickFilters';
 import type { ConfigResponse } from '../../types';
-import { DEFAULT_STATISTICS_SETTINGS, type StatisticsConfiguration, type StatisticsResponse } from '../../../../shared/statistics';
+import { DEFAULT_STATISTICS_SETTINGS, type StatisticsConfiguration, type StatisticsResponse, type StatisticsScenario } from '../../../../shared/statistics';
 
 vi.mock('../../lib/api', () => ({ fetchConfig: vi.fn(), addDecision: vi.fn(), addDecisions: vi.fn(), checkAllowlist: vi.fn(), lookupManualDecisions: vi.fn() }));
 vi.mock('../../lib/sessionFetch', () => ({ sessionFetch: vi.fn() }));
@@ -31,7 +31,7 @@ function payload(): StatisticsResponse {
     previousTotals: null, targets: [{ label: 'web.example.com', count: 9, uniqueIPs: 1 }],
     attackers: [{ value: '192.0.2.7', label: '192.0.2.7', alerts: 12, events: 48, uniqueIPs: 1, remediations: 2, remediationTypes: [{ label: 'ban', count: 1 }, { label: 'captcha', count: 1 }], machines: 1, activeDays: 3, firstActivity: '2026-11-01T10:00:00Z', lastActivity: '2026-11-07T11:00:00Z', country: 'DE', asn: '42', network: 'Example', scenarios: [{ label: 'ssh', count: 12 }], targetedMachines: [{ value: '["default","m-1"]', label: 'Server one', count: 12 }] }],
     machines: [{ value: '["default","m-1"]', label: 'Server one', instance: 'default', machineId: 'm-1', alerts: 12, events: 48, uniqueIPs: 1, remediations: 2, remediationTypes: [{ label: 'ban', count: 2 }], machines: 1, activeDays: 3, firstActivity: null, lastActivity: null, country: 'DE', asn: '42', network: 'Example', scenarios: [], targetedMachines: [] }],
-    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, remediations: 2, remediatedIPs: 1, remediationTypes: [{ label: 'ban', count: 2 }], activeDays: 3, firstActivity: '2026-11-05T08:00:00Z', lastActivity: '2026-11-07T09:30:00Z', previous: null }], countries: [], networks: [], remediationTypes: [{ label: 'ban', count: 2 }, { label: 'captcha', count: 1 }, { label: 'throttle', count: 1 }], decisionTypes: [], decisionOrigins: [], increases: [], decreases: [], quietMachines: [],
+    series: [{ date: '2026-10-09', alerts: null, decisions: null }], granularity: 'day', scenarios: [{ label: 'ssh', count: 12, uniqueIPs: 1, machines: 1, remediations: 2, remediatedIPs: 1, remediatedIPsAnyScenario: 1, remediationTypes: [{ label: 'ban', count: 2 }], activeDays: 3, firstActivity: '2026-11-05T08:00:00Z', lastActivity: '2026-11-07T09:30:00Z', previous: null }], countries: [], networks: [], remediationTypes: [{ label: 'ban', count: 2 }, { label: 'captcha', count: 1 }, { label: 'throttle', count: 1 }], decisionTypes: [], decisionOrigins: [], increases: [], decreases: [], quietMachines: [],
   };
 }
 function Location() { const location = useLocation(); return <output data-testid="location">{location.pathname}{location.search}</output>; }
@@ -310,6 +310,35 @@ describe('Statistics page', () => {
     expect(within(finding).queryByRole('button', { name: /Ban all/ })).not.toBeInTheDocument();
   });
 
+  test('reports only the share of a scenario that CrowdSec detected, not alerts of manual decisions', async () => {
+    const data = payload();
+    const scenario = (label: string, remediations: number, detected?: StatisticsScenario['detected']) => ({ label, count: 80, uniqueIPs: 60, machines: 2, remediations, remediatedIPs: remediations ? 14 : 0, remediatedIPsAnyScenario: remediations ? 14 : 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: 10, ...(detected ? { detected } : {}) });
+    vi.mocked(sessionFetch).mockImplementation(async (url) => String(url).includes('/api/statistics/details')
+      ? Response.json({ kind: 'ips', ips: [], total: 0, ranges: [], rangeTotal: 0 })
+      : Response.json({
+        ...data,
+        coverage: { ...data.coverage, partial: false, comparisonPartial: false },
+        scenarios: [
+          // Manual decisions only, on every instance that raised them.
+          scenario('manual/web-ui', 80, { count: 0, uniqueIPs: 0, remediations: 0, remediatedIPsAnyScenario: 0, previous: 0 }),
+          // Manual decisions on one instance, and real detections without a remediation on another.
+          scenario('custom/edge', 25, { count: 55, uniqueIPs: 46, remediations: 0, remediatedIPsAnyScenario: 0, previous: 0 }),
+          // Every IP is remediated only counting the manual decisions; one detected IP is not.
+          { ...scenario('crowdsecurity/vpatch-env-access', 0, { count: 20, uniqueIPs: 2, remediations: 0, remediatedIPsAnyScenario: 1, previous: 10 }), remediatedIPsAnyScenario: 60 },
+        ],
+      } satisfies StatisticsResponse));
+    mount();
+    const findings = (await screen.findByRole('heading', { name: 'Findings' })).closest('.rounded-xl') as HTMLElement;
+    expect(within(findings).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      expect.stringMatching(/custom\/edge raised 55 alerts from 46 IPs without a single remediation/),
+      expect.stringMatching(/crowdsecurity\/vpatch-env-access.*20 .*2 IPs.*1 /),
+      expect.stringMatching(/New attack type: custom\/edge raised 55 alerts from 46 IPs/),
+    ]);
+    // Their details list the detected IPs only.
+    fireEvent.click(within(findings).getByRole('button', { name: /^custom\/edge raised 55 alerts/ }));
+    await waitFor(() => expect(String(vi.mocked(sessionFetch).mock.calls.at(-1)?.[0])).toMatch(/details\?.*scenario=custom%2Fedge.*detected=1/));
+  });
+
   test('turns the statistics into findings and compares tiles only with a complete preceding period', async () => {
     const data = payload();
     const web = '["default","m-2"]';
@@ -319,8 +348,8 @@ describe('Statistics page', () => {
       totals: { ...data.totals, alerts: 200, uniqueIPs: 40, remediatedIPs: 30, returnedAfterRemediation: 4, newIPs: 25 },
       previousTotals: { alerts: 100, remediations: 2, decisions: 3, uniqueIPs: 40, remediatedIPs: 20, repeatAttackers: 1 },
       scenarios: [
-        { label: 'crowdsecurity/http-probing', count: 150, uniqueIPs: 30, machines: 2, remediations: 0, remediatedIPs: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: 0 },
-        { label: 'crowdsecurity/ssh-bf', count: 50, uniqueIPs: 10, machines: 1, remediations: 30, remediatedIPs: 10, remediationTypes: [{ label: 'ban', count: 30 }], activeDays: 1, firstActivity: null, lastActivity: null, previous: 50 },
+        { label: 'crowdsecurity/http-probing', count: 150, uniqueIPs: 30, machines: 2, remediations: 0, remediatedIPs: 0, remediatedIPsAnyScenario: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: 0 },
+        { label: 'crowdsecurity/ssh-bf', count: 50, uniqueIPs: 10, machines: 1, remediations: 30, remediatedIPs: 10, remediatedIPsAnyScenario: 10, remediationTypes: [{ label: 'ban', count: 30 }], activeDays: 1, firstActivity: null, lastActivity: null, previous: 50 },
       ],
       networks: [{ label: 'Example Cloud', count: 120, uniqueIPs: 25 }],
       quietMachines: [{ value: web, label: 'Web', previous: 80 }],
@@ -376,7 +405,7 @@ describe('Statistics page', () => {
       return Response.json({
         ...data,
         totals: { ...data.totals, alerts: 200, returnedAfterRemediation: 1 },
-        scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 709, uniqueIPs: 93, machines: 1, remediations: 0, remediatedIPs: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: null }],
+        scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 709, uniqueIPs: 93, machines: 1, remediations: 0, remediatedIPs: 0, remediatedIPsAnyScenario: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: null }],
         networks: [{ label: 'Example Cloud', count: 120, uniqueIPs: 25 }],
       } satisfies StatisticsResponse);
     });
@@ -417,6 +446,32 @@ describe('Statistics page', () => {
     expect(new URLSearchParams(detailUrls.at(-1)!.split('?')[1]).get('network')).toBe('Example Cloud');
   });
 
+  test('reports AppSec rules by the IPs no scenario remediated, not as a profile gap', async () => {
+    const data = payload();
+    const row = (label: string, remediatedIPsAnyScenario: number) => ({ label, count: 120, uniqueIPs: 10, machines: 1, remediations: 0, remediatedIPs: 0, remediatedIPsAnyScenario,
+      remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: null });
+    vi.mocked(sessionFetch).mockImplementation(async () => Response.json({ ...data, scenarios: [
+      row('anomaly score block: lfi: 5, anomaly: 5', 4),
+      row('crowdsecurity/vpatch-CVE-2025-29927', 10),
+      row('crowdsecurity/crs-942100', 0),
+      // The scenario that should ban AppSec offenders is a profile gap when it does not.
+      row('crowdsecurity/appsec-native', 0),
+    ] } satisfies StatisticsResponse));
+    mount();
+    const findings = (await screen.findByRole('heading', { name: 'Findings' })).closest('.rounded-xl') as HTMLElement;
+    expect(within(findings).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      expect.stringMatching(/crowdsecurity\/appsec-native raised 120 alerts from 10 IPs without a single remediation/),
+      expect.stringMatching(/anomaly score block: lfi: 5, anomaly: 5 \(AppSec\) blocked 120 requests from 10 IPs in-band; another scenario remediated 4 of these IPs/),
+      expect.stringMatching(/crowdsecurity\/crs-942100 \(AppSec\) blocked 120 requests from 10 IPs in-band; no scenario remediated any of these IPs/),
+    ]);
+    // Every IP of the virtual patch was banned by another scenario.
+    expect(within(findings).queryByText(/vpatch-CVE-2025-29927/)).not.toBeInTheDocument();
+    // The scenario table shows that share below the rule's own coverage, without the warning colour.
+    const rule = screen.getByRole('row', { name: 'anomaly score block: lfi: 5, anomaly: 5' });
+    expect(within(rule).getByText('40% by any scenario').closest('td')).not.toHaveClass('text-red-600');
+    expect(within(screen.getByRole('row', { name: 'crowdsecurity/appsec-native' })).getByText('0%')).toHaveClass('text-red-600');
+  });
+
   test('places the scenario button beside bulk actions in an expanded finding', async () => {
     const data = payload();
     vi.mocked(sessionFetch).mockImplementation(async (url) => {
@@ -424,7 +479,7 @@ describe('Statistics page', () => {
         kind: 'ips', ranges: [], rangeTotal: 0, total: 2,
         ips: ['203.0.113.9', '203.0.113.10'].map((ip) => ({ ip, alerts: 7, remediations: 0, remediationTypes: [], machines: 1, activeDays: 1, country: 'DE', asn: '42', network: 'Example', lastActivity: '2026-11-06T10:00:00Z' })),
       });
-      return Response.json({ ...data, scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 14, uniqueIPs: 2, machines: 1, remediations: 0, remediatedIPs: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: null }] } satisfies StatisticsResponse);
+      return Response.json({ ...data, scenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 14, uniqueIPs: 2, machines: 1, remediations: 0, remediatedIPs: 0, remediatedIPsAnyScenario: 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: null }] } satisfies StatisticsResponse);
     });
     mount();
     const summary = await screen.findByRole('button', { name: /AppSec.*blocked/ });

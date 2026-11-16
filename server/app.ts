@@ -67,7 +67,7 @@ import { getAlertSourceValue, getAlertTargets, getAlertTargetSummary, resolveAle
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics, fetchCrowdsecMetricsSamples, summarizeCrowdsecMetrics } from './metrics';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
-import { registerApiRoutes } from './app/api-routes';
+import { manualDecisionScenariosOf, registerApiRoutes } from './app/api-routes';
 import { registerSavedFilterRoutes } from './app/saved-filters';
 import { registerBrandingRoutes } from './app/branding-routes';
 import { createAllowlistService, registerAllowlistRoutes, type AllowlistService } from './app/allowlists';
@@ -1368,7 +1368,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     allowlistService,
     isValidIpOrRange,
   });
-  registerStatisticsRoutes({ app, config, statistics, ensureAuth, ensureCanManageSettings });
+  registerStatisticsRoutes({ app, config, statistics, ensureAuth, ensureCanManageSettings,
+    manualDecisionScenarios: () => Object.fromEntries(config.instances.map((instance) => [instance.id, manualDecisionScenariosOf(config, instance, manualDecisionScenarios)])) });
   registerApiRoutes({
     statistics,
     app,

@@ -86,6 +86,18 @@ function remediationTypesByOwner(rows: Array<{ owner: string; label: string; cou
   return result;
 }
 
+/**
+ * Condition for cells of a scenario that labels manual decisions on their instance
+ * (Settings → General → Manual decisions): alerts CrowdSec did not detect.
+ */
+function manualScenarioCondition(manualScenarios: Record<string, string[]>): { sql: string; params: string[] } {
+  const manual = Object.entries(manualScenarios).filter(([, list]) => list.length);
+  return {
+    sql: manual.length ? `(${manual.map(([, list]) => `(instance = ? AND scenario IN (${list.map(() => '?').join(',')}))`).join(' OR ')})` : '0',
+    params: manual.flatMap(([instance, list]) => [instance, ...list]),
+  };
+}
+
 // Ranges are ranked like the dashboard does, but are not unique IP addresses.
 const SINGLE_IP = "ip != '' AND instr(ip, '/') = 0";
 // Lookups for a few IPs across the archive. Without the hint SQLite prefers the
@@ -374,23 +386,29 @@ export class StatisticsStore {
   /**
    * `freshnessMs` is how old the newest coverage may be and still count as
    * current: the archive is only extended by scheduled jobs, so the time since
-   * the last job is not a gap.
+   * the last job is not a gap. `manualScenarios` lists, by instance, the
+   * scenarios that label decisions added by hand rather than detected attacks.
    */
-  query(filters: StatisticsFilters, retentionDays: number, instances: string[], now = Date.now(), freshnessMs = 0): StoredStatistics {
-    return this.db.transaction(() => this.read(filters, retentionDays, instances, now, freshnessMs))();
+  query(filters: StatisticsFilters, retentionDays: number, instances: string[], now = Date.now(), freshnessMs = 0, manualScenarios: Record<string, string[]> = {}): StoredStatistics {
+    return this.db.transaction(() => this.read(filters, retentionDays, instances, now, freshnessMs, manualScenarios))();
   }
 
   /** Drill-down for one finding. Each kind is a few indexed, bounded queries. */
-  details(filters: StatisticsFilters, request: StatisticsDetailRequest, retentionDays: number, instances: string[], now = Date.now()): StatisticsDetails {
-    return this.db.transaction(() => this.readDetails(filters, request, retentionDays, instances, now))();
+  details(filters: StatisticsFilters, request: StatisticsDetailRequest, retentionDays: number, instances: string[], now = Date.now(), manualScenarios: Record<string, string[]> = {}): StatisticsDetails {
+    return this.db.transaction(() => this.readDetails(filters, request, retentionDays, instances, now, manualScenarios))();
   }
 
-  private readDetails(f: StatisticsFilters, request: StatisticsDetailRequest, retentionDays: number, instances: string[], now: number): StatisticsDetails {
-    const { cutoff, start, scoped, scopeParams, isRemediation, where, params, previousFrom } = this.scopeOf(f, retentionDays, instances, now);
+  private readDetails(f: StatisticsFilters, request: StatisticsDetailRequest, retentionDays: number, instances: string[], now: number, manualScenarios: Record<string, string[]>): StatisticsDetails {
+    const { cutoff, start, scoped, scopeParams, isRemediation, where, params, ipWhere, ipParams, previousFrom } = this.scopeOf(f, retentionDays, instances, now);
     const all = (sql: string, args: unknown[]): any[] => this.db.prepare(sql).all(...args);
     const size = 'size' in request && request.size ? Math.min(Math.max(1, Math.floor(request.size)), STATISTICS_DETAIL_MAX) : STATISTICS_DETAIL_PAGE;
     // Listed rows are bounded; the window count adds the total from the same grouped pass.
     const total = (rows: any[]) => Number(rows[0]?.total ?? 0);
+    // Detected alerts only: without those of a scenario that labels manual decisions on their instance.
+    const manual = manualScenarioCondition(manualScenarios);
+    const onlyDetected = request.kind === 'ips' && request.detected;
+    const detected = onlyDetected ? ` AND NOT ${manual.sql}` : '';
+    const detectedParams = onlyDetected ? manual.params : [];
     const perIP = (condition: string) => `SELECT ip, SUM(CASE WHEN kind = 'alert' THEN count ELSE 0 END) AS alerts,
         SUM(CASE WHEN ${isRemediation} THEN count ELSE 0 END) AS remediations,
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND machine != '' THEN machine END) AS machines,
@@ -405,20 +423,41 @@ export class StatisticsStore {
         WHERE ${isRemediation} AND ${where} AND ip IN (${remediated.map(() => '?').join(',')}) GROUP BY ip, type`, [...params, ...remediated])) : new Map();
       return rows.map((row) => toIP(row, types.get(row.ip) || []));
     };
+    /**
+     * Listed IPs with their remediations from any scenario, machine or target,
+     * so an AppSec rule's IPs show the bans another scenario issued for them.
+     * Only remediations on an instance where the IP raised a listed alert count.
+     */
+    const withAnyRemediations = (rows: any[]) => {
+      if (!rows.length) return [];
+      const listed = rows.map(() => '?').join(',');
+      const ips = rows.map((row) => row.ip);
+      const lookup = all(`SELECT ip AS owner, type AS label, SUM(count) AS count, MIN(day) AS firstDay FROM ${CELLS_BY_IP}
+        WHERE ${isRemediation} AND ${ipWhere} AND ip IN (${listed})
+          AND (instance, ip) IN (SELECT DISTINCT instance, ip FROM ${CELLS_BY_IP} WHERE kind = 'alert' AND ${where}${detected} AND ip IN (${listed}))
+        GROUP BY ip, type`, [...ipParams, ...ips, ...params, ...detectedParams, ...ips]);
+      const types = remediationTypesByOwner(lookup);
+      const first = new Map<string, string>();
+      for (const row of lookup) if (!first.has(row.owner) || row.firstDay < first.get(row.owner)!) first.set(row.owner, row.firstDay);
+      return rows.map((row) => {
+        const remediationTypes = types.get(row.ip) || [];
+        return { ...toIP(row, remediationTypes), remediations: remediationTypes.reduce((n, type) => n + type.count, 0), firstRemediation: first.get(row.ip) || null };
+      });
+    };
     const toIP = (row: any, remediationTypes: Array<{ label: string; count: number }>) => ({
       ip: row.ip, alerts: Number(row.alerts), remediations: Number(row.remediations), remediationTypes, machines: Number(row.machines), activeDays: Number(row.activeDays),
       ...unpackLocation(row.location), lastActivity: row.lastActivity || null,
       firstRemediation: row.firstRemediation || null, remediatedBefore: Boolean(row.remediatedBefore),
     });
     if (request.kind === 'ips') {
-      const network = request.network ? ' AND network = ?' : '';
-      const args = request.network ? [...params, request.network] : params;
+      const network = `${request.network ? ' AND network = ?' : ''}${detected}`;
+      const args = [...params, ...(request.network ? [request.network] : []), ...detectedParams];
       const rows = all(`SELECT *, COUNT(*) OVER () AS total FROM (${perIP(network)}) ORDER BY alerts DESC, ip LIMIT ${size}`, args);
-      const ips = withTypes(rows);
+      const ips = withAnyRemediations(rows);
       if (!request.network) return { kind: 'ips', ips, total: total(rows), ranges: [], rangeTotal: 0 };
       // Ranges come from up to 5000 of the network's busiest IPs.
       const ranges = new Map<string, { range: string; ips: number; alerts: number }>();
-      for (const row of all(`SELECT ip, SUM(count) AS alerts FROM cells WHERE kind = 'alert' AND ${SINGLE_IP} AND ${where} AND network = ?
+      for (const row of all(`SELECT ip, SUM(count) AS alerts FROM cells WHERE kind = 'alert' AND ${SINGLE_IP} AND ${where} AND network = ?${detected}
         GROUP BY ip ORDER BY alerts DESC LIMIT 5000`, args)) {
         const range = statisticsAddressRange(row.ip);
         if (!range) continue;
@@ -476,6 +515,10 @@ export class StatisticsStore {
     else scope.push('0');
     if (f.simulation !== 'all') { scope.push('simulated = ?'); scopeParams.push(f.simulation === 'simulated' ? 1 : 0); }
     if (f.ip) { scope.push('ip = ?'); scopeParams.push(canonicalStatisticsSource(f.ip)); }
+    // A remediation applies to the IP, whichever scenario, machine or target
+    // raised the alert behind it, so lookups of an IP's remediations skip those filters.
+    const ipScope = scope.join(' AND ');
+    const ipScopeParams = [...scopeParams];
     if (f.machine) { scope.push('machine = ?'); scopeParams.push(f.machine); }
     if (f.scenario) { scope.push('scenario = ?'); scopeParams.push(f.scenario); }
     if (f.country) { scope.push('upper(country) = ?'); scopeParams.push(f.country.toUpperCase()); }
@@ -489,13 +532,14 @@ export class StatisticsStore {
       // One lower bound only: with a second one (the retention cutoff) SQLite
       // may start the index range at the cutoff and scan the whole archive.
       where: `day BETWEEN ? AND ? AND ${scope.join(' AND ')}`, params: [start, f.to, ...scopeParams] as unknown[],
+      ipWhere: `day BETWEEN ? AND ? AND ${ipScope}`, ipParams: [start, f.to, ...ipScopeParams] as unknown[],
       previousFrom: new Date(Date.parse(f.from) - days * 86_400_000).toISOString().slice(0, 10),
       previousTo: new Date(Date.parse(f.from) - 86_400_000).toISOString().slice(0, 10),
     };
   }
 
-  private read(f: StatisticsFilters, retentionDays: number, instances: string[], now: number, freshnessMs: number): StoredStatistics {
-    const { cutoff, start, scoped, scopeParams, remediationFilter, isRemediation, where, params, previousFrom, previousTo } = this.scopeOf(f, retentionDays, instances, now);
+  private read(f: StatisticsFilters, retentionDays: number, instances: string[], now: number, freshnessMs: number, manualScenarios: Record<string, string[]>): StoredStatistics {
+    const { cutoff, start, scoped, scopeParams, remediationFilter, isRemediation, where, params, ipWhere, ipParams, previousFrom, previousTo } = this.scopeOf(f, retentionDays, instances, now);
     const day = (at: string | number) => this.day(at);
     const all = (sql: string, args: unknown[] = params): any[] => this.db.prepare(sql).all(...args);
     const get = (sql: string, args: unknown[] = params): any => this.db.prepare(sql).get(...args);
@@ -670,11 +714,16 @@ export class StatisticsStore {
     const previousParams = [previousFrom > cutoff ? previousFrom : cutoff, previousTo, ...scopeParams];
     const previousMachines = new Map<string, { label: string; n: number }>();
     const previousScenarios = new Map<string, number>();
+    const previousDetected = new Map<string, number>();
+    const previousManual = new Set<string>();
+    // Alerts of a scenario that labels manual decisions on their instance were not detected by CrowdSec.
+    const isManual = (instance: string, scenario: string) => manualScenarios[instance]?.includes(scenario) ?? false;
+    const { sql: manualCondition, params: manualParams } = manualScenarioCondition(manualScenarios);
     let previousTotals: StoredStatistics['previousTotals'] = null;
     if (compare) {
       const counts = { alerts: 0, remediations: 0, decisions: 0 };
-      for (const row of all(`SELECT kind, machine, MAX(machine_name) AS label, scenario, SUM(count) AS n FROM cells
-        WHERE kind IN ('alert', 'ban', 'issued') AND (kind != 'ban' OR (${isRemediation} AND ip != '')) AND ${where} GROUP BY kind, machine, scenario`, previousParams)) {
+      for (const row of all(`SELECT kind, instance, machine, MAX(machine_name) AS label, scenario, SUM(count) AS n FROM cells
+        WHERE kind IN ('alert', 'ban', 'issued') AND (kind != 'ban' OR (${isRemediation} AND ip != '')) AND ${where} GROUP BY kind, instance, machine, scenario`, previousParams)) {
         const n = Number(row.n);
         if (row.kind === 'ban') { counts.remediations += n; continue; }
         if (row.kind === 'issued') { counts.decisions += n; continue; }
@@ -683,6 +732,8 @@ export class StatisticsStore {
         if (machine) { machine.n += n; if (!machine.label && row.label) machine.label = row.label; }
         else previousMachines.set(row.machine, { label: row.label || '', n });
         if (row.scenario) previousScenarios.set(row.scenario, (previousScenarios.get(row.scenario) || 0) + n);
+        if (row.scenario && isManual(row.instance, row.scenario)) previousManual.add(row.scenario);
+        else if (row.scenario) previousDetected.set(row.scenario, (previousDetected.get(row.scenario) || 0) + n);
       }
       const { uniqueIPs, remediatedIPs, repeatAttackers } = attackerTotals(previousParams);
       previousTotals = { ...counts, uniqueIPs, remediatedIPs, repeatAttackers };
@@ -699,16 +750,41 @@ export class StatisticsStore {
       .map(([value, { label, n }]) => ({ value, label: label || value, previous: n }))
       .sort((a, b) => b.previous - a.previous || a.value.localeCompare(b.value)).slice(0, f.limit);
 
+    // Remediations belong to the scenario of their alert. AppSec rules block
+    // in-band without one; another scenario, such as appsec-native, bans the
+    // IP instead. So IPs remediated by any scenario are counted as well, on
+    // the instance that raised the alert: an IP counts once every instance
+    // where it raised the scenario's alerts remediated it. Each alert cell
+    // looks up its instance's remediations of the IP through the IP index.
+    const unremediated = `NOT EXISTS (SELECT 1 FROM cells AS r INDEXED BY idx_statistics_cells_ip
+      WHERE r.ip = cells.ip AND r.instance = cells.instance AND ${isRemediation} AND ${ipWhere})`;
+    const detected = `NOT ${manualCondition}`;
     const scenarios = all(`SELECT scenario AS label, SUM(CASE WHEN kind = 'alert' THEN count ELSE 0 END) AS count,
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} THEN ip END) AS uniqueIPs,
         COUNT(DISTINCT CASE WHEN kind = 'alert' AND machine != '' THEN machine END) AS machines,
         SUM(CASE WHEN ${isRemediation} THEN count ELSE 0 END) AS remediations,
         COUNT(DISTINCT CASE WHEN ${isRemediation} AND ${SINGLE_IP} THEN ip END) AS remediatedIPs,
+        COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} THEN ip END)
+          - COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} AND ${unremediated} THEN ip END) AS remediatedIPsAnyScenario,
         COUNT(DISTINCT CASE WHEN kind = 'alert' THEN day END) AS activeDays,
-        MIN(CASE WHEN kind = 'alert' THEN first_at END) AS firstActivity, MAX(CASE WHEN kind = 'alert' THEN last_at END) AS lastActivity
+        MIN(CASE WHEN kind = 'alert' THEN first_at END) AS firstActivity, MAX(CASE WHEN kind = 'alert' THEN last_at END) AS lastActivity,
+        SUM(CASE WHEN kind = 'alert' AND ${manualCondition} THEN count ELSE 0 END) AS manualAlerts,
+        SUM(CASE WHEN kind = 'alert' AND ${detected} THEN count ELSE 0 END) AS detectedCount,
+        COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} AND ${detected} THEN ip END) AS detectedUniqueIPs,
+        SUM(CASE WHEN ${isRemediation} AND ${detected} THEN count ELSE 0 END) AS detectedRemediations,
+        COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} AND ${detected} THEN ip END)
+          - COUNT(DISTINCT CASE WHEN kind = 'alert' AND ${SINGLE_IP} AND ${detected} AND ${unremediated} THEN ip END) AS detectedRemediatedIPsAnyScenario
       FROM cells WHERE kind IN ('alert', 'ban') AND scenario != '' AND ${where}
-      GROUP BY scenario HAVING count > 0 ORDER BY count DESC, label LIMIT ${f.limit}`)
-      .map((row) => ({ ...row, previous: compare ? previousScenarios.get(row.label) || 0 : null }));
+      GROUP BY scenario HAVING count > 0 ORDER BY count DESC, label LIMIT ${f.limit}`,
+      [...ipParams, ...Array(6).fill(manualParams).flat(), ...ipParams, ...params])
+      .map(({ manualAlerts, detectedCount, detectedUniqueIPs, detectedRemediations, detectedRemediatedIPsAnyScenario, ...row }) => ({
+        ...row, previous: compare ? previousScenarios.get(row.label) || 0 : null,
+        // Only scenarios with alerts, in the range or the compared period, from an instance
+        // that uses them for manual decisions carry the detected share.
+        ...(manualAlerts > 0 || (compare && previousManual.has(row.label)) ? { detected: { count: detectedCount, uniqueIPs: detectedUniqueIPs,
+          remediations: detectedRemediations, remediatedIPsAnyScenario: detectedRemediatedIPsAnyScenario,
+          previous: compare ? previousDetected.get(row.label) || 0 : null } } : {}),
+      }));
     // Types only for listed scenarios with remediations, from the remediation rows alone.
     const remediatedScenarios = scenarios.filter((row) => row.remediations > 0).map((row) => row.label as string);
     const scenarioTypes = remediatedScenarios.length ? remediationTypesByOwner(all(`SELECT scenario AS owner, type AS label, SUM(count) AS count FROM cells

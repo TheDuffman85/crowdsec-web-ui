@@ -107,12 +107,23 @@ export interface StatisticsScenario {
   remediations: number;
   remediationTypes: StatisticsRemediationType[];
   remediatedIPs: number;
+  /**
+   * Alerting IPs of the scenario with a remediation from any scenario in the range, such as
+   * an appsec-native ban for an IP whose requests an AppSec rule blocked in-band.
+   */
+  remediatedIPsAnyScenario: number;
   /** Days with alerts of the scenario in the range. */
   activeDays: number;
   firstActivity: string | null;
   lastActivity: string | null;
   /** Alerts in the preceding period of equal length, or null when it is not fully covered. */
   previous: number | null;
+  /**
+   * Present when some alerts come from an instance that uses the scenario to label manual
+   * decisions (Settings → General → Manual decisions): the share from the other instances,
+   * which CrowdSec detected. Without it, every alert of the scenario was detected.
+   */
+  detected?: { count: number; uniqueIPs: number; remediations: number; remediatedIPsAnyScenario: number; previous: number | null };
 }
 
 export interface StatisticsResponse {
@@ -212,8 +223,15 @@ export const STATISTICS_DETAIL_MAX = 500;
 
 /** `size` limits listed IPs and ranges (default STATISTICS_DETAIL_PAGE, at most STATISTICS_DETAIL_MAX). */
 export type StatisticsDetailRequest =
-  /** Top IPs in the filtered scope, optionally within one AS, with their address ranges. */
-  | { kind: 'ips'; network?: string; size?: number }
+  /**
+   * Top IPs in the filtered scope, optionally within one AS, with their address ranges.
+   * Remediations count for the IP whichever scenario, machine or target raised their alert.
+   */
+  | {
+    kind: 'ips'; network?: string; size?: number;
+    /** Leaves out alerts of scenarios that their instance uses to label manual decisions. */
+    detected?: boolean;
+  }
   /** IPs that attacked again after a remediation; `history` includes remediations before the range. */
   | { kind: 'returned'; history: boolean; size?: number }
   /** Recent activity of machines compared with the preceding period. */

@@ -131,8 +131,13 @@ export function createCrowdsecUpdateChecker(options: CrowdsecUpdateCheckOptions)
 
 interface ParsedVersion { core: [number, number, number]; prerelease: string[] }
 
-function isCommitHashSuffix(parts: string[]): boolean {
-  return parts.length === 1 && /^[0-9a-f]{7,40}$/i.test(parts[0]);
+// CrowdSec builds report `Version-Tag`, where the tag is usually build metadata
+// rather than a SemVer prerelease: a commit hash (`v1.8.2-3d369d64`), a package
+// tag (`v1.8.2-debian-pragmatic-amd64-3d369d64`, `v1.7.8-rpm-pragmatic-...`) or
+// `git describe` output. Only suffixes starting with a prerelease keyword
+// (`rc1`, `rc.1`, `beta-2`, ...) make a version precede the same core release.
+function isPrereleaseSuffix(parts: string[]): boolean {
+  return parts.length > 0 && /^(alpha|beta|rc|pre|preview|dev)(?![a-z])/i.test(parts[0]);
 }
 
 function parseVersion(input: string): ParsedVersion | null {
@@ -140,10 +145,10 @@ function parseVersion(input: string): ParsedVersion | null {
   if (!match) return null;
   const core = [Number(match[1]), Number(match[2]), Number(match[3])] as [number, number, number];
   if (!core.every(Number.isSafeInteger) || match.slice(1, 4).some((part) => part.length > 1 && part.startsWith('0'))) return null;
-  const prerelease = match[4]?.split('.') || [];
-  if (!isCommitHashSuffix(prerelease)
-    && prerelease.some((part) => !part || (/^\d+$/.test(part) && part.length > 1 && part.startsWith('0')))) return null;
-  return { core, prerelease };
+  const suffix = match[4]?.split('.') || [];
+  if (!isPrereleaseSuffix(suffix)) return { core, prerelease: [] };
+  if (suffix.some((part) => !part || (/^\d+$/.test(part) && part.length > 1 && part.startsWith('0')))) return null;
+  return { core, prerelease: suffix };
 }
 
 export function compareVersions(left: string, right: string): number {
@@ -153,10 +158,8 @@ export function compareVersions(left: string, right: string): number {
   for (let index = 0; index < 3; index += 1) {
     if (a.core[index] !== b.core[index]) return Math.sign(a.core[index] - b.core[index]);
   }
-  // CrowdSec appends its commit hash with a hyphen to release builds. Unlike a
-  // SemVer prerelease, that suffix does not make the installed release older.
-  const aPrerelease = isCommitHashSuffix(a.prerelease) ? [] : a.prerelease;
-  const bPrerelease = isCommitHashSuffix(b.prerelease) ? [] : b.prerelease;
+  const aPrerelease = a.prerelease;
+  const bPrerelease = b.prerelease;
   if (aPrerelease.length === 0) return bPrerelease.length === 0 ? 0 : 1;
   if (bPrerelease.length === 0) return -1;
   for (let index = 0; index < Math.max(aPrerelease.length, bPrerelease.length); index += 1) {
