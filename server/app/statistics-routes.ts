@@ -9,8 +9,10 @@ import {
 export function registerStatisticsRoutes(options: {
   app: Hono; config: RuntimeConfig; statistics: StatisticsService;
   ensureAuth: any; ensureCanManageSettings: (context: any) => Response | null | undefined;
+  /** Scenarios that label manual decisions, by instance. */
+  manualDecisionScenarios: () => Record<string, string[]>;
 }): void {
-  const { app, config, statistics, ensureAuth, ensureCanManageSettings } = options;
+  const { app, config, statistics, ensureAuth, ensureCanManageSettings, manualDecisionScenarios } = options;
   /** Parses the shared page filters, or returns an error message. */
   const parseFilters = (q: Record<string, string>): StatisticsFilters | string => {
     const today = statisticsDay(Date.now(), statistics.timeZone);
@@ -54,7 +56,7 @@ export function registerStatisticsRoutes(options: {
   app.get(`${config.basePath}/api/statistics`, ensureAuth, async (context) => {
     const filters = parseFilters(context.req.query());
     if (typeof filters === 'string') return context.json({ error: filters }, 400);
-    try { return context.json(await statistics.query(filters)); }
+    try { return context.json(await statistics.query(filters, manualDecisionScenarios())); }
     catch (error) { return unavailable(context, error); }
   });
 
@@ -67,7 +69,7 @@ export function registerStatisticsRoutes(options: {
     if (!Number.isInteger(size) || size < 1 || size > STATISTICS_DETAIL_MAX) return context.json({ error: `size must be an integer between 1 and ${STATISTICS_DETAIL_MAX}` }, 400);
     if (q.kind === 'ips') {
       if (q.network !== undefined && (!q.network.trim() || q.network.length > 256)) return context.json({ error: 'Invalid network' }, 400);
-      request = { kind: 'ips', ...(q.network ? { network: q.network } : {}), size };
+      request = { kind: 'ips', ...(q.network ? { network: q.network } : {}), ...(q.detected === '1' ? { detected: true } : {}), size };
     } else if (q.kind === 'returned') request = { kind: 'returned', history: q.history === '1', size };
     else if (q.kind === 'machines') {
       let machines: unknown;
@@ -75,7 +77,7 @@ export function registerStatisticsRoutes(options: {
       if (!Array.isArray(machines) || !machines.length || machines.length > 25 || !machines.every(isMachineKey)) return context.json({ error: 'Invalid machines' }, 400);
       request = { kind: 'machines', machines: machines as string[] };
     } else return context.json({ error: 'Invalid detail kind' }, 400);
-    try { return context.json(await statistics.details(filters, request)); }
+    try { return context.json(await statistics.details(filters, request, manualDecisionScenarios())); }
     catch (error) { return unavailable(context, error); }
   });
 

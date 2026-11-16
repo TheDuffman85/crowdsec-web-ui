@@ -34,7 +34,7 @@ import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { formatCustomDate } from '../../../shared/date-format';
 import type { ConfigResponse, FacetField } from '../types';
 import type { SearchDateRange } from '../../../shared/search';
-import { DEFAULT_MANUAL_DECISION_SCENARIO, MANUAL_DECISION_LOOKUP_MAX } from '../../../shared/contracts';
+import { MANUAL_DECISION_LOOKUP_MAX } from '../../../shared/contracts';
 import {
   addStatisticsDays, statisticsDay, statisticsDayStart, type StatisticsRanking, type StatisticsResponse, type StatisticsScenario,
 } from '../../../shared/statistics';
@@ -687,8 +687,8 @@ export function Statistics() {
     const compare = !data.coverage.comparisonPartial;
     const scenarioDraft = (scenario: string): DecisionDraft => ({ reason: scenario, duration: '4h' });
     // Scenarios from Settings → Manual decisions label decisions added by hand, not attacks CrowdSec detected.
-    const manualScenarios = new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...instances.flatMap((item) => item.manual_decision_scenarios ?? [])]);
-    const attackScenarios = data.scenarios.filter((row) => !manualScenarios.has(row.label));
+    // Each instance has its own list, so findings use the alerts from instances that do not use the scenario that way.
+    const attackScenarios = data.scenarios.map((row) => (row.detected ? { ...row, ...row.detected } : row)).filter((row) => row.count > 0);
     // A machine without alerts may have a stopped agent or broken acquisition.
     data.quietMachines.forEach((row) => findings.push({ key: `quiet-${row.value}`, severity: 'warning',
       text: t('pages.statistics.findingQuietMachine', { machine: machineName(row.value, row.label), count: formatNumber(row.previous) }),
@@ -700,7 +700,7 @@ export function Statistics() {
       text: t('pages.statistics.findingUnremediatedScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
       help: { text: t('pages.statistics.findingUnremediatedScenarioHelp'), href: PROFILE_DOCS },
       action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
-      detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
+      detail: { kind: 'ips', scenario: row.label, detected: true, decision: scenarioDraft(row.label) },
     }));
     if (data.totals.returnedAfterRemediation > 0) {
       findings.push({ key: 'returned', severity: 'warning',
@@ -723,14 +723,14 @@ export function Statistics() {
         { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs), remediated: formatNumber(row.remediatedIPsAnyScenario) }),
       help: { text: t('pages.statistics.findingInBandScenarioHelp') },
       action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
-      detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
+      detail: { kind: 'ips', scenario: row.label, detected: true, decision: scenarioDraft(row.label) },
     }));
     if (compare) {
       attackScenarios.filter((row) => row.previous === 0).forEach((row) => findings.push({
         key: `new-${row.label}`, severity: 'info',
         text: t('pages.statistics.findingNewScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
         action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
-        detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
+        detail: { kind: 'ips', scenario: row.label, detected: true, decision: scenarioDraft(row.label) },
       }));
     }
     const network = data.networks[0];

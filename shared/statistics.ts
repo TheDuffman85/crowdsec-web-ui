@@ -118,6 +118,12 @@ export interface StatisticsScenario {
   lastActivity: string | null;
   /** Alerts in the preceding period of equal length, or null when it is not fully covered. */
   previous: number | null;
+  /**
+   * Present when some alerts come from an instance that uses the scenario to label manual
+   * decisions (Settings → General → Manual decisions): the share from the other instances,
+   * which CrowdSec detected. Without it, every alert of the scenario was detected.
+   */
+  detected?: { count: number; uniqueIPs: number; remediations: number; remediatedIPsAnyScenario: number; previous: number | null };
 }
 
 export interface StatisticsResponse {
@@ -221,7 +227,11 @@ export type StatisticsDetailRequest =
    * Top IPs in the filtered scope, optionally within one AS, with their address ranges.
    * Remediations count for the IP whichever scenario, machine or target raised their alert.
    */
-  | { kind: 'ips'; network?: string; size?: number }
+  | {
+    kind: 'ips'; network?: string; size?: number;
+    /** Leaves out alerts of scenarios that their instance uses to label manual decisions. */
+    detected?: boolean;
+  }
   /** IPs that attacked again after a remediation; `history` includes remediations before the range. */
   | { kind: 'returned'; history: boolean; size?: number }
   /** Recent activity of machines compared with the preceding period. */

@@ -103,9 +103,12 @@ describe('statistics API and worker lifecycle', () => {
     const details = vi.spyOn(controller.statistics, 'details').mockResolvedValue({} as never);
     const filters = 'country=de&network=Example%20Cloud&target=web.example.com';
     expect((await controller.fetch(request(`statistics?${filters}`))).status).toBe(200);
-    expect(query).toHaveBeenCalledWith(expect.objectContaining({ country: 'DE', network: 'Example Cloud', target: 'web.example.com' }));
+    // Each instance's manual decision scenarios separate manual alerts from detected ones.
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({ country: 'DE', network: 'Example Cloud', target: 'web.example.com' }), { default: ['manual/web-ui'] });
     expect((await controller.fetch(request(`statistics/details?kind=ips&${filters}`))).status).toBe(200);
-    expect(details).toHaveBeenCalledWith(expect.objectContaining({ country: 'DE', network: 'Example Cloud', target: 'web.example.com' }), expect.anything());
+    expect(details).toHaveBeenCalledWith(expect.objectContaining({ country: 'DE', network: 'Example Cloud', target: 'web.example.com' }), expect.anything(), { default: ['manual/web-ui'] });
+    expect((await controller.fetch(request(`statistics/details?kind=ips&detected=1&${filters}`))).status).toBe(200);
+    expect(details).toHaveBeenLastCalledWith(expect.anything(), { kind: 'ips', network: 'Example Cloud', detected: true, size: 25 }, { default: ['manual/web-ui'] });
     for (const value of ['country=invalid', 'network=%20', `network=${'a'.repeat(257)}`, 'target=%20', `target=${'a'.repeat(257)}`]) {
       expect((await controller.fetch(request(`statistics?${value}`))).status, value).toBe(400);
     }

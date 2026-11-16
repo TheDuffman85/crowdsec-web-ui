@@ -19,8 +19,8 @@ process.on('message', (message: { id: number; request: Record<string, any> }) =>
     else if (r.type === 'prune') {
       store.prune(String(r.cutoff));
       result = store.hasExpired(String(r.cutoff));
-    } else if (r.type === 'details') result = store.details(r.filters as StatisticsFilters, r.request as StatisticsDetailRequest, Number(r.retentionDays), r.instances as string[], Date.now());
-    else if (r.type === 'query') result = store.query(r.filters as StatisticsFilters, Number(r.retentionDays), r.instances as string[], Date.now(), Number(r.freshnessMs) || 0);
+    } else if (r.type === 'details') result = store.details(r.filters as StatisticsFilters, r.request as StatisticsDetailRequest, Number(r.retentionDays), r.instances as string[], Date.now(), (r.manualScenarios ?? {}) as Record<string, string[]>);
+    else if (r.type === 'query') result = store.query(r.filters as StatisticsFilters, Number(r.retentionDays), r.instances as string[], Date.now(), Number(r.freshnessMs) || 0, (r.manualScenarios ?? {}) as Record<string, string[]>);
     else if (r.type === 'status') result = { lastSuccess: store.metadata('lastSuccess'), revision: Number(store.metadata('revision') || 0), coverageThrough: store.latestCoverage() };
     else throw new Error('Unknown statistics worker operation');
     process.send?.({ id: message.id, result });

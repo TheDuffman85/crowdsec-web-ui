@@ -11,7 +11,7 @@ import en from '../../locales/en.json';
 import { createDateTimeContextValue, DateTimeContext, DEFAULT_DATE_TIME_SETTINGS } from '../../lib/dateTime';
 import { loadStoredQuickFilters, saveStoredQuickFilters } from '../../lib/quickFilters';
 import type { ConfigResponse } from '../../types';
-import { DEFAULT_STATISTICS_SETTINGS, type StatisticsConfiguration, type StatisticsResponse } from '../../../../shared/statistics';
+import { DEFAULT_STATISTICS_SETTINGS, type StatisticsConfiguration, type StatisticsResponse, type StatisticsScenario } from '../../../../shared/statistics';
 
 vi.mock('../../lib/api', () => ({ fetchConfig: vi.fn(), addDecision: vi.fn(), addDecisions: vi.fn(), checkAllowlist: vi.fn(), lookupManualDecisions: vi.fn() }));
 vi.mock('../../lib/sessionFetch', () => ({ sessionFetch: vi.fn() }));
@@ -310,23 +310,33 @@ describe('Statistics page', () => {
     expect(within(finding).queryByRole('button', { name: /Ban all/ })).not.toBeInTheDocument();
   });
 
-  test('does not report scenarios from the manual decisions setting as attack types', async () => {
+  test('reports only the share of a scenario that CrowdSec detected, not alerts of manual decisions', async () => {
     const data = payload();
-    const scenario = (label: string, remediations: number) => ({ label, count: 55, uniqueIPs: 46, machines: 1, remediations, remediatedIPs: remediations ? 46 : 0, remediatedIPsAnyScenario: remediations ? 46 : 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: 0 });
-    vi.mocked(fetchConfig).mockResolvedValue({
-      statistics: configuration, lookback_days: 7,
-      instances: [{ id: 'default', name: 'Production', manual_decision_scenarios: ['manual/web-ui', 'custom/blocklist'] }],
-    } as ConfigResponse);
-    vi.mocked(sessionFetch).mockImplementation(async () => Response.json({
-      ...data,
-      coverage: { ...data.coverage, partial: false, comparisonPartial: false },
-      scenarios: [scenario('manual/web-ui', 55), scenario('custom/blocklist', 0), scenario('crowdsecurity/ssh-bf', 55)],
-    } satisfies StatisticsResponse));
+    const scenario = (label: string, remediations: number, detected?: StatisticsScenario['detected']) => ({ label, count: 80, uniqueIPs: 60, machines: 2, remediations, remediatedIPs: remediations ? 14 : 0, remediatedIPsAnyScenario: remediations ? 14 : 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: 10, ...(detected ? { detected } : {}) });
+    vi.mocked(sessionFetch).mockImplementation(async (url) => String(url).includes('/api/statistics/details')
+      ? Response.json({ kind: 'ips', ips: [], total: 0, ranges: [], rangeTotal: 0 })
+      : Response.json({
+        ...data,
+        coverage: { ...data.coverage, partial: false, comparisonPartial: false },
+        scenarios: [
+          // Manual decisions only, on every instance that raised them.
+          scenario('manual/web-ui', 80, { count: 0, uniqueIPs: 0, remediations: 0, remediatedIPsAnyScenario: 0, previous: 0 }),
+          // Manual decisions on one instance, and real detections without a remediation on another.
+          scenario('custom/edge', 25, { count: 55, uniqueIPs: 46, remediations: 0, remediatedIPsAnyScenario: 0, previous: 0 }),
+          // Every IP is remediated only counting the manual decisions; one detected IP is not.
+          { ...scenario('crowdsecurity/vpatch-env-access', 0, { count: 20, uniqueIPs: 2, remediations: 0, remediatedIPsAnyScenario: 1, previous: 10 }), remediatedIPsAnyScenario: 60 },
+        ],
+      } satisfies StatisticsResponse));
     mount();
     const findings = (await screen.findByRole('heading', { name: 'Findings' })).closest('.rounded-xl') as HTMLElement;
     expect(within(findings).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-      expect.stringMatching(/New attack type: crowdsecurity\/ssh-bf/),
+      expect.stringMatching(/custom\/edge raised 55 alerts from 46 IPs without a single remediation/),
+      expect.stringMatching(/crowdsecurity\/vpatch-env-access.*20 .*2 IPs.*1 /),
+      expect.stringMatching(/New attack type: custom\/edge raised 55 alerts from 46 IPs/),
     ]);
+    // Their details list the detected IPs only.
+    fireEvent.click(within(findings).getByRole('button', { name: /^custom\/edge raised 55 alerts/ }));
+    await waitFor(() => expect(String(vi.mocked(sessionFetch).mock.calls.at(-1)?.[0])).toMatch(/details\?.*scenario=custom%2Fedge.*detected=1/));
   });
 
   test('turns the statistics into findings and compares tiles only with a complete preceding period', async () => {

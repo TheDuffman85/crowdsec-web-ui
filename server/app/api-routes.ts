@@ -82,6 +82,14 @@ export interface ApiRouteDependencies extends Record<string, any> {
   state: ApiRouteState;
 }
 
+/**
+ * Scenarios offered for manual decisions on an instance: the default, the instance's
+ * configured list (or the global one), and the scenarios added in Settings for every instance.
+ */
+export function manualDecisionScenariosOf(config: RuntimeConfig, instance: RuntimeConfig['instances'][number], custom: string[]): string[] {
+  return [...new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...(instance.manualDecisionScenarios ?? config.manualDecisionScenarios), ...custom])];
+}
+
 export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
   const app = dependencies.app;
   const state = dependencies.state;
@@ -677,13 +685,7 @@ app.delete(`${config.basePath}/api/instances/:instanceId/decisions/:id`, ensureA
 
 // Only shapes the Web UI's Add Decision form; POST /api/decisions accepts any valid scenario.
 // Scenarios added in Settings apply to every instance on top of the configured list.
-const manualDecisionScenarios = (instance: RuntimeConfig['instances'][number]): string[] => [
-  ...new Set([
-    DEFAULT_MANUAL_DECISION_SCENARIO,
-    ...(instance.manualDecisionScenarios ?? config.manualDecisionScenarios),
-    ...state.manualDecisionScenarios,
-  ]),
-];
+const manualDecisionScenarios = (instance: RuntimeConfig['instances'][number]): string[] => manualDecisionScenariosOf(config, instance, state.manualDecisionScenarios);
 const configuredManualDecisionScenarios = (): string[] => [
   ...new Set([
     ...config.manualDecisionScenarios,
