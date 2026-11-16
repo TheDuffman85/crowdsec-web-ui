@@ -310,6 +310,25 @@ describe('Statistics page', () => {
     expect(within(finding).queryByRole('button', { name: /Ban all/ })).not.toBeInTheDocument();
   });
 
+  test('does not report scenarios from the manual decisions setting as attack types', async () => {
+    const data = payload();
+    const scenario = (label: string, remediations: number) => ({ label, count: 55, uniqueIPs: 46, machines: 1, remediations, remediatedIPs: remediations ? 46 : 0, remediatedIPsAnyScenario: remediations ? 46 : 0, remediationTypes: [], activeDays: 1, firstActivity: null, lastActivity: null, previous: 0 });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      statistics: configuration, lookback_days: 7,
+      instances: [{ id: 'default', name: 'Production', manual_decision_scenarios: ['manual/web-ui', 'custom/blocklist'] }],
+    } as ConfigResponse);
+    vi.mocked(sessionFetch).mockImplementation(async () => Response.json({
+      ...data,
+      coverage: { ...data.coverage, partial: false, comparisonPartial: false },
+      scenarios: [scenario('manual/web-ui', 55), scenario('custom/blocklist', 0), scenario('crowdsecurity/ssh-bf', 55)],
+    } satisfies StatisticsResponse));
+    mount();
+    const findings = (await screen.findByRole('heading', { name: 'Findings' })).closest('.rounded-xl') as HTMLElement;
+    expect(within(findings).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      expect.stringMatching(/New attack type: crowdsecurity\/ssh-bf/),
+    ]);
+  });
+
   test('turns the statistics into findings and compares tiles only with a complete preceding period', async () => {
     const data = payload();
     const web = '["default","m-2"]';

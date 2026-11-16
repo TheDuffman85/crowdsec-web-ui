@@ -34,7 +34,7 @@ import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { formatCustomDate } from '../../../shared/date-format';
 import type { ConfigResponse, FacetField } from '../types';
 import type { SearchDateRange } from '../../../shared/search';
-import { MANUAL_DECISION_LOOKUP_MAX } from '../../../shared/contracts';
+import { DEFAULT_MANUAL_DECISION_SCENARIO, MANUAL_DECISION_LOOKUP_MAX } from '../../../shared/contracts';
 import {
   addStatisticsDays, statisticsDay, statisticsDayStart, type StatisticsRanking, type StatisticsResponse, type StatisticsScenario,
 } from '../../../shared/statistics';
@@ -686,12 +686,15 @@ export function Statistics() {
   if (data) {
     const compare = !data.coverage.comparisonPartial;
     const scenarioDraft = (scenario: string): DecisionDraft => ({ reason: scenario, duration: '4h' });
+    // Scenarios from Settings → Manual decisions label decisions added by hand, not attacks CrowdSec detected.
+    const manualScenarios = new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...instances.flatMap((item) => item.manual_decision_scenarios ?? [])]);
+    const attackScenarios = data.scenarios.filter((row) => !manualScenarios.has(row.label));
     // A machine without alerts may have a stopped agent or broken acquisition.
     data.quietMachines.forEach((row) => findings.push({ key: `quiet-${row.value}`, severity: 'warning',
       text: t('pages.statistics.findingQuietMachine', { machine: machineName(row.value, row.label), count: formatNumber(row.previous) }),
       detail: { kind: 'machines', machines: [row.value] } }));
     // Alerts that never lead to a remediation point at a profile gap.
-    const unremediated = data.scenarios.filter((row) => row.remediations === 0);
+    const unremediated = attackScenarios.filter((row) => row.remediations === 0);
     unremediated.filter((row) => !isInBandScenario(row.label) && row.count >= FINDINGS.unremediatedScenarioAlerts).forEach((row) => findings.push({
       key: `unremediated-${row.label}`, severity: 'warning',
       text: t('pages.statistics.findingUnremediatedScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
@@ -723,7 +726,7 @@ export function Statistics() {
       detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
     }));
     if (compare) {
-      data.scenarios.filter((row) => row.previous === 0).forEach((row) => findings.push({
+      attackScenarios.filter((row) => row.previous === 0).forEach((row) => findings.push({
         key: `new-${row.label}`, severity: 'info',
         text: t('pages.statistics.findingNewScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
         action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
