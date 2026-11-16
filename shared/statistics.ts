@@ -107,6 +107,11 @@ export interface StatisticsScenario {
   remediations: number;
   remediationTypes: StatisticsRemediationType[];
   remediatedIPs: number;
+  /**
+   * Alerting IPs of the scenario with a remediation from any scenario in the range, such as
+   * an appsec-native ban for an IP whose requests an AppSec rule blocked in-band.
+   */
+  remediatedIPsAnyScenario: number;
   /** Days with alerts of the scenario in the range. */
   activeDays: number;
   firstActivity: string | null;
@@ -212,7 +217,10 @@ export const STATISTICS_DETAIL_MAX = 500;
 
 /** `size` limits listed IPs and ranges (default STATISTICS_DETAIL_PAGE, at most STATISTICS_DETAIL_MAX). */
 export type StatisticsDetailRequest =
-  /** Top IPs in the filtered scope, optionally within one AS, with their address ranges. */
+  /**
+   * Top IPs in the filtered scope, optionally within one AS, with their address ranges.
+   * Remediations count for the IP whichever scenario, machine or target raised their alert.
+   */
   | { kind: 'ips'; network?: string; size?: number }
   /** IPs that attacked again after a remediation; `history` includes remediations before the range. */
   | { kind: 'returned'; history: boolean; size?: number }

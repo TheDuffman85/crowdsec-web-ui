@@ -124,11 +124,14 @@ const FINDINGS = {
   spikeFactor: 2,
   /** A ranked IP that attacked at least this many machines. */
   wideScannerMachines: 3,
-  /** A scenario blocked in-band by AppSec with at least this many alerts and no remediation. */
+  /** A scenario blocked in-band by AppSec with at least this many alerts and IPs that no scenario remediated. */
   inBandAlerts: 10,
 } as const;
-// AppSec (WAF) rules block the request itself; remediations only follow from scenarios.
-const isInBandScenario = (label: string) => /(^|\/)(vpatch-|appsec)/i.test(label);
+// AppSec (WAF) rules block the request itself; remediations only follow from scenarios
+// such as appsec-native or appsec-vpatch, which count the rules an IP triggered.
+const REMEDIATING_APPSEC_SCENARIO = /(^|\/)appsec-(native|vpatch)$/i;
+const isInBandScenario = (label: string) => !REMEDIATING_APPSEC_SCENARIO.test(label)
+  && (/(^|\/)(vpatch-|appsec|crs-)/i.test(label) || /^anomaly score block\b/i.test(label));
 const PROFILE_DOCS = 'https://docs.crowdsec.net/docs/local_api/profiles/format';
 
 // Shared with the Settings page so form controls look the same everywhere.
@@ -710,9 +713,11 @@ export function Statistics() {
         detail: { kind: 'machines', machines: [row.value] },
       }));
     }
-    unremediated.filter((row) => isInBandScenario(row.label) && row.count >= FINDINGS.inBandAlerts).forEach((row) => findings.push({
+    // The rule's IPs are only a gap when no other scenario remediated them either.
+    unremediated.filter((row) => isInBandScenario(row.label) && row.count >= FINDINGS.inBandAlerts && row.remediatedIPsAnyScenario < row.uniqueIPs).forEach((row) => findings.push({
       key: `inband-${row.label}`, severity: 'info',
-      text: t('pages.statistics.findingInBandScenario', { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs) }),
+      text: t(row.remediatedIPsAnyScenario > 0 ? 'pages.statistics.findingInBandScenario' : 'pages.statistics.findingInBandScenarioNone',
+        { scenario: row.label, count: formatNumber(row.count), ips: formatNumber(row.uniqueIPs), remediated: formatNumber(row.remediatedIPsAnyScenario) }),
       help: { text: t('pages.statistics.findingInBandScenarioHelp') },
       action: { label: t('pages.statistics.showScenario'), onSelect: () => update({ scenario: row.label }) },
       detail: { kind: 'ips', scenario: row.label, decision: scenarioDraft(row.label) },
@@ -754,6 +759,9 @@ export function Statistics() {
           <ResizableTable table={scenarioTableWidths} bodyClassName="divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => {
                   const share = remediationCoverage(row.remediatedIPs, row.uniqueIPs);
+                  // AppSec rules remediate nothing themselves; show how many of their IPs another scenario did.
+                  const inBand = isInBandScenario(row.label);
+                  const anyShare = inBand && row.remediatedIPsAnyScenario > row.remediatedIPs ? remediationCoverage(row.remediatedIPsAnyScenario, row.uniqueIPs) : null;
                   const change = row.previous === null || row.previous === 0 ? null : Math.round((row.count - row.previous) / row.previous * 100);
                   return (
                     <ClickableTableRow key={row.label} aria-label={row.label} selected={scenario === row.label} onSelect={() => toggleFilters({ scenario: row.label })}>
@@ -770,7 +778,10 @@ export function Statistics() {
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.uniqueIPs)}</td>
                       <td className={`${cell} text-right tabular-nums text-gray-700 dark:text-gray-300`}>{formatNumber(row.machines)}</td>
                       <td className={`${cell} text-right`}><RemediationPills types={row.remediationTypes} /></td>
-                      <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && row.count >= FINDINGS.unremediatedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{share === null ? '—' : `${share}%`}</td>
+                      <td className={`${cell} text-right font-medium tabular-nums ${share === 0 && !inBand && row.count >= FINDINGS.unremediatedScenarioAlerts ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>
+                        {share === null ? '—' : `${share}%`}
+                        {anyShare !== null && <div className="text-xs font-normal text-gray-500 dark:text-gray-400">{t('pages.statistics.coverageAnyScenario', { percent: anyShare })}</div>}
+                      </td>
                       <td className={`${cell} whitespace-nowrap`}>{activity(row)}</td>
                     </ClickableTableRow>
                   );
