@@ -6,7 +6,7 @@ import { BrandingProvider } from './contexts/BrandingContext';
 import { NotificationUnreadProvider } from "./contexts/NotificationUnreadContext";
 import { RefreshProvider } from "./contexts/RefreshContext";
 import { ToastProvider } from "./contexts/ToastContext";
-import { useRefresh } from "./contexts/useRefresh";
+import { useSyncStatus } from "./contexts/useSyncStatus";
 import { SyncOverlay } from "./components/SyncOverlay";
 import { getBasePath } from "./lib/basePath";
 import { normalizeLanguagePreference, useI18n } from "./lib/i18n";
@@ -58,12 +58,17 @@ function ProtectedProviders({ children }: { children: ReactNode }) {
   );
 }
 
-function ProtectedAppShell() {
-  const { syncStatus } = useRefresh();
+// Subscribes on its own so sync progress updates re-render only the overlay,
+// not the page behind it.
+function SyncOverlayHost() {
+  const syncStatus = useSyncStatus();
+  return <SyncOverlay syncStatus={syncStatus} />;
+}
 
+function ProtectedAppShell() {
   return (
     <>
-      <SyncOverlay syncStatus={syncStatus} />
+      <SyncOverlayHost />
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route

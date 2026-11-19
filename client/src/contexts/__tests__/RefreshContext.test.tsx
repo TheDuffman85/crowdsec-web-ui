@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { RefreshProvider } from '../RefreshContext';
 import { useRefresh } from '../useRefresh';
+import { useSyncStatus } from '../useSyncStatus';
 import { fetchConfig } from '../../lib/api';
 
 class MockWebSocket {
@@ -76,7 +77,8 @@ beforeEach(() => {
 });
 
 function Consumer() {
-  const { intervalMs, lastUpdated, nextRefreshAt, refreshSignal, syncStatus, setIntervalMs } = useRefresh();
+  const { intervalMs, lastUpdated, nextRefreshAt, refreshSignal, setIntervalMs } = useRefresh();
+  const syncStatus = useSyncStatus();
 
   return (
     <div>
@@ -103,7 +105,8 @@ function IntervalConsumer({ value }: { value: number }) {
 }
 
 function ManualRefreshConsumer({ onError }: { onError?: (error: unknown) => void }) {
-  const { refreshNow, syncStatus } = useRefresh();
+  const { refreshNow } = useRefresh();
+  const syncStatus = useSyncStatus();
   const reportError = onError ?? (() => undefined);
 
   return (
@@ -507,6 +510,67 @@ describe('RefreshContext', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'update' }));
     await waitFor(() => expect(errorSpy).toHaveBeenCalled());
+  });
+
+  test('keeps sync progress polls from re-rendering refresh consumers', async () => {
+    vi.useFakeTimers({ now: new Date('2026-11-19T10:00:00.000Z') });
+    try {
+      let message = 'step 1';
+      // Every poll returns new objects, as a real fetch does.
+      vi.mocked(fetchConfig).mockImplementation(async () => makeConfig({
+        refresh_interval: 0,
+        cache_last_update: '2026-11-19T09:59:00.000Z',
+        next_refresh_at: '2026-11-19T10:05:00.000Z',
+        sync_status: { isSyncing: true, progress: 40, message, startedAt: null, completedAt: null },
+      }));
+
+      const refreshRender = vi.fn();
+      const syncRender = vi.fn();
+      function RefreshProbe() {
+        const { isSyncing } = useRefresh();
+        refreshRender();
+        return <span data-testid="probe-syncing">{String(isSyncing)}</span>;
+      }
+      function SyncProbe() {
+        const syncStatus = useSyncStatus();
+        syncRender();
+        return <span data-testid="probe-sync">{syncStatus?.message}</span>;
+      }
+
+      render(
+        <RefreshProvider>
+          <RefreshProbe />
+          <SyncProbe />
+        </RefreshProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId('probe-syncing')).toHaveTextContent('true');
+      expect(screen.getByTestId('probe-sync')).toHaveTextContent('step 1');
+      const refreshRenders = refreshRender.mock.calls.length;
+      const syncRenders = syncRender.mock.calls.length;
+
+      // Unchanged poll: nothing re-renders.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(fetchConfig).toHaveBeenCalledTimes(2);
+      expect(refreshRender).toHaveBeenCalledTimes(refreshRenders);
+      expect(syncRender).toHaveBeenCalledTimes(syncRenders);
+
+      // Changed progress: only the sync status subscriber re-renders.
+      message = 'step 2';
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(fetchConfig).toHaveBeenCalledTimes(3);
+      expect(screen.getByTestId('probe-sync')).toHaveTextContent('step 2');
+      expect(syncRender).toHaveBeenCalledTimes(syncRenders + 1);
+      expect(refreshRender).toHaveBeenCalledTimes(refreshRenders);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('logs config load failures and supports 5m interval updates', async () => {

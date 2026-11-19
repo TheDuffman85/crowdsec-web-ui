@@ -235,6 +235,7 @@ function drawAttackMarkerPulses(
 interface WorldMapCardProps {
     data: WorldMapDatum[];
     attackLocations?: DashboardAttackLocationDatum[];
+    pauseAnimation?: boolean;
     onCountrySelect: (countryCode: string) => void;
     selectedCountry: string | null;
     simulationsEnabled?: boolean;
@@ -311,6 +312,7 @@ function getFeatureCountryCode(feature: ChoroplethBoundFeature): string {
 export function WorldMapCard({
     data,
     attackLocations = [],
+    pauseAnimation = false,
     onCountrySelect,
     selectedCountry,
     simulationsEnabled = false,
@@ -340,6 +342,7 @@ export function WorldMapCard({
     });
     const tooltipPositionRef = useRef<TooltipPosition>({ x: 0, y: 0 });
     const [documentVisible, setDocumentVisible] = useState(() => document.visibilityState !== 'hidden');
+    const pulsesPaused = pauseAnimation || !documentVisible;
     const [hoveredAttackMarker, setHoveredAttackMarker] = useState<AttackMarker | null>(null);
 
     useEffect(() => {
@@ -649,7 +652,7 @@ export function WorldMapCard({
 
     useEffect(() => {
         const pulseCanvas = attackMarkerPulsesCanvasRef.current;
-        if (!pulseCanvas || !documentVisible || attackMarkers.length === 0) return;
+        if (!pulseCanvas || pulsesPaused || attackMarkers.length === 0) return;
 
         const markerOrder = attackMarkers.map((_, index) => index);
         const shuffleMarkerOrder = () => {
@@ -730,7 +733,7 @@ export function WorldMapCard({
                 ),
             );
         };
-    }, [attackMarkers, documentVisible]);
+    }, [attackMarkers, pulsesPaused]);
 
     const updateHoveredAttackMarker = useCallback((clientX: number, clientY: number) => {
         const overlay = attackMarkerOverlayRef.current;
@@ -1027,7 +1030,7 @@ export function WorldMapCard({
                         {animationEnabled && attackMarkers.length > 0 && (
                             <div
                                 ref={attackMarkerOverlayRef}
-                                className={`pointer-events-none absolute inset-0 z-[1] overflow-hidden ${documentVisible ? '' : 'world-map-attack-markers-paused'}`}
+                                className={`pointer-events-none absolute inset-0 z-[1] overflow-hidden ${pulsesPaused ? 'world-map-attack-markers-paused' : ''}`}
                                 aria-hidden="true"
                                 data-testid="world-map-attack-markers"
                                 data-marker-count={attackMarkers.length}

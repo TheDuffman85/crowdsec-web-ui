@@ -663,7 +663,7 @@ export function Dashboard() {
     useRecentFilter(searchParams.get('q') ?? '', 'dashboard', quickFiltersOpen);
     const { language, t } = useI18n();
     const { formatDate, formatTime } = useDateTime();
-    const { refreshSignal } = useRefresh();
+    const { refreshSignal, isSyncing } = useRefresh();
     const [initialLoading, setInitialLoading] = useState(true);
     const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
     const [dashboardStatsPending, setDashboardStatsPending] = useState(false);
@@ -1650,7 +1650,7 @@ export function Dashboard() {
                     </div>
                     <div className="pointer-events-none absolute left-0 top-full mt-1 text-sm text-gray-500" aria-live="polite">
                         <span className={`inline-flex items-center gap-2 transition-opacity ${dashboardRefreshing ? 'opacity-100' : 'opacity-0'}`}>
-                            <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
+                            <span className={`h-2 w-2 rounded-full bg-primary-500 ${dashboardRefreshing && !isSyncing ? 'motion-safe:animate-pulse' : ''}`} aria-hidden="true" />
                             {t('common.refreshingDashboard')}
                         </span>
                     </div>
@@ -1697,6 +1697,7 @@ export function Dashboard() {
                             <WorldMapCard
                                 data={statistics.allCountries}
                                 attackLocations={dashboardData.attackLocations}
+                                pauseAnimation={isSyncing}
                                 onCountrySelect={handleCountrySelect}
                                 selectedCountry={filters.country}
                                 simulationsEnabled={simulationsEnabled}

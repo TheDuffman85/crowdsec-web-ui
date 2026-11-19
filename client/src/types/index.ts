@@ -151,7 +151,8 @@ export interface RefreshContextValue {
   nextRefreshAt: Date | null;
   setIntervalMs: (newIntervalMs: number) => Promise<void>;
   refreshSignal: number;
-  syncStatus: SyncStatus | null;
+  /** Whether a historical sync is running. The full status is in useSyncStatus(). */
+  isSyncing: boolean;
   refreshNow?: (mode: ManualRefreshMode) => Promise<void>;
 }
 

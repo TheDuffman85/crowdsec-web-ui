@@ -97,7 +97,7 @@ function AllowlistProgress({ progress }: { progress?: AllowlistSyncProgress }) {
     return (
         <p className={`mt-1 flex min-w-0 items-center gap-1.5 text-xs ${tone}`} title={message}>
             {progress.state === 'syncing'
-                ? <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                ? <RefreshCw className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 : progress.state === 'complete'
                     ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden="true" />
                     : <ListChecks className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
@@ -121,12 +121,8 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
     return createPortal(
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
             <div className={`bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 ${instances ? 'max-w-lg' : 'max-w-md'} w-full mx-4 text-center`}>
-                {/* Icon with animation */}
-                <div className="relative inline-flex items-center justify-center mb-6">
-                    <div className="absolute inset-0 animate-ping bg-blue-500/20 rounded-full" style={{ animationDuration: '2s' }}></div>
-                    <div className="relative bg-gradient-to-br from-blue-500 to-indigo-600 p-4 rounded-full">
-                        <Database className="w-8 h-8 text-white" />
-                    </div>
+                <div className="inline-flex mb-6 bg-gradient-to-br from-blue-500 to-indigo-600 p-4 rounded-full">
+                    <Database className="w-8 h-8 text-white" />
                 </div>
 
                 {/* Title */}
@@ -140,22 +136,15 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                 {/* Progress bar */}
                 <div className="relative w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mb-3">
                     <div
-                        className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-500 ease-out"
+                        className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-[width] duration-200 ease-out motion-reduce:transition-none"
                         style={{ width: `${progress}%` }}
-                    />
-                    <div
-                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"
-                        style={{
-                            backgroundSize: '200% 100%',
-                            animation: 'shimmer 1.5s infinite'
-                        }}
                     />
                 </div>
 
                 {/* Progress text */}
                 <div className="flex justify-between items-start gap-3 text-sm" aria-live="polite">
                     <span className="min-w-0 flex-1 text-left text-gray-500 dark:text-gray-400 flex items-start gap-2">
-                        <RefreshCw className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
+                        <RefreshCw className="w-4 h-4 mt-0.5 shrink-0 motion-safe:animate-spin" aria-hidden="true" />
                         {statusMessage}
                     </span>
                     <span className="shrink-0 font-semibold text-blue-600 dark:text-blue-400">
@@ -188,7 +177,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                                             ) : complete ? (
                                                 <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
                                             ) : instance.isSyncing ? (
-                                                <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
+                                                <RefreshCw className="h-4 w-4 shrink-0 text-blue-500" />
                                             ) : null}
                                             <span className="w-10 shrink-0 text-right text-xs font-semibold text-gray-600 dark:text-gray-300">
                                                 {instance.progress}%
@@ -196,7 +185,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                                         </div>
                                         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                                             <div
-                                                className={`h-full rounded-full transition-all duration-500 ${failed ? 'bg-red-500' : complete ? 'bg-emerald-500' : 'bg-blue-500'}`}
+                                                className={`h-full rounded-full transition-[width] duration-200 ease-out motion-reduce:transition-none ${failed ? 'bg-red-500' : complete ? 'bg-emerald-500' : 'bg-blue-500'}`}
                                                 style={{ width: `${instance.progress}%` }}
                                             />
                                         </div>
@@ -211,13 +200,6 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                     </div>
                 )}
             </div>
-
-            <style>{`
-                @keyframes shimmer {
-                    0% { transform: translateX(-100%); }
-                    100% { transform: translateX(100%); }
-                }
-            `}</style>
         </div>,
         document.body
     );

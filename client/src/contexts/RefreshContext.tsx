@@ -1,9 +1,20 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { fetchConfig } from '../lib/api';
 import { apiUrl } from '../lib/basePath';
 import { sessionFetch } from '../lib/sessionFetch';
 import type { ManualRefreshMode, RefreshContextValue, SyncStatus, WithChildren } from '../types';
 import { RefreshContext } from './refresh-context';
+import { SyncStatusContext } from './sync-status-context';
+
+function sameTime(a: Date | null, b: Date | null): boolean {
+    return a === b || (a !== null && b !== null && a.getTime() === b.getTime());
+}
+
+// Polls return a fresh object every time; keep the previous one when nothing
+// changed so an unchanged poll does not re-render the app.
+function sameSyncStatus(a: SyncStatus | null, b: SyncStatus | null): boolean {
+    return a === b || (a !== null && b !== null && JSON.stringify(a) === JSON.stringify(b));
+}
 
 export function RefreshProvider({ children }: WithChildren) {
     const [intervalMs, setIntervalMsState] = useState(0);
@@ -25,15 +36,19 @@ export function RefreshProvider({ children }: WithChildren) {
                     setIntervalMsState(config.refresh_interval);
                 }
                 if (config.sync_status !== undefined) {
-                    setSyncStatus(config.sync_status);
+                    const nextSyncStatus = config.sync_status;
+                    setSyncStatus((current) => sameSyncStatus(current, nextSyncStatus) ? current : nextSyncStatus);
                 }
                 if (config.cache_last_update) {
                     const cacheUpdatedAt = new Date(config.cache_last_update);
-                    if (Number.isFinite(cacheUpdatedAt.getTime())) setLastUpdated(cacheUpdatedAt);
+                    if (Number.isFinite(cacheUpdatedAt.getTime())) {
+                        setLastUpdated((current) => sameTime(current, cacheUpdatedAt) ? current : cacheUpdatedAt);
+                    }
                 }
                 if (config.next_refresh_at !== undefined) {
-                    const nextRefresh = config.next_refresh_at ? new Date(config.next_refresh_at) : null;
-                    setNextRefreshAt(nextRefresh && Number.isFinite(nextRefresh.getTime()) ? nextRefresh : null);
+                    const parsed = config.next_refresh_at ? new Date(config.next_refresh_at) : null;
+                    const nextRefresh = parsed && Number.isFinite(parsed.getTime()) ? parsed : null;
+                    setNextRefreshAt((current) => sameTime(current, nextRefresh) ? current : nextRefresh);
                 }
             }
         } catch (err) {
@@ -76,7 +91,7 @@ export function RefreshProvider({ children }: WithChildren) {
     }, [syncStatus?.isSyncing]);
 
     // Function to update interval via API
-    const setIntervalMs = async (newIntervalMs: number): Promise<void> => {
+    const setIntervalMs = useCallback(async (newIntervalMs: number): Promise<void> => {
         // Convert milliseconds back to interval name
         let intervalName = '0';
         if (newIntervalMs === 5000) intervalName = '5s';
@@ -108,9 +123,9 @@ export function RefreshProvider({ children }: WithChildren) {
             console.error('Error updating refresh interval:', error);
             throw error;
         }
-    };
+    }, []);
 
-    const refreshNow = async (mode: ManualRefreshMode): Promise<void> => {
+    const refreshNow = useCallback(async (mode: ManualRefreshMode): Promise<void> => {
         if (mode === 'full') {
             const startedAt = new Date().toISOString();
             setSyncStatus((current) => ({
@@ -147,7 +162,7 @@ export function RefreshProvider({ children }: WithChildren) {
         } finally {
             await updateConfig();
         }
-    };
+    }, [updateConfig]);
 
     // Keep a bounded polling fallback even while push is connected. A WebSocket
     // can remain open while an intermediary silently drops individual messages;
@@ -278,18 +293,23 @@ export function RefreshProvider({ children }: WithChildren) {
         };
     }, []);
 
+    const isSyncing = Boolean(syncStatus?.isSyncing);
+    const value = useMemo<RefreshContextValue>(() => ({
+        lastUpdated,
+        setLastUpdated,
+        intervalMs,
+        nextRefreshAt,
+        setIntervalMs,
+        refreshSignal,
+        isSyncing,
+        refreshNow,
+    }), [lastUpdated, intervalMs, nextRefreshAt, setIntervalMs, refreshSignal, isSyncing, refreshNow]);
+
     return (
-        <RefreshContext.Provider value={{
-            lastUpdated,
-            setLastUpdated,
-            intervalMs,
-            nextRefreshAt,
-            setIntervalMs,
-            refreshSignal,
-            syncStatus,
-            refreshNow,
-        }}>
-            {children}
+        <RefreshContext.Provider value={value}>
+            <SyncStatusContext.Provider value={syncStatus}>
+                {children}
+            </SyncStatusContext.Provider>
         </RefreshContext.Provider>
     );
 }

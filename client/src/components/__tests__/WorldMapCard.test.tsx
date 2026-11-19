@@ -473,6 +473,39 @@ describe('WorldMapCard', () => {
     await waitFor(() => expect(overlay).not.toHaveClass('world-map-attack-markers-paused'));
   });
 
+  test('stops drawing map pulses during sync and resumes on the same map', async () => {
+    const props = {
+      data: [{ label: 'Germany', countryCode: 'DE', count: 2 }],
+      attackLocations: [{ latitude: 52.52, longitude: 13.405, count: 2, liveCount: 2, simulatedCount: 0 }],
+      onCountrySelect: vi.fn(),
+      selectedCountry: null,
+    };
+    const { rerender, unmount } = render(<WorldMapCard {...props} pauseAnimation />);
+    const canvas = await screen.findByTestId('world-map-attack-marker-pulses');
+    vi.useFakeTimers();
+    try {
+      rerender(<WorldMapCard {...props} />);
+      canvasContext.clearRect.mockClear();
+      vi.advanceTimersByTime(150);
+      expect(canvasContext.clearRect).toHaveBeenCalled();
+
+      rerender(<WorldMapCard {...props} pauseAnimation />);
+      canvasContext.clearRect.mockClear();
+      vi.advanceTimersByTime(1000);
+      expect(canvasContext.clearRect).not.toHaveBeenCalled();
+
+      rerender(<WorldMapCard {...props} />);
+      canvasContext.clearRect.mockClear();
+      vi.advanceTimersByTime(150);
+      expect(canvasContext.clearRect).toHaveBeenCalled();
+      expect(screen.getByTestId('world-map-attack-marker-pulses')).toBe(canvas);
+      expect(choroplethUnmountSpy).not.toHaveBeenCalled();
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  });
+
   test('enables attack markers by default and persists the browser toggle', async () => {
     const { unmount } = render(
       <WorldMapCard data={[]} onCountrySelect={vi.fn()} selectedCountry={null} />,

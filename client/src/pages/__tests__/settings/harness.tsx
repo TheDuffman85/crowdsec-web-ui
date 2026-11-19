@@ -209,7 +209,7 @@ vi.mock('../../../lib/i18n', () => ({
       lastUpdated: null,
       setLastUpdated: vi.fn(),
       refreshSignal: 0,
-      syncStatus: null,
+      isSyncing: false,
     });
     vi.mocked(fetchConfig).mockResolvedValue({
       lookback_period: '1h',

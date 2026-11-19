@@ -83,7 +83,7 @@ function compareReleaseVersions(left: string, right: string): number {
 
 export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, theme, setTheme }: SidebarProps) {
     const { authEnabled, logout, user } = useAuth();
-    const { lastUpdated, refreshSignal, syncStatus, refreshNow } = useRefresh();
+    const { lastUpdated, refreshSignal, isSyncing, refreshNow } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
     const { t } = useI18n();
     const { appName } = useBranding();
@@ -296,7 +296,7 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
         }
     };
 
-    const refreshBusy = refreshing || Boolean(syncStatus?.isSyncing);
+    const refreshBusy = refreshing || isSyncing;
 
     const formatLastUpdatedTime = (date: Date | null) => {
         if (!date) return "";
@@ -463,7 +463,7 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
                                 aria-label={t('components.sidebar.refresh.deltaNow')}
                                 title={t('components.sidebar.refresh.deltaNow')}
                             >
-                                <RefreshCw size={18} className={refreshBusy ? 'animate-spin' : undefined} />
+                                <RefreshCw size={18} className={refreshing && !isSyncing ? 'motion-safe:animate-spin' : undefined} />
                             </button>
                             <button
                                 type="button"

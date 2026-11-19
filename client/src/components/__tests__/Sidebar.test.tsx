@@ -18,7 +18,7 @@ vi.mock('../../contexts/useRefresh', () => ({
     setIntervalMs: vi.fn(),
     lastUpdated: null,
     refreshSignal: 0,
-    syncStatus: null,
+    isSyncing: false,
     refreshNow: refreshNowMock,
   }),
 }));

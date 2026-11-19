@@ -10,7 +10,7 @@ vi.mock('../contexts/RefreshContext', () => ({
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
-    syncStatus: null,
+    isSyncing: false,
   }),
 }));
 
