@@ -27,7 +27,7 @@ const adminAuth = {
 const users = [
   { id: 1, username: 'admin', role: 'admin', source: 'local', disabled: false, passwordChangeRequired: false, totpEnabled: false, passkeyCount: 0, createdAt: '2026-01-01T00:00:00.000Z', current: true },
   { id: 2, username: 'viewer', role: 'read-only', source: 'local', disabled: false, passwordChangeRequired: true, totpEnabled: true, passkeyCount: 2, createdAt: '2026-01-02T00:00:00.000Z', current: false },
-  { id: 3, username: 'sso-user', role: 'admin', source: 'oidc', disabled: false, passwordChangeRequired: false, totpEnabled: false, passkeyCount: 0, createdAt: '2026-01-03T00:00:00.000Z', current: false },
+  { id: 3, username: 'sso-user', role: 'admin', source: 'oidc', disabled: false, passwordChangeRequired: false, totpEnabled: false, passkeyCount: 0, createdAt: '2026-01-03T00:00:00.000Z', lastLoginAt: '2026-01-05T08:30:00.000Z', lastLoginMethod: 'oidc', current: false },
 ];
 
 function mockAdminConfig(canManage = true) {
@@ -117,6 +117,8 @@ describe('Settings users', () => {
     expect(within(oidc).getByText('pages.settings.userSourceOidc')).toBeInTheDocument();
     expect(within(oidc).queryByRole('combobox')).not.toBeInTheDocument();
     expect(within(oidc).getByTestId('settings-user-role-sso-user')).toHaveTextContent('pages.settings.userRoleAdmin');
+    expect(within(oidc).getByTestId('settings-user-last-login-sso-user')).toHaveTextContent('pages.settings.userLastLogin');
+    expect(within(viewer).getByTestId('settings-user-last-login-viewer')).toHaveTextContent('pages.settings.userLastLoginNever');
     await user.click(within(oidc).getByRole('button', { name: 'pages.settings.userActionsFor' }));
     expect(within(viewer).queryByRole('menu')).not.toBeInTheDocument();
     menu = within(oidc).getByRole('menu');

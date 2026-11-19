@@ -56,6 +56,22 @@ describe('CrowdsecDatabase auth and migrations', () => {
     db.close();
   });
 
+  test('records the last sign-in without touching updated_at', () => {
+    const db = createTestDatabase();
+    const userId = db.createAuthUser({ username: 'operator', passwordHash: 'hash', role: 'admin', authProvider: 'password' });
+    const created = db.getAuthUserById(userId)!;
+    expect(created).toMatchObject({ last_login_at: null, last_login_method: null });
+
+    db.recordAuthUserLogin(userId, 'passkey');
+    expect(db.getAuthUserById(userId)).toMatchObject({
+      last_login_at: expect.any(String),
+      last_login_method: 'passkey',
+      updated_at: created.updated_at,
+    });
+
+    db.close();
+  });
+
   test('migrates legacy OIDC users in place on their next login', () => {
     const db = createTestDatabase();
     const legacyId = db.createAuthUser({

@@ -258,6 +258,8 @@ describe('CrowdsecDatabase storage layout', () => {
       oidc_role: null,
       oidc_session_version: 0,
       oidc_auto_link_blocked: 0,
+      last_login_at: null,
+      last_login_method: null,
     });
     expect(db.countActiveAdmins()).toBe(1);
     db.close();

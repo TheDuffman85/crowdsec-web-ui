@@ -284,10 +284,16 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 
 ### Audit log
 
-User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.oidc-link`, `user.oidc-unlink`, `user.delete`) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
+User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.oidc-link`, `user.oidc-unlink`, `user.delete`) are recorded as single `[audit]` lines in the application log, as are sign-ins (`user.login`). Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
 
 ```
 [audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","scenario":"manual/web-ui","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
+```
+
+`user.login` entries name the account that signed in, or the username that was tried, with the `method` (`password`, `passkey`, or `oidc`). Failed sign-ins have the outcome `failure` and a `reason`: `invalid-credentials`, `invalid-totp`, `throttled`, `disabled`, `verification-failed` (passkey), `oidc-only` (a passkey of an SSO-only account), `denied` (no configured OIDC group matched), or `failed` (the OIDC sign-in could not be completed). Asking for the authenticator code is not a failure, and session refreshes are not sign-ins:
+
+```
+[audit] {"time":"2026-08-17T01:29:12.000Z","user":"tommy","role":"admin","action":"user.login","outcome":"success","method":"oidc","target_user_id":3}
 ```
 
 Outcomes are `success`, `partial`, `failure`, or `queued`. Alert deletions handled by the persistent deletion queue are recorded as `queued`, because CrowdSec may complete them after the HTTP request returns. Multi-target actions include `target_results` or `instance_results` so successful, failed, and queued targets remain distinguishable. The Alerts page sends large deletions in batches of 2,000 alerts, and each batch has its own audit entry.
@@ -603,6 +609,8 @@ Administrators manage accounts under **Settings → Users**:
 - Reset a local user's TOTP and passkeys, for example after a lost phone. The user's sessions end and both can be set up again.
 - Delete users. OIDC users are listed after their first sign-in; their role comes from the identity provider, so they can only be deleted. A deleted OIDC user is added again on the next sign-in if the identity provider still allows it. An OIDC user the group settings deny is shown as read-only and no longer counts as an administrator until an allowed sign-in restores the role.
 - Remove the SSO link of an account shown as **Local + SSO**. These accounts are managed like local accounts, and the local sign-in stays.
+
+Each user shows the time and method (password, passkey, or SSO) of the last completed sign-in. Sign-ins from before this was recorded are not known, so these accounts show no sign-in until the next one.
 
 Administrators cannot change, disable, or delete their own account there, and the last active administrator cannot be demoted, disabled, or deleted. While passkeys are the only sign-in method (password login disabled, no OIDC), changes that would leave no enabled administrator with a passkey are rejected. A user with a pending password change cannot register passkeys or set up TOTP until the password is changed. Changes are written to the [audit log](#audit-log).
 

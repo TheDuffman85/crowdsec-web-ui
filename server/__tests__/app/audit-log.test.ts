@@ -42,6 +42,12 @@ describe('audit log', () => {
       expect(response.status).toBe(200);
 
       expect(auditEntries(logSpy)).toEqual([expect.objectContaining({
+        user: 'tommy',
+        role: 'admin',
+        action: 'user.login',
+        method: 'password',
+        outcome: 'success',
+      }), expect.objectContaining({
         time: expect.any(String),
         user: 'tommy',
         role: 'admin',
@@ -55,6 +61,41 @@ describe('audit log', () => {
         instance_results: [{ instance_id: 'default', instance: 'CrowdSec', outcome: 'success' }],
         outcome: 'success',
       })]);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      logSpy.mockRestore();
+      destroyTempDir();
+    }
+  });
+
+  test('records password sign-ins and failed attempts', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { controller, database } = createController({ env: { AUTH_ENABLED: 'true' } });
+    const login = (username: string, password: string) => controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    }));
+    try {
+      const setupResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'tommy', password: 'Password1' }),
+      }));
+      expect(setupResponse.status).toBe(200);
+      const userId = database.getAuthUserByUsername('tommy')!.id;
+
+      expect((await login('tommy', 'Password1')).status).toBe(200);
+      expect((await login('tommy', 'Wrong-password1')).status).toBe(401);
+      expect((await login('nobody', 'Password1')).status).toBe(401);
+
+      expect(auditEntries(logSpy)).toEqual([
+        expect.objectContaining({ action: 'user.login', user: 'tommy', role: 'admin', method: 'password', target_user_id: userId, outcome: 'success' }),
+        expect.objectContaining({ action: 'user.login', user: 'tommy', role: 'admin', method: 'password', target_user_id: userId, outcome: 'success' }),
+        expect.objectContaining({ action: 'user.login', user: 'tommy', method: 'password', reason: 'invalid-credentials', outcome: 'failure' }),
+        expect.objectContaining({ action: 'user.login', user: 'nobody', method: 'password', reason: 'invalid-credentials', outcome: 'failure' }),
+      ]);
     } finally {
       controller.stopBackgroundTasks();
       database.close();

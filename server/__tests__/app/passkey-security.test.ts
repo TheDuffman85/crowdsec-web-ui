@@ -38,13 +38,24 @@ function setup() {
 }
 
 test('accepts an issued assertion once, rejecting replay even with a zero counter', async () => {
-  const { request, assertion, options } = setup();
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  const { database, userId, request, assertion, options } = setup();
   const issued = await options();
   const body = assertion(issued.challenge);
   const response = await request('/webauthn/login/verify', 'POST', body, issued.cookie);
   expect(response.status).toBe(200);
   expect(response.headers.get('set-cookie')).toContain('crowdsec_web_ui_session=');
+  expect(database.getAuthUserById(userId)).toMatchObject({ last_login_method: 'passkey', last_login_at: expect.any(String) });
   expect((await request('/webauthn/login/verify', 'POST', body, issued.cookie)).status).toBe(400);
+
+  const audits = log.mock.calls
+    .map((call) => String(call[0]))
+    .filter((line) => line.startsWith('[audit] '))
+    .map((line) => JSON.parse(line.slice('[audit] '.length)) as Record<string, unknown>);
+  expect(audits).toEqual([
+    expect.objectContaining({ action: 'user.login', user: 'admin', method: 'passkey', target_user_id: userId, outcome: 'success' }),
+  ]);
 });
 
 test('rejects caller-selected and expired challenges', async () => {

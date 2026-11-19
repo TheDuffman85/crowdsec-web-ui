@@ -346,3 +346,34 @@ test('password login cannot be disabled while only non-administrators have passk
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({ error: 'Register a passkey for an administrator or configure OIDC before disabling password login' });
 });
+
+test('the user list shows the last completed sign-in and its method', async () => {
+  const { controller, database } = createController({ env: { AUTH_ENABLED: 'true' } });
+  const adminCookie = await setupAdmin(controller);
+  await controller.fetch(jsonRequest('/users', 'POST', {
+    username: 'operator',
+    password: 'Initial123',
+    role: 'read-only',
+    requirePasswordChange: false,
+  }, adminCookie));
+
+  const before = await listUsers(controller, adminCookie);
+  expect(before.find((user) => user.username === 'admin')).toMatchObject({ lastLoginAt: expect.any(String), lastLoginMethod: 'password' });
+  expect(before.find((user) => user.username === 'operator')).toMatchObject({ lastLoginAt: null, lastLoginMethod: null });
+
+  // A failed attempt is not a sign-in.
+  expect((await login(controller, 'operator', 'Wrong123')).status).toBe(401);
+  expect(database.getAuthUserByUsername('operator')?.last_login_at).toBeNull();
+
+  const updatedAt = database.getAuthUserByUsername('operator')!.updated_at;
+  expect((await login(controller, 'operator', 'Initial123')).status).toBe(200);
+  const operator = database.getAuthUserByUsername('operator')!;
+  expect(operator).toMatchObject({ last_login_method: 'password', last_login_at: expect.any(String) });
+  // Signing in does not change the account.
+  expect(operator.updated_at).toBe(updatedAt);
+
+  // A disabled account cannot sign in, so its last sign-in stays as it was.
+  await controller.fetch(jsonRequest(`/users/${operator.id}`, 'PATCH', { disabled: true }, adminCookie));
+  expect((await login(controller, 'operator', 'Initial123')).status).toBe(403);
+  expect(database.getAuthUserByUsername('operator')?.last_login_at).toBe(operator.last_login_at);
+});

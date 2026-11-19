@@ -30,6 +30,9 @@ export interface ManagedUser {
         linkedAt: string;
     } | null;
     createdAt: string;
+    /** The most recent completed sign-in; null when none was recorded. */
+    lastLoginAt: string | null;
+    lastLoginMethod: 'password' | 'passkey' | 'oidc' | null;
     current: boolean;
 }
 
@@ -62,7 +65,7 @@ async function readError(response: Response, fallback: string): Promise<string> 
 
 export function UsersSettings({ canManage, inputClass, labelClass, showToast }: UsersSettingsProps) {
     const { t } = useI18n();
-    const { formatDate } = useDateTime();
+    const { formatDate, formatDateTime } = useDateTime();
     const [users, setUsers] = useState<ManagedUser[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [busyUserId, setBusyUserId] = useState<number | null>(null);
@@ -322,6 +325,14 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
                                         {local
                                             ? t("pages.settings.userCreatedAt", { date: formatDate(user.createdAt) })
                                             : t("pages.settings.userOidcHint", { date: formatDate(user.createdAt) })}
+                                    </p>
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400" data-testid={`settings-user-last-login-${user.username}`}>
+                                        {user.lastLoginAt
+                                            ? t("pages.settings.userLastLogin", {
+                                                date: formatDateTime(user.lastLoginAt),
+                                                method: t(`pages.settings.userLoginMethod.${user.lastLoginMethod ?? 'password'}`),
+                                            })
+                                            : t("pages.settings.userLastLoginNever")}
                                     </p>
                                     {user.oidcLink && (
                                         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">

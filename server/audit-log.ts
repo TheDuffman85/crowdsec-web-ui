@@ -8,6 +8,7 @@ export type AuditAction =
   | 'decision.delete'
   | 'alert.delete'
   | 'cleanup.by-ip'
+  | 'user.login'
   | 'user.create'
   | 'user.update'
   | 'user.password-reset'

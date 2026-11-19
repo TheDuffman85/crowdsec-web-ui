@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi, type MockInstance } from 'vitest';
 import { SignJWT, exportJWK, generateKeyPair, type JWK, type JWTPayload } from 'jose';
 import { generate, generateSecret } from 'otplib';
 import { hashPassword } from '../../app-auth';
@@ -987,6 +987,76 @@ describe('linking local and SSO sign-in', () => {
       const refused = await managed.request('/api/auth/settings', { method: 'PUT', body: { oidcAutoLinkUsername: false } });
       expect(refused.status).toBe(409);
       expect(await refused.json()).toMatchObject({ code: 'MANAGED_BY_CONFIG' });
+    });
+  });
+
+  describe('recording sign-ins', () => {
+    function loginAudits(log: MockInstance): Array<Record<string, unknown>> {
+      return log.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.startsWith('[audit] '))
+        .map((line) => JSON.parse(line.slice('[audit] '.length)) as Record<string, unknown>)
+        .filter((entry) => entry.action === 'user.login');
+    }
+
+    test('an SSO sign-in is the last sign-in of the account and is audited', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const response = await ssoSignIn(browser());
+      expect(response.headers.get('location')).toBe(BASE);
+
+      const user = database.getAuthUserByOidcIdentity(ISSUER, 'alice-sub')!;
+      expect(user).toMatchObject({ last_login_method: 'oidc', last_login_at: expect.any(String) });
+      expect(loginAudits(log)).toEqual([expect.objectContaining({
+        user: user.username,
+        role: 'admin',
+        method: 'oidc',
+        target_user_id: user.id,
+        outcome: 'success',
+      })]);
+    });
+
+    test('a linked account records SSO sign-ins with the SSO role, and linking is not a sign-in', async () => {
+      await linkedAdmin(identity({ groups: ['viewers'] }));
+      const linked = database.getAuthUserById(adminId)!;
+      expect(linked.last_login_method).toBe('password');
+
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await ssoSignIn(browser(), identity({ groups: ['viewers'] }));
+      expect(database.getAuthUserById(adminId)).toMatchObject({ last_login_method: 'oidc' });
+      expect(loginAudits(log)).toEqual([expect.objectContaining({ user: 'admin', role: 'read-only', method: 'oidc', outcome: 'success' })]);
+    });
+
+    test('a denied SSO sign-in records no sign-in and audits the failure', async () => {
+      addSsoAccount();
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const response = await ssoSignIn(browser(), identity({ groups: ['nobody'] }));
+      expect(response.headers.get('location')).toBe(DENIED_LOGIN_URL);
+
+      expect(database.getAuthUserByOidcIdentity(ISSUER, 'alice-sub')?.last_login_at).toBeNull();
+      expect(loginAudits(log)).toEqual([expect.objectContaining({
+        user: 'alice',
+        method: 'oidc',
+        reason: 'denied',
+        issuer: ISSUER,
+        outcome: 'failure',
+      })]);
+    });
+
+    test('a disabled SSO account gets no session and no recorded sign-in', async () => {
+      const userId = addSsoAccount(true);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const client = browser();
+      const response = await ssoSignIn(client);
+      expect(response.headers.get('location')).toBe(DENIED_LOGIN_URL);
+      expect(client.cookies.has('crowdsec_web_ui_session')).toBe(false);
+
+      expect(database.getAuthUserById(userId)?.last_login_at).toBeNull();
+      expect(loginAudits(log)).toEqual([expect.objectContaining({
+        method: 'oidc',
+        reason: 'disabled',
+        target_user_id: userId,
+        outcome: 'failure',
+      })]);
     });
   });
 });

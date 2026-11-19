@@ -347,11 +347,15 @@ export interface AuthUserRow {
   oidc_session_version: number;
   // Keeps automatic linking by username away from this account.
   oidc_auto_link_blocked: number;
+  // The most recent completed sign-in, and the method it used. Session refreshes do not count.
+  last_login_at: string | null;
+  last_login_method: AuthUserLoginMethod | null;
   created_at: string;
   updated_at: string;
 }
 
 export type OidcLinkMethod = 'verified' | 'username';
+export type AuthUserLoginMethod = 'password' | 'passkey' | 'oidc';
 
 export interface AuthUserListRow extends AuthUserRow {
   passkey_count: number;
@@ -2255,6 +2259,12 @@ export class CrowdsecDatabase {
       .run(role, new Date().toISOString(), id).changes > 0;
   }
 
+  /** Notes a completed sign-in. It is not a change to the account, so `updated_at` stays as it is. */
+  recordAuthUserLogin(id: number, method: AuthUserLoginMethod): void {
+    this.db.prepare('UPDATE auth_users SET last_login_at = ?, last_login_method = ? WHERE id = ?')
+      .run(new Date().toISOString(), method, id);
+  }
+
   /** Disabling an account also ends its sessions. */
   setAuthUserDisabled(id: number, disabled: boolean): boolean {
     return this.db.prepare(`
@@ -3260,6 +3270,8 @@ function createStateSchema(db: Database, schema: string, fresh: boolean): void {
       oidc_role TEXT,
       oidc_session_version INTEGER NOT NULL DEFAULT 0,
       oidc_auto_link_blocked INTEGER NOT NULL DEFAULT 0,
+      last_login_at TEXT,
+      last_login_method TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -3409,7 +3421,7 @@ function createStateSchema(db: Database, schema: string, fresh: boolean): void {
       db.exec(`ALTER TABLE ${schema}.auth_users ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
     }
   }
-  for (const column of ['oidc_linked_at', 'oidc_link_method', 'oidc_username', 'oidc_role']) {
+  for (const column of ['oidc_linked_at', 'oidc_link_method', 'oidc_username', 'oidc_role', 'last_login_at', 'last_login_method']) {
     if (!authUserColumns.includes(column)) {
       db.exec(`ALTER TABLE ${schema}.auth_users ADD COLUMN ${column} TEXT`);
     }

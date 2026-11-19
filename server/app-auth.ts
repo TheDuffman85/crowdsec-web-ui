@@ -1442,12 +1442,30 @@ export function createDashboardAuth(options: {
       // The SSO identity of a local account that can use both sign-in methods.
       oidcLink: summarizeOidcLink(user),
       createdAt: user.created_at,
+      lastLoginAt: user.last_login_at,
+      lastLoginMethod: user.last_login_method,
       current: user.id === session.userId,
     };
   }
 
   function recordUserAudit(context: HonoContext, action: AuditEvent['action'], user: Pick<AuthUserRow, 'id' | 'username'>, details: Record<string, unknown> = {}): void {
     options.recordAudit?.(context, { action, outcome: 'success', target_user_id: user.id, target_username: user.username, ...details });
+  }
+
+  // The request of a sign-in carries no session yet, so the account is named in the entry itself.
+  function recordSignInAudit(context: HonoContext, user: AuthUserRow, method: AuthMethod): void {
+    const role = method === 'oidc' && isLinkedAccount(user) ? normalizeLinkedSsoRole(user.oidc_role) : user.role;
+    options.recordAudit?.(context, { action: 'user.login', outcome: 'success', user: user.username, role, method, target_user_id: user.id });
+  }
+
+  function recordSignInFailureAudit(
+    context: HonoContext,
+    username: string | undefined,
+    method: AuthMethod,
+    reason: 'invalid-credentials' | 'invalid-totp' | 'disabled' | 'throttled' | 'verification-failed' | 'oidc-only' | 'denied' | 'failed',
+    details: Record<string, unknown> = {},
+  ): void {
+    options.recordAudit?.(context, { action: 'user.login', outcome: 'failure', user: username || 'unknown', method, reason, ...details });
   }
 
   function registerUserRoutes(auth: Hono): void {
@@ -1675,10 +1693,12 @@ export function createDashboardAuth(options: {
           // Automatic linking only covers accounts that existed before it was turned on.
           oidcAutoLinkBlocked: getEffectiveConfig().oidcAutoLinkUsername,
         });
+        database.recordAuthUserLogin(userId, 'password');
         return database.getAuthUserById(userId)!;
       });
       if (!user) return context.json({ error: 'Setup already completed' }, 400);
       createSession(context, user, 'password');
+      recordSignInAudit(context, user, 'password');
       return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
     });
 
@@ -1693,20 +1713,38 @@ export function createDashboardAuth(options: {
       if (username.length > 254 || password.length > 1024) return context.json({ error: 'Invalid credentials' }, 401);
       const user = database.getAuthUserByUsername(username);
       const passwordCheck = await verifyAccountPassword(username, password, user?.password_hash);
-      if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
-      if (!user || !passwordCheck.valid) return context.json({ error: 'Invalid credentials' }, 401);
-      if (user.disabled) return context.json({ error: 'This account is disabled' }, 403);
+      if (passwordCheck.retryAfter !== null) {
+        recordSignInFailureAudit(context, username, 'password', 'throttled');
+        return authThrottleResponse(context, passwordCheck.retryAfter);
+      }
+      if (!user || !passwordCheck.valid) {
+        recordSignInFailureAudit(context, username, 'password', 'invalid-credentials');
+        return context.json({ error: 'Invalid credentials' }, 401);
+      }
+      if (user.disabled) {
+        recordSignInFailureAudit(context, user.username, 'password', 'disabled', { target_user_id: user.id });
+        return context.json({ error: 'This account is disabled' }, 403);
+      }
       const totpSeed = getTotpSeed(user);
       if (totpSeed) {
+        // Asking for the second factor is a step of the sign-in, not a failed attempt.
         if (!totpCode) {
           return context.json({ error: 'Authenticator code required', requiresTotp: true }, 401);
         }
         const totpCheck = await verifyAccountTotp(user.id, totpCode, totpSeed);
-        if (totpCheck.retryAfter !== null) return authThrottleResponse(context, totpCheck.retryAfter);
-        if (!totpCheck.valid) return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
+        if (totpCheck.retryAfter !== null) {
+          recordSignInFailureAudit(context, user.username, 'password', 'throttled', { target_user_id: user.id });
+          return authThrottleResponse(context, totpCheck.retryAfter);
+        }
+        if (!totpCheck.valid) {
+          recordSignInFailureAudit(context, user.username, 'password', 'invalid-totp', { target_user_id: user.id });
+          return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
+        }
       }
 
+      await writeDatabase(() => database.recordAuthUserLogin(user.id, 'password'));
       createSession(context, user, 'password');
+      recordSignInAudit(context, user, 'password');
       return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
     });
 
@@ -2108,8 +2146,12 @@ export function createDashboardAuth(options: {
       if (!body || !challenge || !credential) return context.json({ error: 'Credential not found' }, 400);
       const user = database.getAuthUserById(credential.user_id);
       if (!user) return context.json({ error: 'User not found' }, 400);
-      if (user.disabled) return context.json({ error: 'This account is disabled' }, 403);
+      if (user.disabled) {
+        recordSignInFailureAudit(context, user.username, 'passkey', 'disabled', { target_user_id: user.id });
+        return context.json({ error: 'This account is disabled' }, 403);
+      }
       if (isOidcOnlyAccount(user)) {
+        recordSignInFailureAudit(context, user.username, 'passkey', 'oidc-only', { target_user_id: user.id });
         return context.json({ error: 'This passkey belongs to an OIDC-only account. Sign in with SSO instead.' }, 403);
       }
 
@@ -2120,13 +2162,21 @@ export function createDashboardAuth(options: {
           publicKey: credential.public_key,
           signCount: credential.sign_count,
         });
-        if (!verification.verified) return context.json({ error: 'Verification failed' }, 400);
-        await writeDatabase(() => database.updateWebAuthnCredentialCounter(credential.id, verification.authenticationInfo.newCounter));
+        if (!verification.verified) {
+          recordSignInFailureAudit(context, user.username, 'passkey', 'verification-failed', { target_user_id: user.id });
+          return context.json({ error: 'Verification failed' }, 400);
+        }
+        await writeDatabase(() => {
+          database.updateWebAuthnCredentialCounter(credential.id, verification.authenticationInfo.newCounter);
+          database.recordAuthUserLogin(user.id, 'passkey');
+        });
         createSession(context, user, 'passkey');
+        recordSignInAudit(context, user, 'passkey');
         deleteCookie(context, CHALLENGE_COOKIE, { path: cookiePath });
         return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
       } catch (error) {
         console.error('WebAuthn authentication error:', error);
+        recordSignInFailureAudit(context, user.username, 'passkey', 'verification-failed', { target_user_id: user.id });
         return context.json({ error: 'Verification failed' }, 400);
       }
     });
@@ -2180,6 +2230,7 @@ export function createDashboardAuth(options: {
         const result = await oidc.handleCallback(callbackUrl, { state, nonce, codeVerifier });
         if (!result) {
           if (linkIntent) return context.redirect(oidcLinkOutcomeUrl(context, 'failed'));
+          recordSignInFailureAudit(context, undefined, 'oidc', 'failed');
           return context.redirect(oidcLoginErrorUrl(context, 'failed'));
         }
         // A link in progress must not sign in, create an account or end sessions.
@@ -2188,6 +2239,7 @@ export function createDashboardAuth(options: {
           console.warn(`OIDC user "${result.username}" matched no configured group and was denied sign-in`);
           // End any SSO sessions the identity still holds from before it lost access, and stop counting that access.
           await writeDatabase(() => database.denyOidcIdentity(result.issuer, result.subject));
+          recordSignInFailureAudit(context, result.username, 'oidc', 'denied', { issuer: result.issuer });
           return context.redirect(oidcLoginErrorUrl(context, 'denied'));
         }
         const oidcUser: OidcUserUpsertParams = {
@@ -2199,13 +2251,21 @@ export function createDashboardAuth(options: {
         };
         const { user, autoLinked } = await writeDatabase(() => {
           const linked = autoLinkOidcUser(oidcUser);
-          return { user: linked ?? database.upsertOidcUser(oidcUser), autoLinked: Boolean(linked) };
+          const signedIn = linked ?? database.upsertOidcUser(oidcUser);
+          if (!signedIn.disabled) database.recordAuthUserLogin(signedIn.id, 'oidc');
+          return { user: signedIn, autoLinked: Boolean(linked) };
         });
         if (autoLinked) {
           console.warn(`Linked OIDC user "${result.username}" to local account "${user.username}" by username; ownership was not verified.`);
           recordUserAudit(context, 'user.oidc-link', user, { user: result.username, method: 'username', issuer: result.issuer, oidc_username: result.username });
         }
+        // A disabled account would get a session that every request then rejects.
+        if (user.disabled) {
+          recordSignInFailureAudit(context, user.username, 'oidc', 'disabled', { target_user_id: user.id, issuer: result.issuer });
+          return context.redirect(oidcLoginErrorUrl(context, 'denied'));
+        }
         createSession(context, user, 'oidc', undefined, result.sessionId);
+        recordSignInAudit(context, user, 'oidc');
         // Kept as id_token_hint for RP-initiated logout. Oversized tokens are
         // skipped; logout then falls back to client_id only.
         if (result.idToken && result.idToken.length <= MAX_ID_TOKEN_COOKIE_LENGTH) {
@@ -2223,6 +2283,7 @@ export function createDashboardAuth(options: {
       } catch (error) {
         console.error('OIDC callback error:', error);
         if (linkIntent) return context.redirect(oidcLinkOutcomeUrl(context, 'failed'));
+        recordSignInFailureAudit(context, undefined, 'oidc', 'failed');
         return context.redirect(oidcLoginErrorUrl(context, 'failed'));
       }
     });
