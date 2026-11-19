@@ -63,7 +63,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const t = useCallback(
-    (key: string, values?: TranslationValues) => String(translate(key, values)),
+    (key: string, values?: TranslationValues) => String(translate(key, values ?? {})),
     [translate],
   );
 

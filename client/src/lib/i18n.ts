@@ -146,7 +146,7 @@ const fallbackI18n: I18nContextValue = {
   preference: BROWSER_LANGUAGE_SETTING,
   browserLanguage: 'en',
   setLanguagePreference: () => undefined,
-  t: (key, values) => String(i18next.t(key, values)),
+  t: (key, values) => String(i18next.t(key, values ?? {})),
 };
 
 export const I18nContext = createContext<I18nContextValue>(fallbackI18n);
