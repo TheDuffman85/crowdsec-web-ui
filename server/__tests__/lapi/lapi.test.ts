@@ -327,6 +327,53 @@ describe('LapiClient', () => {
     expect(urls).toContain('http://crowdsec:8080/v1/allowlists/check/192.0.2.1');
   });
 
+  test('changes allowlists and asks whether LAPI accepts changes', async () => {
+    const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+    let probeStatus = 400;
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method || 'GET', ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+        if (url.endsWith('/v1/watchers/login')) return Response.json({ code: 200, token: 'token' });
+        if (url.endsWith('/v1/allowlists/-/items')) return Response.json({ message: 'value is required' }, { status: probeStatus });
+        if (url.endsWith('/items')) return Response.json({ added: 1, decisions_expired: 3 });
+        if (url.includes('/items?')) return Response.json({ removed: 2 });
+        return Response.json({});
+      },
+    });
+    await client.login();
+    calls.length = 0;
+
+    await client.createAllowlist('office', 'Office network');
+    await client.createAllowlist('plain');
+    await expect(client.addAllowlistItems('my list/1', [{ value: '10.0.0.0/8', description: 'VPN' }])).resolves.toEqual({ added: 1, decisions_expired: 3 });
+    await expect(client.removeAllowlistItems('office', ['10.0.0.0/8', '2001:db8::1'])).resolves.toEqual({ removed: 2 });
+    await client.deleteAllowlist('my list/1');
+    expect(calls).toEqual([
+      { url: 'http://crowdsec:8080/v1/allowlists', method: 'POST', body: { name: 'office', description: 'Office network' } },
+      { url: 'http://crowdsec:8080/v1/allowlists', method: 'POST', body: { name: 'plain' } },
+      { url: 'http://crowdsec:8080/v1/allowlists/my%20list%2F1/items', method: 'POST', body: { items: [{ value: '10.0.0.0/8', description: 'VPN' }] } },
+      { url: 'http://crowdsec:8080/v1/allowlists/office/items?value=10.0.0.0%2F8&value=2001%3Adb8%3A%3A1', method: 'DELETE' },
+      { url: 'http://crowdsec:8080/v1/allowlists/my%20list%2F1', method: 'DELETE' },
+    ]);
+
+    // Removing no values changes nothing; only a LAPI with the route that trusts this address calls it a bad request.
+    await expect(client.probeAllowlistManagement()).resolves.toBe('available');
+    probeStatus = 403;
+    await expect(client.probeAllowlistManagement()).resolves.toBe('forbidden');
+    probeStatus = 404;
+    await expect(client.probeAllowlistManagement()).resolves.toBe('unsupported');
+    probeStatus = 405;
+    await expect(client.probeAllowlistManagement()).resolves.toBe('unsupported');
+    probeStatus = 500;
+    await expect(client.probeAllowlistManagement()).rejects.toThrow('HTTP 500');
+    expect(calls.at(-1)).toEqual({ url: 'http://crowdsec:8080/v1/allowlists/-/items', method: 'DELETE' });
+  });
+
   test('sends machine heartbeats with the stored watcher token', async () => {
     const calls: Array<{ url: string; method: string; authorization?: string }> = [];
     const client = new LapiClient({

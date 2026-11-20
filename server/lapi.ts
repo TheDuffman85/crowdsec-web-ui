@@ -512,6 +512,55 @@ export class LapiClient {
     };
   }
 
+  async createAllowlist(name: string, description?: string): Promise<void> {
+    await this.fetchLapi('/v1/allowlists', {
+      method: 'POST',
+      body: { name, ...(description ? { description } : {}) },
+    });
+  }
+
+  async deleteAllowlist(name: string): Promise<void> {
+    await this.fetchLapi(`/v1/allowlists/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  }
+
+  /** Like `cscli allowlists add`: known values are skipped and decisions covered by an allowlist are expired. */
+  async addAllowlistItems(
+    name: string,
+    items: Array<{ value: string; description?: string; expiration?: string }>,
+  ): Promise<{ added: number; decisions_expired: number }> {
+    const response = await this.fetchLapi<{ added?: number; decisions_expired?: number }>(
+      `/v1/allowlists/${encodeURIComponent(name)}/items`,
+      { method: 'POST', body: { items } },
+    );
+    return { added: Number(response.data?.added) || 0, decisions_expired: Number(response.data?.decisions_expired) || 0 };
+  }
+
+  async removeAllowlistItems(name: string, values: string[]): Promise<{ removed: number }> {
+    const params = new URLSearchParams(values.map((value) => ['value', value]));
+    const response = await this.fetchLapi<{ removed?: number }>(
+      `/v1/allowlists/${encodeURIComponent(name)}/items?${params.toString()}`,
+      { method: 'DELETE' },
+    );
+    return { removed: Number(response.data?.removed) || 0 };
+  }
+
+  /**
+   * Asks whether this LAPI accepts allowlist changes without making one: removing no values is
+   * rejected as a bad request, but only by a LAPI that has the route and trusts this address.
+   */
+  async probeAllowlistManagement(): Promise<'available' | 'forbidden' | 'unsupported'> {
+    try {
+      await this.fetchLapi('/v1/allowlists/-/items', { method: 'DELETE' });
+      return 'available';
+    } catch (error) {
+      const status = (error as { status?: number } | null)?.status;
+      if (status === 400) return 'available';
+      if (status === 403) return 'forbidden';
+      if (status === 404 || status === 405) return 'unsupported';
+      throw error;
+    }
+  }
+
   async deleteDecision(decisionId: string | number): Promise<unknown> {
     const response = await this.fetchLapi(`/v1/decisions/${decisionId}`, { method: 'DELETE' });
     return response.data;

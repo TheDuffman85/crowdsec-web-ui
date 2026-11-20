@@ -5,16 +5,19 @@ import type {
   ManualDecisionLookupResponse,
   AlertRecord,
   AlertSessionsResponse,
+  AddAllowlistEntriesRequest,
   AllowlistCheckResponse,
   AllowlistEntriesResponse,
   AllowlistedDecisionError,
   AllowlistedDecisionResponse,
+  AllowlistOperationResponse,
   AllowlistsResponse,
   ApiPermissionError,
   BulkDeleteRequest,
   BulkDeleteResult,
   CleanupByIpRequest,
   ConfigResponse,
+  CreateAllowlistRequest,
   CrowdsecMetricsResponse,
   DashboardStatsResponse,
   DecisionListItem,
@@ -408,6 +411,58 @@ export async function checkAllowlist(value: string, instanceScope: string): Prom
         `/api/allowlists/check?value=${encodeURIComponent(value)}&instance=${encodeURIComponent(instanceScope)}`,
         undefined,
         'Failed to check allowlists',
+    );
+}
+
+/** Resolves with the per-instance results even when some or all instances failed. */
+async function changeAllowlists(path: string, init: RequestInit, defaultMsg: string): Promise<AllowlistOperationResponse> {
+    const res = await sessionFetch(apiUrl(path), init);
+    const payload = await res.json().catch(() => null) as (Partial<AllowlistOperationResponse> & { error?: string }) | null;
+    if (!Array.isArray(payload?.results)) throw new Error(payload?.error || defaultMsg);
+    clearGetCaches();
+    return payload as AllowlistOperationResponse;
+}
+
+const jsonRequest = (method: string, body: unknown): RequestInit => ({
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+});
+
+export async function createAllowlist(instanceScope: string, data: CreateAllowlistRequest): Promise<AllowlistOperationResponse> {
+    return changeAllowlists(
+        `/api/allowlists?instance=${encodeURIComponent(instanceScope)}`,
+        jsonRequest('POST', data),
+        'Failed to create the allowlist',
+    );
+}
+
+export async function deleteAllowlist(name: string, instanceScope: string): Promise<AllowlistOperationResponse> {
+    return changeAllowlists(
+        `/api/allowlists/${encodeURIComponent(name)}?instance=${encodeURIComponent(instanceScope)}`,
+        { method: 'DELETE' },
+        'Failed to delete the allowlist',
+    );
+}
+
+export async function addAllowlistEntries(
+    name: string,
+    instanceScope: string,
+    data: AddAllowlistEntriesRequest,
+): Promise<AllowlistOperationResponse> {
+    return changeAllowlists(
+        `/api/allowlists/${encodeURIComponent(name)}/entries?instance=${encodeURIComponent(instanceScope)}`,
+        jsonRequest('POST', data),
+        'Failed to add the entries',
+    );
+}
+
+export async function removeAllowlistEntries(name: string, instanceScope: string, values: string[]): Promise<AllowlistOperationResponse> {
+    const params = new URLSearchParams([['instance', instanceScope], ...values.map((value) => ['value', value])]);
+    return changeAllowlists(
+        `/api/allowlists/${encodeURIComponent(name)}/entries?${params.toString()}`,
+        { method: 'DELETE' },
+        'Failed to remove the entries',
     );
 }
 

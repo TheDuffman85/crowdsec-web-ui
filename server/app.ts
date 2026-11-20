@@ -1359,12 +1359,21 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       cacheRefreshCompletedAt = revision;
       publishCacheUpdate(revision, instanceIds);
     },
+    // The cache only learns about decisions expired by LAPI from a refresh.
+    onDecisionsExpired: (instanceIds) => {
+      for (const instanceId of instanceIds) {
+        void (instanceId === primaryInstance.id ? updateCacheDelta() : syncInstanceDelta(instanceId))
+          .catch((error: any) => console.error(`[allowlists] Refresh after expiring decisions failed: ${error?.message || error}`));
+      }
+    },
   });
   registerAllowlistRoutes({
     app,
     basePath: config.basePath,
     ensureAuth,
     ensurePublishedRevisionRead,
+    ensureCanManageEnforcement,
+    auditLog,
     allowlistService,
     isValidIpOrRange,
   });

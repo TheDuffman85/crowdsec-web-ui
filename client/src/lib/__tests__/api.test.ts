@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
+  addAllowlistEntries,
   addDecision,
   addDecisions,
   checkAllowlist,
+  createAllowlist,
+  deleteAllowlist,
   bulkDeleteAlerts,
   bulkDeleteNotifications,
   bulkDeleteDecisions,
@@ -22,6 +25,7 @@ import {
   fetchAlertsForStats,
   fetchAllowlistEntries,
   fetchAllowlists,
+  removeAllowlistEntries,
   fetchConfig,
   fetchCombinedCrowdsecMetrics,
   fetchCrowdsecMetrics,
@@ -417,6 +421,38 @@ describe('api helpers', () => {
       '/api/allowlists/office/entries?instance=east&page=1&page_size=100&q=vpn',
       '/api/allowlists/check?value=10.0.0.0%2F24&instance=all',
     ]));
+  });
+
+  test('allowlist changes return per-instance results even when instances failed, and throw other refusals', async () => {
+    const partial = {
+      results: [
+        { instance_id: 'east', instance_name: 'East', success: true },
+        { instance_id: 'west', instance_name: 'West', success: false, error: 'access forbidden', code: 'UNTRUSTED_IP' },
+      ],
+      succeeded: 1,
+      failed: 1,
+    };
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => Response.json(partial, { status: 207 }));
+    mockFetch(fetchMock);
+
+    await expect(createAllowlist('all', { name: 'office', description: 'Office' })).resolves.toEqual(partial);
+    await expect(addAllowlistEntries('office/vpn', 'eu west', { values: ['10.0.0.0/8'], duration: '4h' })).resolves.toEqual(partial);
+    await expect(removeAllowlistEntries('office', 'all', ['10.0.0.0/8', '2001:db8::1'])).resolves.toEqual(partial);
+    await expect(deleteAllowlist('office/vpn', 'east')).resolves.toEqual(partial);
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.body])).toEqual([
+      ['/api/allowlists?instance=all', 'POST', JSON.stringify({ name: 'office', description: 'Office' })],
+      ['/api/allowlists/office%2Fvpn/entries?instance=eu%20west', 'POST', JSON.stringify({ values: ['10.0.0.0/8'], duration: '4h' })],
+      ['/api/allowlists/office/entries?instance=all&value=10.0.0.0%2F8&value=2001%3Adb8%3A%3A1', 'DELETE', undefined],
+      ['/api/allowlists/office%2Fvpn?instance=east', 'DELETE', undefined],
+    ]);
+
+    mockFetch(vi.fn(async () => Response.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, { status: 403 })));
+    await expect(createAllowlist('all', { name: 'office' })).rejects.toThrow('Read-only mode is enabled');
+    mockFetch(vi.fn(async () => new Response('Bad Gateway', { status: 502 })));
+    await expect(deleteAllowlist('office', 'all')).rejects.toThrow('Failed to delete the allowlist');
+    await expect(addAllowlistEntries('office', 'all', { values: [] })).rejects.toThrow('Failed to add the entries');
+    await expect(removeAllowlistEntries('office', 'all', [])).rejects.toThrow('Failed to remove the entries');
+    await expect(createAllowlist('all', { name: 'office' })).rejects.toThrow('Failed to create the allowlist');
   });
 
   test('delete and add helpers surface read-only 403 messages without permission metadata', async () => {

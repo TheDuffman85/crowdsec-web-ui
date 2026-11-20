@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { AlertCircle, Info, ListChecks, RefreshCw, Search, X } from 'lucide-react';
+import { AlertCircle, Info, ListChecks, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 
-import { checkAllowlist, fetchAllowlistEntries, fetchAllowlists } from '../lib/api';
+import {
+  checkAllowlist,
+  deleteAllowlist,
+  fetchAllowlistEntries,
+  fetchAllowlists,
+  fetchConfig,
+  removeAllowlistEntries,
+} from '../lib/api';
 import { useRefresh } from '../contexts/useRefresh';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { InstanceIcon } from '../components/InstanceIcon';
+import { AddAllowlistEntriesModal, ConfirmAllowlistChangeModal, CreateAllowlistModal } from '../components/AllowlistManagement';
+import { trustedIpsHelpLink } from '../lib/helpLinks';
 import { useI18n } from '../lib/i18n';
 import { useDateTime } from '../lib/dateTime';
 import type {
@@ -30,6 +39,19 @@ type CheckState =
   | { status: 'error'; message: string }
   | { status: 'done'; data: AllowlistCheckResponse };
 
+type Dialog =
+  | { type: 'create' }
+  | { type: 'add'; name: string }
+  | { type: 'remove'; name: string; value: string }
+  | { type: 'delete'; name: string };
+
+/** Present when the signed-in user may change this allowlist. */
+interface EntryActions {
+  onAddEntries: () => void;
+  onDelete: () => void;
+  onRemoveEntry: (value: string) => void;
+}
+
 interface EntriesState {
   entries: AllowlistEntry[];
   pagination: PaginationMeta | null;
@@ -43,6 +65,9 @@ const FILTER_DEBOUNCE_MS = 300;
 const DESCRIPTION_DISMISSED_STORAGE_KEY = 'crowdsec-web-ui:allowlists-description-dismissed';
 const ENTRY_GRID_CLASS_NAME = 'lg:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_160px_160px]';
 const ENTRY_GRID_WITH_INSTANCES_CLASS_NAME = 'lg:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_150px_150px_minmax(0,1.2fr)]';
+const ENTRY_GRID_WITH_ACTIONS_CLASS_NAME = 'lg:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_160px_160px_40px]';
+const ENTRY_GRID_WITH_INSTANCES_AND_ACTIONS_CLASS_NAME = 'lg:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_150px_150px_minmax(0,1.2fr)_40px]';
+const ACTION_BUTTON_CLASS_NAME = 'inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600';
 
 function Notice({ tone, children, onDismiss }: { tone: 'info' | 'warning'; children: ReactNode; onDismiss?: () => void }) {
   const { t } = useI18n();
@@ -225,11 +250,13 @@ function AllowlistEntriesCard({
   instances,
   instanceScope,
   query,
+  actions,
 }: {
   allowlist: AllowlistSummary;
   instances: AllowlistInstanceStatus[];
   instanceScope: string;
   query: string;
+  actions: EntryActions | null;
 }) {
   const { t } = useI18n();
   const { formatDateTime } = useDateTime();
@@ -237,7 +264,9 @@ function AllowlistEntriesCard({
   const [state, setState] = useState<EntriesState>({ entries: [], pagination: null, loading: true, loadingMore: false, error: null });
   const observer = useRef<IntersectionObserver | null>(null);
   const multipleInstances = instances.length > 1;
-  const gridClassName = multipleInstances ? ENTRY_GRID_WITH_INSTANCES_CLASS_NAME : ENTRY_GRID_CLASS_NAME;
+  const gridClassName = actions
+    ? multipleInstances ? ENTRY_GRID_WITH_INSTANCES_AND_ACTIONS_CLASS_NAME : ENTRY_GRID_WITH_ACTIONS_CLASS_NAME
+    : multipleInstances ? ENTRY_GRID_WITH_INSTANCES_CLASS_NAME : ENTRY_GRID_CLASS_NAME;
   const loadedPages = state.pagination?.page ?? 0;
   const hasMore = Boolean(state.pagination && state.pagination.page < state.pagination.total_pages);
 
@@ -282,6 +311,22 @@ function AllowlistEntriesCard({
         <div className="flex flex-wrap items-center gap-2">
           <CardTitle className="min-w-0 break-all">{allowlist.name}</CardTitle>
           {allowlist.console_managed && <Badge variant="info">{t('pages.allowlists.consoleManaged')}</Badge>}
+          {actions && (
+            <span className="ms-auto flex flex-wrap items-center gap-2">
+              <button type="button" onClick={actions.onAddEntries} className={ACTION_BUTTON_CLASS_NAME}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                {t('pages.allowlists.addEntries')}
+              </button>
+              <button
+                type="button"
+                onClick={actions.onDelete}
+                className={`${ACTION_BUTTON_CLASS_NAME} text-red-700 dark:text-red-300`}
+              >
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                {t('pages.allowlists.deleteAllowlist')}
+              </button>
+            </span>
+          )}
         </div>
         {allowlist.description && (
           <p className="mt-2 break-words text-sm leading-6 text-gray-500 dark:text-gray-400">{allowlist.description}</p>
@@ -323,6 +368,7 @@ function AllowlistEntriesCard({
               <span>{t('pages.allowlists.columns.expiration')}</span>
               <span>{t('pages.allowlists.columns.created')}</span>
               {multipleInstances && <span>{t('pages.allowlists.columns.instances')}</span>}
+              {actions && <span className="sr-only">{t('tableColumns.actions')}</span>}
             </div>
             <ul className="divide-y divide-gray-100 dark:divide-gray-700/70">
               {state.entries.map((entry, index) => (
@@ -345,6 +391,17 @@ function AllowlistEntriesCard({
                     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
                       {instanceLabels(entry.instance_ids, instances)}
                     </span>
+                  )}
+                  {actions && (
+                    <button
+                      type="button"
+                      onClick={() => actions.onRemoveEntry(entry.value)}
+                      aria-label={t('pages.allowlists.removeEntry', { value: entry.value })}
+                      title={t('common.remove')}
+                      className="w-fit rounded p-1.5 text-gray-500 hover:bg-red-50 hover:text-red-700 dark:text-gray-400 dark:hover:bg-red-900/30 dark:hover:text-red-300"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
                   )}
                 </li>
               ))}
@@ -374,6 +431,10 @@ export function Allowlists() {
   const [filter, setFilter] = useState('');
   const [query, setQuery] = useState('');
   const [retryAttempt, setRetryAttempt] = useState(0);
+  const [canManageEnforcement, setCanManageEnforcement] = useState(false);
+  const [dialog, setDialog] = useState<Dialog | null>(null);
+  // Counts accepted changes, so the allowlists and the open entry list are read again.
+  const [revision, setRevision] = useState(0);
   const [descriptionDismissed, setDescriptionDismissed] = useState(() => {
     try {
       return window.localStorage.getItem(DESCRIPTION_DISMISSED_STORAGE_KEY) === 'true';
@@ -410,7 +471,20 @@ export function Allowlists() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [instanceScope, query, t, refreshSignal, retryAttempt]);
+  }, [instanceScope, query, t, refreshSignal, retryAttempt, revision]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchConfig()
+      .then((config) => {
+        if (!cancelled) setCanManageEnforcement(config.permissions?.can_manage_enforcement !== false);
+      })
+      // Without the permissions the page stays read-only.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selectAllowlist = (name: string) => {
     const params = new URLSearchParams(location.search);
@@ -425,13 +499,31 @@ export function Allowlists() {
   const unsupported = instances.filter((instance) => instance.status === 'unsupported');
   const unavailable = instances.filter((instance) => instance.status === 'unavailable');
   const multipleInstances = instances.length > 1;
+  // Instances whose LAPI accepts allowlist changes from this Web UI.
+  const manageable = canManageEnforcement ? instances.filter((instance) => instance.management === 'available') : [];
+  const untrusted = canManageEnforcement ? instances.filter((instance) => instance.management === 'forbidden') : [];
+  const changed = () => setRevision((current) => current + 1);
+  const actionsFor = (allowlist: AllowlistSummary): EntryActions | null => (
+    // CrowdSec refuses changes to allowlists that the Console manages.
+    !allowlist.console_managed && manageable.some((instance) => allowlist.instance_ids.includes(instance.instance_id))
+      ? {
+        onAddEntries: () => setDialog({ type: 'add', name: allowlist.name }),
+        onDelete: () => setDialog({ type: 'delete', name: allowlist.name }),
+        onRemoveEntry: (value) => setDialog({ type: 'remove', name: allowlist.name, value }),
+      }
+      : null
+  );
 
   return (
     <div className="space-y-6">
       {!descriptionDismissed && (
         <Notice tone="info" onDismiss={dismissDescription}>
-          {t('pages.allowlists.description')}{' '}
-          <code className="rounded bg-blue-100 px-1 py-0.5 font-mono text-xs dark:bg-blue-900/50">cscli allowlists</code>
+          {manageable.length > 0 ? t('pages.allowlists.descriptionManageable') : (
+            <>
+              {t('pages.allowlists.description')}{' '}
+              <code className="rounded bg-blue-100 px-1 py-0.5 font-mono text-xs dark:bg-blue-900/50">cscli allowlists</code>
+            </>
+          )}
         </Notice>
       )}
 
@@ -475,17 +567,43 @@ export function Allowlists() {
             </Notice>
           ))}
 
-          {(allowlists.length > 0 || query) && (
-            <div className="max-w-sm">
-              <label htmlFor="allowlist-filter" className="sr-only">{t('pages.allowlists.filterPlaceholder')}</label>
-              <input
-                id="allowlist-filter"
-                type="search"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-                placeholder={t('pages.allowlists.filterPlaceholder')}
-                className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-              />
+          {untrusted.length > 0 && (
+            <Notice tone="warning">
+              {t(multipleInstances ? 'pages.allowlists.untrustedOn' : 'pages.allowlists.untrusted', {
+                names: untrusted.map((instance) => instance.instance_name).join(', '),
+              })}{' '}
+              {t('common.seeReadme')}{' '}
+              <a href={trustedIpsHelpLink()} target="_blank" rel="noopener noreferrer" className="underline">
+                {t('common.learnMore')}
+              </a>
+            </Notice>
+          )}
+
+          {(allowlists.length > 0 || query || manageable.length > 0) && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {(allowlists.length > 0 || query) && (
+                <div className="w-full max-w-sm">
+                  <label htmlFor="allowlist-filter" className="sr-only">{t('pages.allowlists.filterPlaceholder')}</label>
+                  <input
+                    id="allowlist-filter"
+                    type="search"
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    placeholder={t('pages.allowlists.filterPlaceholder')}
+                    className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                  />
+                </div>
+              )}
+              {manageable.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setDialog({ type: 'create' })}
+                  className="ms-auto inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700"
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  {t('pages.allowlists.newAllowlist')}
+                </button>
+              )}
             </div>
           )}
 
@@ -511,15 +629,53 @@ export function Allowlists() {
                 onSelect={selectAllowlist}
               />
               <AllowlistEntriesCard
-                key={`${instanceScope}\u0000${selected.name}\u0000${query}`}
+                key={`${instanceScope}\u0000${selected.name}\u0000${query}\u0000${revision}`}
                 allowlist={selected}
                 instances={instances}
                 instanceScope={instanceScope}
                 query={query}
+                actions={actionsFor(selected)}
               />
             </>
           )}
         </>
+      )}
+
+      {dialog?.type === 'create' && (
+        <CreateAllowlistModal
+          instanceScope={instanceScope}
+          targetNames={multipleInstances ? manageable.map((instance) => instance.instance_name) : null}
+          onClose={() => setDialog(null)}
+          onChanged={(name) => {
+            changed();
+            selectAllowlist(name);
+          }}
+        />
+      )}
+      {dialog?.type === 'add' && (
+        <AddAllowlistEntriesModal name={dialog.name} instanceScope={instanceScope} onClose={() => setDialog(null)} onChanged={changed} />
+      )}
+      {dialog?.type === 'remove' && (
+        <ConfirmAllowlistChangeModal
+          title={t('pages.allowlists.removeEntryTitle')}
+          confirmLabel={t('common.remove')}
+          change={() => removeAllowlistEntries(dialog.name, instanceScope, [dialog.value])}
+          onClose={() => setDialog(null)}
+          onChanged={changed}
+        >
+          {t('pages.allowlists.removeEntryConfirm', { value: dialog.value, name: dialog.name })}
+        </ConfirmAllowlistChangeModal>
+      )}
+      {dialog?.type === 'delete' && (
+        <ConfirmAllowlistChangeModal
+          title={t('pages.allowlists.deleteAllowlist')}
+          confirmLabel={t('common.delete')}
+          change={() => deleteAllowlist(dialog.name, instanceScope)}
+          onClose={() => setDialog(null)}
+          onChanged={changed}
+        >
+          {t('pages.allowlists.deleteAllowlistConfirm', { name: dialog.name })}
+        </ConfirmAllowlistChangeModal>
       )}
     </div>
   );

@@ -3,12 +3,34 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { Allowlists } from '../Allowlists';
-import type { AllowlistCheckResponse, AllowlistEntriesResponse, AllowlistEntry, AllowlistsResponse, AllowlistSummary } from '../../types';
+import type {
+  AllowlistCheckResponse,
+  AllowlistEntriesResponse,
+  AllowlistEntry,
+  AllowlistInstanceStatus,
+  AllowlistOperationResponse,
+  AllowlistsResponse,
+  AllowlistSummary,
+} from '../../types';
 
-const { fetchAllowlistsMock, fetchAllowlistEntriesMock, checkAllowlistMock } = vi.hoisted(() => ({
+const {
+  fetchAllowlistsMock,
+  fetchAllowlistEntriesMock,
+  checkAllowlistMock,
+  fetchConfigMock,
+  createAllowlistMock,
+  deleteAllowlistMock,
+  addAllowlistEntriesMock,
+  removeAllowlistEntriesMock,
+} = vi.hoisted(() => ({
   fetchAllowlistsMock: vi.fn(),
   fetchAllowlistEntriesMock: vi.fn(),
   checkAllowlistMock: vi.fn(),
+  fetchConfigMock: vi.fn(),
+  createAllowlistMock: vi.fn(),
+  deleteAllowlistMock: vi.fn(),
+  addAllowlistEntriesMock: vi.fn(),
+  removeAllowlistEntriesMock: vi.fn(),
 }));
 
 vi.mock('../../contexts/useRefresh', () => ({
@@ -19,6 +41,11 @@ vi.mock('../../lib/api', () => ({
   fetchAllowlists: fetchAllowlistsMock,
   fetchAllowlistEntries: fetchAllowlistEntriesMock,
   checkAllowlist: checkAllowlistMock,
+  fetchConfig: fetchConfigMock,
+  createAllowlist: createAllowlistMock,
+  deleteAllowlist: deleteAllowlistMock,
+  addAllowlistEntries: addAllowlistEntriesMock,
+  removeAllowlistEntries: removeAllowlistEntriesMock,
 }));
 
 function summary(name: string, overrides: Partial<AllowlistSummary> = {}): AllowlistSummary {
@@ -57,7 +84,7 @@ function ScopeNavigation() {
 function scopedResponse(instanceId: string): AllowlistsResponse {
   return {
     partial: false,
-    instances: [{ instance_id: instanceId, instance_name: instanceId, status: 'available' }],
+    instances: [{ instance_id: instanceId, instance_name: instanceId, status: 'available', management: 'unsupported' }],
     allowlists: [summary(`${instanceId}-only`, { instance_ids: [instanceId] })],
   };
 }
@@ -78,12 +105,23 @@ const allowlistedCheck: AllowlistCheckResponse = {
   results: [{ instance_id: 'east', instance_name: 'East', status: 'available', allowlisted: true }],
 };
 
-const singleInstance = [{ instance_id: 'main', instance_name: 'Main', status: 'available' as const }];
+const singleInstance = [{ instance_id: 'main', instance_name: 'Main', status: 'available' as const, management: 'unsupported' as const }];
+
+const accepted = (...names: string[]): AllowlistOperationResponse => ({
+  results: names.map((name) => ({ instance_id: name.toLowerCase(), instance_name: name, success: true })),
+  succeeded: names.length,
+  failed: 0,
+});
 
 beforeEach(() => {
   fetchAllowlistsMock.mockReset();
   fetchAllowlistEntriesMock.mockReset();
   checkAllowlistMock.mockReset();
+  fetchConfigMock.mockReset().mockResolvedValue({ permissions: { can_manage_enforcement: true } });
+  createAllowlistMock.mockReset();
+  deleteAllowlistMock.mockReset();
+  addAllowlistEntriesMock.mockReset();
+  removeAllowlistEntriesMock.mockReset();
 });
 
 afterEach(() => {
@@ -251,10 +289,10 @@ describe('Allowlists page', () => {
     fetchAllowlistsMock.mockResolvedValue({
       partial: true,
       instances: [
-        { instance_id: 'east', instance_name: 'East', instance_icon: '🟦', status: 'available' },
-        { instance_id: 'west', instance_name: 'West', instance_icon: '🟩', status: 'available' },
-        { instance_id: 'old', instance_name: 'Old', status: 'unsupported' },
-        { instance_id: 'down', instance_name: 'Down', status: 'unavailable', error: 'Request timeout' },
+        { instance_id: 'east', instance_name: 'East', instance_icon: '🟦', status: 'available', management: 'unsupported' },
+        { instance_id: 'west', instance_name: 'West', instance_icon: '🟩', status: 'available', management: 'unsupported' },
+        { instance_id: 'old', instance_name: 'Old', status: 'unsupported', management: 'unsupported' },
+        { instance_id: 'down', instance_name: 'Down', status: 'unavailable', management: 'unknown', error: 'Request timeout' },
       ],
       allowlists: [office],
     } satisfies AllowlistsResponse);
@@ -282,7 +320,7 @@ describe('Allowlists page', () => {
   test('explains when the only LAPI does not support allowlists', async () => {
     fetchAllowlistsMock.mockResolvedValue({
       partial: false,
-      instances: [{ instance_id: 'main', instance_name: 'Main', status: 'unsupported' }],
+      instances: [{ instance_id: 'main', instance_name: 'Main', status: 'unsupported', management: 'unsupported' }],
       allowlists: [],
     } satisfies AllowlistsResponse);
     renderAllowlists();
@@ -320,8 +358,8 @@ describe('Allowlists page', () => {
     fetchAllowlistsMock.mockResolvedValue({
       partial: false,
       instances: [
-        { instance_id: 'east', instance_name: 'East', instance_icon: '🟦', status: 'available' },
-        { instance_id: 'west', instance_name: 'West', status: 'available' },
+        { instance_id: 'east', instance_name: 'East', instance_icon: '🟦', status: 'available', management: 'unsupported' },
+        { instance_id: 'west', instance_name: 'West', status: 'available', management: 'unsupported' },
       ],
       allowlists: [],
     } satisfies AllowlistsResponse);
@@ -352,5 +390,164 @@ describe('Allowlists page', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Check' }));
     expect(await screen.findByText('The check failed. Enter a valid IP address or range.')).toBeInTheDocument();
+  });
+});
+
+describe('allowlist management', () => {
+  const manageable: AllowlistInstanceStatus[] = [{ instance_id: 'main', instance_name: 'Main', status: 'available', management: 'available' }];
+  const office = summary('office', { entry_count: 1, matching_entries: 1 });
+
+  function serve(instances: AllowlistInstanceStatus[], allowlists: AllowlistSummary[]) {
+    fetchAllowlistsMock.mockResolvedValue({ partial: false, instances, allowlists });
+    fetchAllowlistEntriesMock.mockImplementation(async (name: string) => (
+      entriesPage(allowlists.find((allowlist) => allowlist.name === name)!, [entry('10.0.0.0/8', { description: 'VPN' })])
+    ));
+  }
+
+  test('stays read-only when LAPI has no write routes, the user may not change enforcement, or the Console manages the list', async () => {
+    serve(singleInstance, [office]);
+    const legacy = renderAllowlists();
+    await screen.findByText('10.0.0.0/8');
+    expect(screen.getByText(/This page is read-only/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New allowlist' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add entries' })).not.toBeInTheDocument();
+    legacy.unmount();
+
+    serve(manageable, [office]);
+    fetchConfigMock.mockResolvedValue({ permissions: { can_manage_enforcement: false } });
+    const readOnlyUser = renderAllowlists();
+    await screen.findByText('10.0.0.0/8');
+    await waitFor(() => expect(fetchConfigMock).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('button', { name: 'New allowlist' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove 10.0.0.0/8' })).not.toBeInTheDocument();
+    readOnlyUser.unmount();
+
+    fetchConfigMock.mockResolvedValue({ permissions: { can_manage_enforcement: true } });
+    serve(manageable, [summary('console', { console_managed: true, entry_count: 1, matching_entries: 1 })]);
+    renderAllowlists();
+    expect(await screen.findByRole('button', { name: 'New allowlist' })).toBeInTheDocument();
+    expect(screen.getByText(/managed by the CrowdSec Console can only be changed there/)).toBeInTheDocument();
+    await screen.findByText('10.0.0.0/8');
+    expect(screen.queryByRole('button', { name: 'Add entries' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete allowlist' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove 10.0.0.0/8' })).not.toBeInTheDocument();
+  });
+
+  test('creates an allowlist and selects it', async () => {
+    serve(manageable, [office]);
+    createAllowlistMock.mockResolvedValue(accepted('Main'));
+    renderAllowlists('/allowlists?instance=main');
+
+    await userEvent.click(await screen.findByRole('button', { name: 'New allowlist' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeDisabled();
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Name' }), ' partners ');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Description' }), 'Partner networks');
+    const loads = fetchAllowlistsMock.mock.calls.length;
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(createAllowlistMock).toHaveBeenCalledExactlyOnceWith('main', { name: 'partners', description: 'Partner networks' });
+    expect(fetchAllowlistsMock.mock.calls.length).toBeGreaterThan(loads);
+    expect(screen.getByTestId('location')).toHaveTextContent('allowlist=partners');
+  });
+
+  test('adds entries with an optional description and duration and reloads them', async () => {
+    serve(manageable, [office]);
+    addAllowlistEntriesMock.mockResolvedValue(accepted('Main'));
+    renderAllowlists();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add entries' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add entries to office' });
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP address or range' }), '192.0.2.1, 198.51.100.0/24{Enter}192.0.2.1');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Expires after' }), '4h');
+    const loads = fetchAllowlistEntriesMock.mock.calls.length;
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add entries' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(addAllowlistEntriesMock).toHaveBeenCalledExactlyOnceWith('office', 'all', { values: ['192.0.2.1', '198.51.100.0/24'], duration: '4h' });
+    await waitFor(() => expect(fetchAllowlistEntriesMock.mock.calls.length).toBeGreaterThan(loads));
+  });
+
+  test('asks before removing an entry and before deleting the allowlist', async () => {
+    serve(manageable, [office]);
+    removeAllowlistEntriesMock.mockResolvedValue(accepted('Main'));
+    deleteAllowlistMock.mockResolvedValue(accepted('Main'));
+    renderAllowlists();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove 10.0.0.0/8' }));
+    let dialog = screen.getByRole('dialog', { name: 'Remove entry' });
+    expect(dialog).toHaveTextContent('Remove 10.0.0.0/8 from office? This action cannot be undone.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(removeAllowlistEntriesMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove 10.0.0.0/8' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(removeAllowlistEntriesMock).toHaveBeenCalledExactlyOnceWith('office', 'all', ['10.0.0.0/8']);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete allowlist' }));
+    dialog = screen.getByRole('dialog', { name: 'Delete allowlist' });
+    expect(dialog).toHaveTextContent('Delete the allowlist office and all its entries?');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deleteAllowlistMock).toHaveBeenCalledExactlyOnceWith('office', 'all');
+  });
+
+  test('keeps the dialog open and explains a change that LAPI or the Web UI refused', async () => {
+    serve(manageable, [office]);
+    addAllowlistEntriesMock.mockResolvedValueOnce({
+      results: [{ instance_id: 'main', instance_name: 'Main', success: false, error: 'access forbidden from this IP (172.18.0.5)', code: 'UNTRUSTED_IP' }],
+      succeeded: 0,
+      failed: 1,
+    });
+    renderAllowlists();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add entries' }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP address or range' }), '192.0.2.1');
+    const loads = fetchAllowlistsMock.mock.calls.length;
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add entries' }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('access forbidden from this IP (172.18.0.5)');
+    expect(within(alert).getByRole('link', { name: 'Learn more' })).toHaveAttribute('href', expect.stringContaining('#trusted-ips-for-delete-operations-optional'));
+    // Nothing changed, so nothing is read again.
+    expect(fetchAllowlistsMock.mock.calls.length).toBe(loads);
+
+    addAllowlistEntriesMock.mockRejectedValueOnce(new Error('Invalid IP address or range: example.com'));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add entries' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Invalid IP address or range: example.com');
+    expect(within(dialog).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  test('names the instances that will get a new allowlist, reloads after a partial success, and warns about untrusted ones', async () => {
+    serve([
+      { instance_id: 'east', instance_name: 'East', status: 'available', management: 'available' },
+      { instance_id: 'west', instance_name: 'West', status: 'available', management: 'available' },
+      { instance_id: 'north', instance_name: 'North', status: 'available', management: 'forbidden' },
+      { instance_id: 'old', instance_name: 'Old', status: 'available', management: 'unsupported' },
+    ], [summary('office', { instance_ids: ['east', 'west'], entry_count: 1, matching_entries: 1 })]);
+    createAllowlistMock.mockResolvedValue({
+      results: [
+        { instance_id: 'east', instance_name: 'East', success: true },
+        { instance_id: 'west', instance_name: 'West', success: false, error: "allowlist 'partners' already exists" },
+      ],
+      succeeded: 1,
+      failed: 1,
+    });
+    renderAllowlists();
+
+    const warning = await screen.findByText(/refuses them on: North\./);
+    expect(within(warning.parentElement!).getByRole('link', { name: 'Learn more' })).toHaveAttribute('href', expect.stringContaining('#trusted-ips'));
+    await userEvent.click(screen.getByRole('button', { name: 'New allowlist' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Will be created on: East, West');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Name' }), 'partners');
+    const loads = fetchAllowlistsMock.mock.calls.length;
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent("West: allowlist 'partners' already exists");
+    expect(fetchAllowlistsMock.mock.calls.length).toBeGreaterThan(loads);
   });
 });
