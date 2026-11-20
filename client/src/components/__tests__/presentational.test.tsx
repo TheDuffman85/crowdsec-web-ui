@@ -106,6 +106,30 @@ describe('presentational components', () => {
     expect(screen.getByText('Synchronizing...')).toBeInTheDocument();
   });
 
+  test('keeps the sync overlay light on the GPU and respects reduced motion', () => {
+    render(
+      <SyncOverlay
+        syncStatus={{
+          isSyncing: true,
+          progress: 10,
+          message: '',
+          startedAt: null,
+          completedAt: null,
+        }}
+      />,
+    );
+
+    const overlay = screen.getByText('Syncing Historical Data').closest('.fixed');
+    expect(overlay).not.toBeNull();
+    expect(overlay?.className).not.toContain('backdrop-blur');
+
+    const animated = Array.from(document.body.querySelectorAll('[class*="animate-"]'));
+    expect(animated.length).toBeGreaterThan(0);
+    for (const element of animated) {
+      expect(element.getAttribute('class')).toMatch(/motion-reduce:(hidden|animate-none)/);
+    }
+  });
+
   test('shows historical sync progress for every configured instance', () => {
     render(
       <SyncOverlay

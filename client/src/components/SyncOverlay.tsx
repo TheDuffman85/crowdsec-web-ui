@@ -97,7 +97,7 @@ function AllowlistProgress({ progress }: { progress?: AllowlistSyncProgress }) {
     return (
         <p className={`mt-1 flex min-w-0 items-center gap-1.5 text-xs ${tone}`} title={message}>
             {progress.state === 'syncing'
-                ? <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                ? <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 : progress.state === 'complete'
                     ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden="true" />
                     : <ListChecks className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
@@ -119,11 +119,11 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
     const finishedInstances = instances?.filter((instance) => Boolean(instance.completedAt)).length || 0;
 
     return createPortal(
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70">
             <div className={`bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 ${instances ? 'max-w-lg' : 'max-w-md'} w-full mx-4 text-center`}>
                 {/* Icon with animation */}
                 <div className="relative inline-flex items-center justify-center mb-6">
-                    <div className="absolute inset-0 animate-ping bg-blue-500/20 rounded-full" style={{ animationDuration: '2s' }}></div>
+                    <div className="absolute inset-0 animate-ping motion-reduce:hidden bg-blue-500/20 rounded-full" style={{ animationDuration: '2s' }}></div>
                     <div className="relative bg-gradient-to-br from-blue-500 to-indigo-600 p-4 rounded-full">
                         <Database className="w-8 h-8 text-white" />
                     </div>
@@ -144,7 +144,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                         style={{ width: `${progress}%` }}
                     />
                     <div
-                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer motion-reduce:hidden"
                         style={{
                             backgroundSize: '200% 100%',
                             animation: 'shimmer 1.5s infinite'
@@ -155,7 +155,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                 {/* Progress text */}
                 <div className="flex justify-between items-start gap-3 text-sm" aria-live="polite">
                     <span className="min-w-0 flex-1 text-left text-gray-500 dark:text-gray-400 flex items-start gap-2">
-                        <RefreshCw className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
+                        <RefreshCw className="w-4 h-4 mt-0.5 shrink-0 animate-spin motion-reduce:animate-none" />
                         {statusMessage}
                     </span>
                     <span className="shrink-0 font-semibold text-blue-600 dark:text-blue-400">
@@ -188,7 +188,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                                             ) : complete ? (
                                                 <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
                                             ) : instance.isSyncing ? (
-                                                <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
+                                                <RefreshCw className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none text-blue-500" />
                                             ) : null}
                                             <span className="w-10 shrink-0 text-right text-xs font-semibold text-gray-600 dark:text-gray-300">
                                                 {instance.progress}%
