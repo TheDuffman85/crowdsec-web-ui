@@ -240,19 +240,34 @@ Both facet endpoints return at most the requested limit and use an empty string 
 
 ## Allowlists
 
-CrowdSec centralized allowlists cannot be changed through LAPI, so these routes are read-only and available to read-only users. They accept `instance=<instance-id>` or `instance=all` (the default); an unknown instance returns `404`. Allowlists with the same name on several instances are combined. Like alerts and decisions, allowlists are cached in SQLite: every refresh of an instance (scheduled, manual, or on demand) re-reads its allowlists from LAPI and writes only changed entries, and the list and entry routes read the cache. An instance that has never been synchronized is read once before the response. When LAPI cannot be read, the cached allowlists remain and the instance reports the failure. Checks always query LAPI so that range matching and the manual-decision guard use the current state.
+The read routes are available to read-only users. All routes accept `instance=<instance-id>` or `instance=all` (the default); an unknown instance returns `404`. Allowlists with the same name on several instances are combined. Like alerts and decisions, allowlists are cached in SQLite: every refresh of an instance (scheduled, manual, or on demand) re-reads its allowlists from LAPI and writes only changed entries, and the list and entry routes read the cache. An instance that has never been synchronized is read once before the response. When LAPI cannot be read, the cached allowlists remain and the instance reports the failure. Checks always query LAPI so that range matching and the manual-decision guard use the current state.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/allowlists` | Instance statuses and allowlist summaries without entries. Optional `q` keeps only allowlists whose name, description, or entries contain the text. Always returns `200`; per-instance problems are reported in `status`. |
 | GET | `/api/allowlists/:name/entries` | One page of an allowlist's active entries. Accepts `page`, `page_size` (10–200, default 50), and `q`. Returns `404` for an allowlist that does not exist in the scope. |
 | GET | `/api/allowlists/check?value=<ip\|range>` | Check whether an IP address or CIDR range is covered by an allowlist on each instance. Returns `400` for an invalid value. |
+| POST | `/api/allowlists` | Create an allowlist on every instance in the scope. Body: `{ "name": "office", "description": "Office network" }`; `description` is optional. Blocked in read-only mode. |
+| DELETE | `/api/allowlists/:name` | Delete an allowlist and its entries. Blocked in read-only mode. |
+| POST | `/api/allowlists/:name/entries` | Add up to 500 IP addresses or ranges. Body: `{ "values": ["192.0.2.1", "198.51.100.0/24"], "description": "CI runners", "duration": "4h" }`; `description` and `duration` are optional, and entries without a `duration` never expire. Values already in the allowlist are skipped. Blocked in read-only mode. |
+| DELETE | `/api/allowlists/:name/entries?value=<ip\|range>` | Remove entries; repeat `value` to remove several. Blocked in read-only mode. |
 
 Each instance has a `status` of `available`, `unsupported` (the LAPI predates allowlists, which require CrowdSec 1.6.5) or `unavailable` (with `error`). `partial` is `true` when any instance is `unavailable`.
 
+Each instance also has a `management` value that tells whether its LAPI accepts allowlist changes from the Web UI:
+
+| `management` | Meaning |
+| --- | --- |
+| `available` | Changes are accepted. |
+| `forbidden` | The LAPI has the write routes but the Web UI is not in its [`trusted_ips`](README.md#trusted-ips-for-delete-operations-optional). |
+| `unsupported` | The LAPI has no allowlist write routes. They are proposed in [crowdsecurity/crowdsec#4843](https://github.com/crowdsecurity/crowdsec/pull/4843) and are not part of a CrowdSec release yet. |
+| `unknown` | The LAPI could not be asked. |
+
+The value comes from a request that changes nothing (removing no entries). A LAPI that accepts changes is not asked again; any other answer is asked again at most every 10 minutes while allowlists are being read.
+
 ```json
 {
-  "instances": [{ "instance_id": "primary", "instance_name": "CrowdSec", "status": "available" }],
+  "instances": [{ "instance_id": "primary", "instance_name": "CrowdSec", "status": "available", "management": "available" }],
   "allowlists": [{
     "name": "office",
     "description": "Office network",
@@ -280,6 +295,25 @@ Entry pages contain the `allowlist` summary, `data`, and the same `pagination` o
 ```
 
 `expiration` is `null` for entries that never expire; expired entries are omitted by LAPI. An entry's `instance_ids` can be shorter than the allowlist's when an instance's copy lacks the entry. Check responses contain `value`, an overall `allowlisted` flag, and per-instance `results` with `status`, `allowlisted`, and CrowdSec's `reason`, for example `10.0.0.0/8 from office (VPN)`.
+
+### Changing allowlists
+
+Changes are sent to every instance in the scope that has a local copy of the allowlist; creating one targets every instance in the scope. Instances known to lack the write routes are skipped while another instance can take the change, and copies managed by the CrowdSec Console are never changed. Like `cscli allowlists add`, LAPI expires existing decisions that a new entry covers. After a change the instance's allowlists are read again before the response is sent.
+
+The response lists every target instance. It is `200` when all succeeded, `207` when some did, and `502` when none did:
+
+```json
+{
+  "results": [
+    { "instance_id": "primary", "instance_name": "CrowdSec", "success": true, "result": { "added": 2, "decisions_expired": 1 } },
+    { "instance_id": "edge", "instance_name": "Edge", "success": false, "error": "access forbidden from this IP (172.18.0.5)", "code": "UNTRUSTED_IP" }
+  ],
+  "succeeded": 1,
+  "failed": 1
+}
+```
+
+`result` holds `added` and `decisions_expired` after adding entries and `removed` after removing them. A failed instance has an `error` and, when the reason is known, a `code`: `UNTRUSTED_IP` (the Web UI is not in the LAPI's `trusted_ips`) or `UNSUPPORTED` (the LAPI has no write routes). Other responses are `400` for an invalid body or value, `404` for an unknown instance or allowlist, and `409` with `"code": "CONSOLE_MANAGED"` when every copy in the scope is managed by the CrowdSec Console.
 
 ## Cleanup and Cache
 

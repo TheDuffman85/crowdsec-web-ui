@@ -32,7 +32,7 @@ A self-hosted web UI for investigating alerts, managing decisions, tracking long
 | Statistics | Long-term attack trends, period comparisons, attacker and target rankings, and findings on recurring IPs, quiet machines, and gaps in remediation coverage |
 | Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, configurable columns, and an optional view grouped by attacking IP session |
 | Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
-| Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
+| Allowlists | CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions; create and delete allowlists and add or remove entries where [LAPI supports it](#allowlist-management) |
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Statistics, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Email, Gotify, MQTT, ntfy, or Webhooks |
@@ -284,7 +284,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 
 ### Audit log
 
-User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.oidc-link`, `user.oidc-unlink`, `user.delete`) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
+User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, per-IP cleanup, and allowlist changes: `allowlist.create`, `allowlist.delete`, `allowlist.entries.add`, `allowlist.entries.remove`) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.oidc-link`, `user.oidc-unlink`, `user.delete`) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
 
 ```
 [audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","scenario":"manual/web-ui","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
@@ -317,6 +317,16 @@ Omitting `crowdsec.alertFilters` uses the standard non-CAPI feed. Setting any ex
 The Add Decision form always offers `manual/web-ui` and selects it by default. With no other scenarios available, the scenario field is hidden and `manual/web-ui` is used; additional scenarios turn it into a dropdown. Admins can also add and remove scenarios under **Settings → General → Manual decisions**; those are stored in the database, offered for every instance on top of the configured list, and take effect without a restart. Scenarios from `config.yaml` or `CONFIG_` variables are shown there as read-only. When **All instances** targets instances with different lists, only `manual/web-ui` is used and the field is hidden. These lists only shape the form: `POST /api/decisions` accepts any `author/name` scenario. If `crowdsec.alertFilters.legacy.extraScenarios` is used to show manual decisions, add the configured scenarios there too.
 
 CrowdSec LAPI does not check allowlists for decisions sent with an alert, which is how the Web UI adds them. Like `cscli decisions add`, the Web UI therefore checks the target instances' allowlists first and refuses an allowlisted IP or range until **Bypass allowlist** is confirmed. Instances whose LAPI predates allowlists (CrowdSec 1.6.5) or cannot be checked do not block the decision.
+
+### Allowlist management
+
+The Allowlists page can create and delete allowlists and add or remove their entries, with an optional description and expiry, when the instance's LAPI accepts those changes. Otherwise the page stays read-only and allowlists are managed with `cscli allowlists`.
+
+- **CrowdSec support.** LAPI needs the allowlist write routes proposed in [crowdsecurity/crowdsec#4843](https://github.com/crowdsecurity/crowdsec/pull/4843). They are not part of a CrowdSec release yet. The Web UI detects them per instance and only then shows the controls.
+- **Trusted IPs.** CrowdSec accepts these changes only from addresses in `api.server.trusted_ips`, like alert deletion. See [Trusted IPs](#trusted-ips-for-delete-operations-optional).
+- **Console-managed allowlists** can only be changed in the CrowdSec Console.
+- **Permissions.** Changes require enforcement permission and are blocked in read-only mode. They are written to the [audit log](#audit-log).
+- **Existing decisions.** Like `cscli allowlists add`, CrowdSec expires active decisions that a new entry covers.
 
 | YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
@@ -549,7 +559,7 @@ instances:
 | --- | --- |
 | Dashboard, Alerts, Decisions | Support one instance or Combined scope |
 | Metrics | Defaults to a source-aware Combined view when the selected scope has multiple endpoints; individual endpoints remain selectable |
-| Allowlists | Combined scope groups allowlists by name and marks entries missing on some instances |
+| Allowlists | Combined scope groups allowlists by name and marks entries missing on some instances; changes apply to every local copy in scope and report partial failures |
 | Add decision / clean IP | Runs against every LAPI in Combined scope and reports partial failures; an allowlist match on any target instance requires a bypass |
 | Row deletion | Uses the row's owning instance; numeric upstream IDs are never broadcast |
 
@@ -702,12 +712,12 @@ Usernames from a provider can change and are not proof of ownership, so only tur
 
 <a id="trusted-ips-for-delete-operations-optional"></a>
 
-### Trusted IPs for Alert Deletion
+### Trusted IPs for Alert Deletion and Allowlist Changes
 
 > [!IMPORTANT]
-> CrowdSec only permits alert deletion when the request comes from loopback or an address listed in `api.server.trusted_ips`. Registering the Web UI as a CrowdSec machine authenticates it, but does not grant this IP-based permission.
+> CrowdSec only permits alert deletion and [allowlist changes](#allowlist-management) when the request comes from loopback or an address listed in `api.server.trusted_ips`. Registering the Web UI as a CrowdSec machine authenticates it, but does not grant this IP-based permission.
 
-When the Web UI runs in Docker, add the **Web UI container's source IP or, preferably, its Docker network CIDR** to CrowdSec's `/etc/crowdsec/config.yaml`. This is not the browser's IP or the Docker host's public IP. Without this entry, decision operations can still work while alert deletion fails with `403 Forbidden`.
+When the Web UI runs in Docker, add the **Web UI container's source IP or, preferably, its Docker network CIDR** to CrowdSec's `/etc/crowdsec/config.yaml`. This is not the browser's IP or the Docker host's public IP. Without this entry, decision operations can still work while alert deletion and allowlist changes fail with `403 Forbidden`.
 
 ```yaml
 api:

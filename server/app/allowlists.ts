@@ -1,16 +1,24 @@
 import crypto from 'node:crypto';
 import type { Hono } from 'hono';
-import type {
-  AllowlistCheckInstanceResult,
-  AllowlistSyncProgress,
-  AllowlistCheckResponse,
-  AllowlistEntriesResponse,
-  AllowlistEntry,
-  AllowlistInstanceStatus,
-  AllowlistsResponse,
-  AllowlistSourceStatus,
-  AllowlistSummary,
+import {
+  ALLOWLIST_ENTRIES_MAX,
+  type AddAllowlistEntriesRequest,
+  type AllowlistCheckInstanceResult,
+  type AllowlistSyncProgress,
+  type AllowlistCheckResponse,
+  type AllowlistEntriesResponse,
+  type AllowlistEntry,
+  type AllowlistInstanceOperationResult,
+  type AllowlistInstanceStatus,
+  type AllowlistManagementStatus,
+  type AllowlistOperationResponse,
+  type AllowlistsResponse,
+  type AllowlistSourceStatus,
+  type AllowlistSummary,
+  type CreateAllowlistRequest,
 } from '../../shared/contracts';
+import { parseDurationMs } from '../../shared/duration';
+import type { AuditAction, AuditLogger } from '../audit-log';
 import type { RuntimeConfig } from '../config';
 import { ALLOWLIST_SYNC_META_PREFIX, type CachedAllowlist, type CrowdsecDatabase } from '../database';
 import type { LapiAllowlist, LapiClient } from '../lapi';
@@ -53,7 +61,15 @@ interface EntryRow {
   instance_ids: string;
 }
 
+type OperationTargets = ConfiguredInstance[] | 'unknown' | 'console-managed';
+type OperationResults = AllowlistInstanceOperationResult[] | Exclude<OperationTargets, ConfiguredInstance[]>;
+
 const NEVER_EXPIRES = '9999-12-31T23:59:59.999Z';
+// A LAPI that cannot be managed is asked again after this long, for example after a CrowdSec upgrade.
+const MANAGEMENT_RECHECK_MS = 10 * 60_000;
+const NAME_MAX_LENGTH = 255;
+const DESCRIPTION_MAX_LENGTH = 255;
+const AUDIT_VALUES_LIMIT = 100;
 const INSTANCE_ID_SEPARATOR = '\u001f';
 
 // go-openapi serializes unset timestamps as the zero time instead of omitting them.
@@ -104,6 +120,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function lapiMessage(error: unknown): string {
+  const data = (error as { response?: { data?: unknown } } | null)?.response?.data;
+  const message = data && typeof data === 'object' ? (data as { message?: unknown }).message : undefined;
+  return typeof message === 'string' ? message : '';
+}
+
+function operationFailure(error: unknown): Pick<AllowlistInstanceOperationResult, 'error' | 'code'> {
+  const status = (error as { status?: number } | null)?.status;
+  const message = lapiMessage(error);
+  // LAPI versions without the write routes answer from their catch-all handlers, without a message.
+  if ((status === 404 || status === 405) && !message) {
+    return { error: 'This CrowdSec version cannot change allowlists through LAPI', code: 'UNSUPPORTED' };
+  }
+  // Console-managed allowlists are filtered out before the request, so LAPI refused this address.
+  if (status === 403 && !/console/i.test(message)) return { error: message || errorMessage(error), code: 'UNTRUSTED_IP' };
+  return { error: message || errorMessage(error) };
+}
+
 function likePattern(query: string): string {
   return `%${query.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
@@ -121,9 +155,13 @@ export function createAllowlistService(options: {
   runConsistentDatabaseRefresh: RunConsistentDatabaseRefresh;
   /** Notifies open pages after cached allowlists or their status changed. */
   onChange: (instanceIds: string[]) => void;
+  /** Called after LAPI expired decisions that a new allowlist entry covers. */
+  onDecisionsExpired?: (instanceIds: string[]) => void;
 }) {
-  const { config, lapiClients, database, queryWorker, syncWorker, runConsistentDatabaseRefresh, onChange } = options;
+  const { config, lapiClients, database, queryWorker, syncWorker, runConsistentDatabaseRefresh, onChange, onDecisionsExpired } = options;
   const syncs = new Map<string, Promise<void>>();
+  const management = new Map<string, { status: AllowlistManagementStatus; checkedAt: number }>();
+  const managementProbes = new Map<string, Promise<void>>();
   const progress = new Map<string, AllowlistSyncProgress>();
   const instanceOrder = (instanceId: string) => config.instances.findIndex((instance) => instance.id === instanceId);
   const byInstanceOrder = (left: string, right: string) => instanceOrder(left) - instanceOrder(right);
@@ -219,6 +257,37 @@ export function createAllowlistService(options: {
     await syncInstances(instances.filter((instance) => !readSyncState(instance.id)).map((instance) => instance.id));
   }
 
+  function setManagement(instanceId: string, status: AllowlistManagementStatus): void {
+    management.set(instanceId, { status, checkedAt: Date.now() });
+  }
+
+  function probeManagement(instanceId: string): Promise<void> {
+    const running = managementProbes.get(instanceId);
+    if (running) return running;
+    const probe = (async () => {
+      // A LAPI without allowlists has no write routes either.
+      if (readSyncState(instanceId)?.status === 'unsupported') return setManagement(instanceId, 'unsupported');
+      try {
+        setManagement(instanceId, await lapiClients.get(instanceId)!.probeAllowlistManagement());
+      } catch {
+        setManagement(instanceId, 'unknown');
+      }
+    })().finally(() => managementProbes.delete(instanceId));
+    managementProbes.set(instanceId, probe);
+    return probe;
+  }
+
+  // A LAPI keeps its write routes, so only instances that could not be managed are asked again.
+  async function ensureManagementProbed(instances: ConfiguredInstance[]): Promise<void> {
+    const now = Date.now();
+    await Promise.all(instances
+      .filter((instance) => {
+        const state = management.get(instance.id);
+        return !state || (state.status !== 'available' && now - state.checkedAt >= MANAGEMENT_RECHECK_MS);
+      })
+      .map((instance) => probeManagement(instance.id)));
+  }
+
   function instanceStatuses(instances: ConfiguredInstance[]): AllowlistInstanceStatus[] {
     return instances.map((instance) => {
       const state = readSyncState(instance.id);
@@ -227,6 +296,7 @@ export function createAllowlistService(options: {
         instance_name: instance.name,
         ...(instance.icon ? { instance_icon: instance.icon } : {}),
         status: state?.status ?? 'unavailable',
+        management: management.get(instance.id)?.status ?? 'unknown',
         ...(state?.error ? { error: state.error } : {}),
       };
     });
@@ -391,7 +461,81 @@ export function createAllowlistService(options: {
     return { ...(progress.get(instanceId) ?? { state: 'pending' }) };
   }
 
-  return { resolveScope, ensureSynced, getSyncProgress, syncInstance, syncInstances, listAllowlists, listEntries, checkValue };
+  // Instances known to lack the write routes are skipped while another target can take the change.
+  function manageable(instances: ConfiguredInstance[]): ConfiguredInstance[] {
+    const supported = instances.filter((instance) => management.get(instance.id)?.status !== 'unsupported');
+    return supported.length > 0 ? supported : instances;
+  }
+
+  /** The instances in scope whose copy of the allowlist can be changed locally. */
+  async function allowlistTargets(instances: ConfiguredInstance[], name: string): Promise<OperationTargets> {
+    const ids = instances.map((instance) => instance.id);
+    const rows = await queryWorker.all<{ instance_id: string; console_managed: number }>(`
+      SELECT instance_id, console_managed
+      FROM allowlists
+      WHERE name = ? AND instance_id IN (${ids.map(() => '?').join(', ')})
+    `, [name, ...ids]);
+    if (rows.length === 0) return 'unknown';
+    // The console overwrites its allowlists on every sync, and LAPI refuses to change them.
+    const local = new Set(rows.filter((row) => row.console_managed !== 1).map((row) => row.instance_id));
+    return local.size > 0 ? manageable(instances.filter((instance) => local.has(instance.id))) : 'console-managed';
+  }
+
+  async function runOperation<T extends AllowlistInstanceOperationResult['result']>(
+    targets: ConfiguredInstance[],
+    operation: (client: LapiClient) => Promise<T | void>,
+  ): Promise<AllowlistInstanceOperationResult[]> {
+    const results = await Promise.all(targets.map(async (instance): Promise<AllowlistInstanceOperationResult> => {
+      const base = { instance_id: instance.id, instance_name: instance.name };
+      try {
+        const result = await operation(lapiClients.get(instance.id)!);
+        setManagement(instance.id, 'available');
+        return { ...base, success: true, ...(result ? { result } : {}) };
+      } catch (error) {
+        const failure = operationFailure(error);
+        if (failure.code) setManagement(instance.id, failure.code === 'UNSUPPORTED' ? 'unsupported' : 'forbidden');
+        return { ...base, success: false, ...failure };
+      }
+    }));
+    // Failed targets are read again too: a missing allowlist means the cache was stale.
+    await Promise.all(targets.map(async (instance) => {
+      // A sync that started before the change may have read the old state.
+      await syncs.get(instance.id);
+      await syncInstance(instance.id);
+    }));
+    const expired = results.filter((result) => (result.result?.decisions_expired ?? 0) > 0).map((result) => result.instance_id);
+    if (expired.length > 0) onDecisionsExpired?.(expired);
+    return results;
+  }
+
+  function createAllowlist(instances: ConfiguredInstance[], name: string, description?: string): Promise<AllowlistInstanceOperationResult[]> {
+    return runOperation(manageable(instances), (client) => client.createAllowlist(name, description));
+  }
+
+  async function deleteAllowlist(instances: ConfiguredInstance[], name: string): Promise<OperationResults> {
+    const targets = await allowlistTargets(instances, name);
+    return typeof targets === 'string' ? targets : runOperation(targets, (client) => client.deleteAllowlist(name));
+  }
+
+  async function addEntries(
+    instances: ConfiguredInstance[],
+    name: string,
+    items: Array<{ value: string; description?: string; expiration?: string }>,
+  ): Promise<OperationResults> {
+    const targets = await allowlistTargets(instances, name);
+    return typeof targets === 'string' ? targets : runOperation(targets, (client) => client.addAllowlistItems(name, items));
+  }
+
+  async function removeEntries(instances: ConfiguredInstance[], name: string, values: string[]): Promise<OperationResults> {
+    const targets = await allowlistTargets(instances, name);
+    return typeof targets === 'string' ? targets : runOperation(targets, (client) => client.removeAllowlistItems(name, values));
+  }
+
+  return {
+    resolveScope, ensureSynced, ensureManagementProbed, getSyncProgress, syncInstance, syncInstances,
+    listAllowlists, listEntries, checkValue,
+    createAllowlist, deleteAllowlist, addEntries, removeEntries,
+  };
 }
 
 export function registerAllowlistRoutes(options: {
@@ -399,10 +543,15 @@ export function registerAllowlistRoutes(options: {
   basePath: string;
   ensureAuth: HonoMiddleware;
   ensurePublishedRevisionRead: HonoMiddleware;
+  /** Returns the refusal for users who may not change enforcement, such as read-only users. */
+  ensureCanManageEnforcement: (context: HonoContext) => Response | null;
+  auditLog: AuditLogger;
   allowlistService: AllowlistService;
   isValidIpOrRange: (value: string) => boolean;
 }): void {
-  const { app, basePath, ensureAuth, ensurePublishedRevisionRead, allowlistService, isValidIpOrRange } = options;
+  const {
+    app, basePath, ensureAuth, ensurePublishedRevisionRead, ensureCanManageEnforcement, auditLog, allowlistService, isValidIpOrRange,
+  } = options;
   const unknownScope = (context: HonoContext, scope: string | undefined) => (
     context.json({ error: `Unknown CrowdSec instance scope "${scope}"` }, 404)
   );
@@ -414,8 +563,14 @@ export function registerAllowlistRoutes(options: {
     await next();
   };
 
-  // Allowlists are read-only through LAPI, so read-only users may view them too.
-  app.get(`${basePath}/api/allowlists`, ensureAuth, ensureScopeSynced, ensurePublishedRevisionRead, async (context) => {
+  const ensureScopeProbed: HonoMiddleware = async (context, next) => {
+    const instances = allowlistService.resolveScope(context.req.query('instance'));
+    if (instances) await allowlistService.ensureManagementProbed(instances);
+    await next();
+  };
+
+  // Viewing allowlists changes nothing, so read-only users may view them too.
+  app.get(`${basePath}/api/allowlists`, ensureAuth, ensureScopeSynced, ensureScopeProbed, ensurePublishedRevisionRead, async (context) => {
     const scope = context.req.query('instance');
     const instances = allowlistService.resolveScope(scope);
     if (!instances) return unknownScope(context, scope);
@@ -439,5 +594,122 @@ export function registerAllowlistRoutes(options: {
     const response = await allowlistService.listEntries(instances, context.req.param('name'), page, context.req.query('q') || '');
     if (!response) return context.json({ error: 'Unknown allowlist' }, 404);
     return context.json(response);
+  });
+
+  // The routes below change LAPI and then re-read it into the cache. They must not hold the
+  // published-revision read lock, which that cache write waits for.
+  function finish(
+    context: HonoContext,
+    action: AuditAction,
+    name: string,
+    results: OperationResults,
+    detail: Record<string, unknown> = {},
+  ): Response {
+    if (results === 'unknown') return context.json({ error: 'Unknown allowlist' }, 404);
+    if (results === 'console-managed') {
+      return context.json({ error: 'Allowlists managed by the CrowdSec Console cannot be changed here', code: 'CONSOLE_MANAGED' }, 409);
+    }
+    const succeeded = results.filter((result) => result.success).length;
+    auditLog.record(context, {
+      action,
+      allowlist: name,
+      ...detail,
+      instances: results.map((result) => result.instance_name),
+      instance_results: results.map((result) => ({
+        instance_id: result.instance_id,
+        instance: result.instance_name,
+        outcome: result.success ? 'success' : 'failure',
+      })),
+      outcome: succeeded === results.length ? 'success' : succeeded > 0 ? 'partial' : 'failure',
+    });
+    const payload: AllowlistOperationResponse = { results, succeeded, failed: results.length - succeeded };
+    return context.json(payload, succeeded === results.length ? 200 : succeeded > 0 ? 207 : 502);
+  }
+
+  function auditValues(values: string[]): Record<string, unknown> {
+    return values.length > AUDIT_VALUES_LIMIT
+      ? { values: values.slice(0, AUDIT_VALUES_LIMIT), truncated: true }
+      : { values };
+  }
+
+  function entryValues(input: unknown): string[] | { error: string } {
+    const values = Array.isArray(input)
+      ? [...new Set(input.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean))]
+      : [];
+    if (values.length === 0) return { error: 'At least one IP address or range is required' };
+    if (values.length > ALLOWLIST_ENTRIES_MAX) return { error: `At most ${ALLOWLIST_ENTRIES_MAX} values are accepted at once` };
+    const invalid = values.find((value) => !isValidIpOrRange(value));
+    return invalid ? { error: `Invalid IP address or range: ${invalid}` } : values;
+  }
+
+  function optionalText(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim().slice(0, DESCRIPTION_MAX_LENGTH) : undefined;
+  }
+
+  app.post(`${basePath}/api/allowlists`, ensureAuth, ensureScopeSynced, ensureScopeProbed, async (context) => {
+    const refusal = ensureCanManageEnforcement(context);
+    if (refusal) return refusal;
+    const scope = context.req.query('instance');
+    const instances = allowlistService.resolveScope(scope);
+    if (!instances) return unknownScope(context, scope);
+    const body = await context.req.json<Partial<CreateAllowlistRequest>>().catch(() => null);
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (!name) return context.json({ error: 'An allowlist name is required' }, 400);
+    if (name.length > NAME_MAX_LENGTH) return context.json({ error: `An allowlist name has at most ${NAME_MAX_LENGTH} characters` }, 400);
+    const description = optionalText(body?.description);
+    const results = await allowlistService.createAllowlist(instances, name, description);
+    return finish(context, 'allowlist.create', name, results, description ? { description } : {});
+  });
+
+  app.delete(`${basePath}/api/allowlists/:name`, ensureAuth, ensureScopeSynced, ensureScopeProbed, async (context) => {
+    const refusal = ensureCanManageEnforcement(context);
+    if (refusal) return refusal;
+    const scope = context.req.query('instance');
+    const instances = allowlistService.resolveScope(scope);
+    if (!instances) return unknownScope(context, scope);
+    const name = context.req.param('name');
+    return finish(context, 'allowlist.delete', name, await allowlistService.deleteAllowlist(instances, name));
+  });
+
+  app.post(`${basePath}/api/allowlists/:name/entries`, ensureAuth, ensureScopeSynced, ensureScopeProbed, async (context) => {
+    const refusal = ensureCanManageEnforcement(context);
+    if (refusal) return refusal;
+    const scope = context.req.query('instance');
+    const instances = allowlistService.resolveScope(scope);
+    if (!instances) return unknownScope(context, scope);
+    const body = await context.req.json<Partial<AddAllowlistEntriesRequest>>().catch(() => null);
+    const values = entryValues(body?.values);
+    if (!Array.isArray(values)) return context.json(values, 400);
+    const duration = typeof body?.duration === 'string' ? body.duration.trim() : '';
+    if (duration && !/^\d+[smhd]$/.test(duration)) {
+      return context.json({ error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' }, 400);
+    }
+    const description = optionalText(body?.description);
+    const expiration = duration ? new Date(Date.now() + parseDurationMs(duration)!).toISOString() : undefined;
+    const name = context.req.param('name');
+    const results = await allowlistService.addEntries(instances, name, values.map((value) => ({
+      value,
+      ...(description ? { description } : {}),
+      ...(expiration ? { expiration } : {}),
+    })));
+    return finish(context, 'allowlist.entries.add', name, results, {
+      ...auditValues(values),
+      ...(description ? { description } : {}),
+      ...(duration ? { duration } : {}),
+    });
+  });
+
+  app.delete(`${basePath}/api/allowlists/:name/entries`, ensureAuth, ensureScopeSynced, ensureScopeProbed, async (context) => {
+    const refusal = ensureCanManageEnforcement(context);
+    if (refusal) return refusal;
+    const scope = context.req.query('instance');
+    const instances = allowlistService.resolveScope(scope);
+    if (!instances) return unknownScope(context, scope);
+    // Stored values are removed as they are, so they are not validated like new ones.
+    const values = [...new Set((context.req.queries('value') ?? []).map((value) => value.trim()).filter(Boolean))];
+    if (values.length === 0) return context.json({ error: 'At least one value is required' }, 400);
+    if (values.length > ALLOWLIST_ENTRIES_MAX) return context.json({ error: `At most ${ALLOWLIST_ENTRIES_MAX} values are accepted at once` }, 400);
+    const name = context.req.param('name');
+    return finish(context, 'allowlist.entries.remove', name, await allowlistService.removeEntries(instances, name, values), auditValues(values));
   });
 }

@@ -31,6 +31,8 @@ function fakeClient(name: string, options: { failAdd?: boolean } = {}) {
     }),
     fetchAllowlists: vi.fn(async (): Promise<any[]> => []),
     checkAllowlist: vi.fn(async (): Promise<{ allowlisted: boolean; reason?: string }> => ({ allowlisted: false })),
+    probeAllowlistManagement: vi.fn(async (): Promise<string> => 'available'),
+    createAllowlist: vi.fn(async (): Promise<void> => {}),
     deleteAlert: vi.fn(async () => ({ message: `${name} alert deleted` })),
     deleteDecision: vi.fn(async () => ({ message: `${name} decision deleted` })),
   };
@@ -859,6 +861,39 @@ describe('multi-instance API', () => {
       const scoped = await controller.fetch(new Request('http://localhost/api/allowlists?instance=secondary'));
       expect((await scoped.json() as any).instances.map((instance: any) => instance.instance_id)).toEqual(['secondary']);
       expect(primary.fetchAllowlists).toHaveBeenCalledTimes(1);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('creates an allowlist on every instance in scope and reports the ones that failed', async () => {
+    const { controller, database, primary, secondary } = createMultiController();
+    secondary.createAllowlist.mockRejectedValue(Object.assign(new Error('HTTP 409: Conflict'), {
+      status: 409,
+      response: { data: { message: "allowlist 'office' already exists" } },
+    }));
+    const create = (scope: string) => controller.fetch(new Request(`http://localhost/api/allowlists?instance=${scope}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'office' }),
+    }));
+    try {
+      const combined = await create('all');
+      expect(combined.status).toBe(207);
+      expect(await combined.json()).toEqual({
+        results: [
+          { instance_id: 'primary', instance_name: 'Primary', success: true },
+          { instance_id: 'secondary', instance_name: 'Secondary', success: false, error: "allowlist 'office' already exists" },
+        ],
+        succeeded: 1,
+        failed: 1,
+      });
+
+      const scoped = await create('primary');
+      expect(scoped.status).toBe(200);
+      expect(primary.createAllowlist).toHaveBeenCalledTimes(2);
+      expect(secondary.createAllowlist).toHaveBeenCalledTimes(1);
     } finally {
       controller.stopBackgroundTasks();
       database.close();

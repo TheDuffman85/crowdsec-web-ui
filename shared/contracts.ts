@@ -905,11 +905,19 @@ export interface AllowlistSummary {
 /** `unsupported` means the LAPI predates centralized allowlists (CrowdSec 1.6.5). */
 export type AllowlistSourceStatus = 'available' | 'unsupported' | 'unavailable';
 
+/**
+ * Whether the instance's LAPI lets the Web UI change allowlists. `unsupported` means the LAPI has no
+ * allowlist write routes, `forbidden` that the Web UI is not in its `trusted_ips`, and `unknown` that
+ * it could not be asked.
+ */
+export type AllowlistManagementStatus = 'available' | 'forbidden' | 'unsupported' | 'unknown';
+
 export interface AllowlistInstanceStatus {
   instance_id: string;
   instance_name: string;
   instance_icon?: string;
   status: AllowlistSourceStatus;
+  management: AllowlistManagementStatus;
   error?: string;
 }
 
@@ -946,6 +954,34 @@ export interface AllowlistMatch {
   instance_id: string;
   instance_name: string;
   reason?: string;
+}
+
+/** Most values one allowlist entry request accepts. */
+export const ALLOWLIST_ENTRIES_MAX = 500;
+
+export interface CreateAllowlistRequest {
+  name: string;
+  description?: string;
+}
+
+export interface AddAllowlistEntriesRequest {
+  values: string[];
+  description?: string;
+  /** How long the entries stay allowlisted, for example `4h`. They never expire without it. */
+  duration?: string;
+}
+
+/** `UNTRUSTED_IP`: LAPI only accepts allowlist changes from its `trusted_ips`. `UNSUPPORTED`: it has no write routes. */
+export type AllowlistOperationErrorCode = 'UNTRUSTED_IP' | 'UNSUPPORTED';
+
+export interface AllowlistInstanceOperationResult extends InstanceOperationResult {
+  code?: AllowlistOperationErrorCode;
+  /** Present after adding entries. Existing decisions covered by an allowlist are expired by LAPI. */
+  result?: { added?: number; decisions_expired?: number; removed?: number };
+}
+
+export interface AllowlistOperationResponse extends MultiInstanceOperationResponse {
+  results: AllowlistInstanceOperationResult[];
 }
 
 /** Body of the `409` returned when a manual decision targets an allowlisted value. */
