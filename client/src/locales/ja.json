@@ -744,6 +744,7 @@
   "pages.allowlists.removeEntry": "{value} を削除",
   "pages.allowlists.removeEntryTitle": "エントリを削除",
   "pages.allowlists.removeEntryConfirm": "{name} から {value} を削除しますか?",
+  "pages.allowlists.removing": "削除中...",
   "pages.allowlists.changeFailed": "変更に失敗しました。",
   "pages.dashboard.activeDecisions": "有効な決定",
   "pages.dashboard.allLapisOnline": "すべてオンライン",

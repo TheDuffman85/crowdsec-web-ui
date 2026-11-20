@@ -744,6 +744,7 @@
   "pages.allowlists.removeEntry": "إزالة {value}",
   "pages.allowlists.removeEntryTitle": "إزالة الإدخال",
   "pages.allowlists.removeEntryConfirm": "هل تريد إزالة {value} من {name}؟",
+  "pages.allowlists.removing": "جارٍ الإزالة...",
   "pages.allowlists.changeFailed": "فشل التغيير.",
   "pages.dashboard.activeDecisions": "القرارات النشطة",
   "pages.dashboard.allLapisOnline": "الجميع متصل",

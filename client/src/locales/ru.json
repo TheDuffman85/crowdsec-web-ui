@@ -744,6 +744,7 @@
   "pages.allowlists.removeEntry": "Удалить {value}",
   "pages.allowlists.removeEntryTitle": "Удалить запись",
   "pages.allowlists.removeEntryConfirm": "Удалить {value} из {name}?",
+  "pages.allowlists.removing": "Удаление...",
   "pages.allowlists.changeFailed": "Не удалось выполнить изменение.",
   "pages.dashboard.activeDecisions": "Активные решения",
   "pages.dashboard.allLapisOnline": "Все в сети",

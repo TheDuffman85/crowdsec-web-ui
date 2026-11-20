@@ -746,6 +746,7 @@
   "pages.allowlists.removeEntry": "Remove {value}",
   "pages.allowlists.removeEntryTitle": "Remove entry",
   "pages.allowlists.removeEntryConfirm": "Remove {value} from {name}?",
+  "pages.allowlists.removing": "Removing...",
   "pages.allowlists.changeFailed": "The change failed.",
   "pages.dashboard.activeDecisions": "Active Decisions",
   "pages.dashboard.allLapisOnline": "All online",

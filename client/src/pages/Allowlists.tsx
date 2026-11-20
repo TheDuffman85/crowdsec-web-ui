@@ -659,6 +659,7 @@ export function Allowlists() {
         <ConfirmAllowlistChangeModal
           title={t('pages.allowlists.removeEntryTitle')}
           confirmLabel={t('common.remove')}
+          progressLabel={t('pages.allowlists.removing')}
           change={() => removeAllowlistEntries(dialog.name, instanceScope, [dialog.value])}
           onClose={() => setDialog(null)}
           onChanged={changed}
@@ -670,6 +671,7 @@ export function Allowlists() {
         <ConfirmAllowlistChangeModal
           title={t('pages.allowlists.deleteAllowlist')}
           confirmLabel={t('common.delete')}
+          progressLabel={t('common.deleting')}
           change={() => deleteAllowlist(dialog.name, instanceScope)}
           onClose={() => setDialog(null)}
           onChanged={changed}

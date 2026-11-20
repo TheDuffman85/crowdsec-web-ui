@@ -235,6 +235,7 @@ export function AddAllowlistEntriesModal({
 export function ConfirmAllowlistChangeModal({
     title,
     confirmLabel,
+    progressLabel,
     change,
     onClose,
     onChanged,
@@ -242,6 +243,8 @@ export function ConfirmAllowlistChangeModal({
 }: {
     title: string;
     confirmLabel: string;
+    /** Shown on the confirm button while the change is sent. */
+    progressLabel: string;
     change: () => Promise<AllowlistOperationResponse>;
     onClose: () => void;
     onChanged: () => void;
@@ -261,7 +264,7 @@ export function ConfirmAllowlistChangeModal({
             <div className="flex justify-end gap-3">
                 <button type="button" onClick={onClose} disabled={inProgress} className={CANCEL_CLASS_NAME}>{t('common.cancel')}</button>
                 <button type="button" onClick={() => void confirm()} disabled={inProgress} className={DANGER_CLASS_NAME}>
-                    {inProgress ? t('common.deleting') : confirmLabel}
+                    {inProgress ? progressLabel : confirmLabel}
                 </button>
             </div>
         </Modal>

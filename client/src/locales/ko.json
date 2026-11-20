@@ -746,6 +746,7 @@
   "pages.allowlists.removeEntry": "{value} 제거",
   "pages.allowlists.removeEntryTitle": "항목 제거",
   "pages.allowlists.removeEntryConfirm": "{name}에서 {value}을(를) 제거할까요?",
+  "pages.allowlists.removing": "제거 중...",
   "pages.allowlists.changeFailed": "변경하지 못했습니다.",
   "pages.dashboard.activeDecisions": "활성 결정",
   "pages.dashboard.allLapisOnline": "모두 온라인",

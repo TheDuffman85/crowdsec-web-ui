@@ -423,16 +423,14 @@ async function changeAllowlists(path: string, init: RequestInit, defaultMsg: str
     return payload as AllowlistOperationResponse;
 }
 
-const jsonRequest = (method: string, body: unknown): RequestInit => ({
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-});
-
 export async function createAllowlist(instanceScope: string, data: CreateAllowlistRequest): Promise<AllowlistOperationResponse> {
     return changeAllowlists(
         `/api/allowlists?instance=${encodeURIComponent(instanceScope)}`,
-        jsonRequest('POST', data),
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        },
         'Failed to create the allowlist',
     );
 }
@@ -452,7 +450,11 @@ export async function addAllowlistEntries(
 ): Promise<AllowlistOperationResponse> {
     return changeAllowlists(
         `/api/allowlists/${encodeURIComponent(name)}/entries?instance=${encodeURIComponent(instanceScope)}`,
-        jsonRequest('POST', data),
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        },
         'Failed to add the entries',
     );
 }

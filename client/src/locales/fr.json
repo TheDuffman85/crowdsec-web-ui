@@ -746,6 +746,7 @@
   "pages.allowlists.removeEntry": "Retirer {value}",
   "pages.allowlists.removeEntryTitle": "Retirer l’entrée",
   "pages.allowlists.removeEntryConfirm": "Retirer {value} de {name} ?",
+  "pages.allowlists.removing": "Retrait...",
   "pages.allowlists.changeFailed": "La modification a échoué.",
   "pages.dashboard.activeDecisions": "Décisions actives",
   "pages.dashboard.allLapisOnline": "Tous en ligne",

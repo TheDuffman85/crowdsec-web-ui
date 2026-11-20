@@ -744,6 +744,7 @@
   "pages.allowlists.removeEntry": "{value} हटाएँ",
   "pages.allowlists.removeEntryTitle": "प्रविष्टि हटाएँ",
   "pages.allowlists.removeEntryConfirm": "{name} से {value} हटाएँ?",
+  "pages.allowlists.removing": "हटाया जा रहा है...",
   "pages.allowlists.changeFailed": "बदलाव विफल रहा।",
   "pages.dashboard.activeDecisions": "सक्रिय निर्णय",
   "pages.dashboard.allLapisOnline": "सभी ऑनलाइन",

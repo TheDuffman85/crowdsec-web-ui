@@ -744,6 +744,7 @@
   "pages.allowlists.removeEntry": "移除 {value}",
   "pages.allowlists.removeEntryTitle": "移除条目",
   "pages.allowlists.removeEntryConfirm": "从 {name} 中移除 {value}？",
+  "pages.allowlists.removing": "移除中...",
   "pages.allowlists.changeFailed": "更改失败。",
   "pages.dashboard.activeDecisions": "活跃决策",
   "pages.dashboard.allLapisOnline": "全部在线",

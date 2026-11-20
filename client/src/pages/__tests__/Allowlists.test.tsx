@@ -471,8 +471,10 @@ describe('allowlist management', () => {
 
   test('asks before removing an entry and before deleting the allowlist', async () => {
     serve(manageable, [office]);
-    removeAllowlistEntriesMock.mockResolvedValue(accepted('Main'));
-    deleteAllowlistMock.mockResolvedValue(accepted('Main'));
+    const removal = deferred<AllowlistOperationResponse>();
+    const deletion = deferred<AllowlistOperationResponse>();
+    removeAllowlistEntriesMock.mockReturnValue(removal.promise);
+    deleteAllowlistMock.mockReturnValue(deletion.promise);
     renderAllowlists();
 
     await userEvent.click(await screen.findByRole('button', { name: 'Remove 10.0.0.0/8' }));
@@ -483,6 +485,8 @@ describe('allowlist management', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove 10.0.0.0/8' }));
     await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }));
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Removing...' })).toBeDisabled();
+    await act(async () => removal.resolve(accepted('Main')));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(removeAllowlistEntriesMock).toHaveBeenCalledExactlyOnceWith('office', 'all', ['10.0.0.0/8']);
 
@@ -490,6 +494,8 @@ describe('allowlist management', () => {
     dialog = screen.getByRole('dialog', { name: 'Delete allowlist' });
     expect(dialog).toHaveTextContent('Delete the allowlist office and all its entries?');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    expect(within(dialog).getByRole('button', { name: 'Deleting...' })).toBeDisabled();
+    await act(async () => deletion.resolve(accepted('Main')));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(deleteAllowlistMock).toHaveBeenCalledExactlyOnceWith('office', 'all');
   });
