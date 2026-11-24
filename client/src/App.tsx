@@ -19,6 +19,19 @@ const Decisions = lazy(async () => ({ default: (await import('./pages/Decisions'
 const Allowlists = lazy(async () => ({ default: (await import('./pages/Allowlists')).Allowlists }));
 const Metrics = lazy(async () => ({ default: (await import('./pages/Metrics')).Metrics }));
 const Notifications = lazy(async () => ({ default: (await import('./pages/Notifications')).Notifications }));
+const Tools = lazy(async () => ({ default: (await import('./pages/Tools')).Tools }));
+const GeoBlocking = lazy(async () => ({ default: (await import('./pages/tools/GeoBlocking')).GeoBlocking }));
+const AutoBan = lazy(async () => ({ default: (await import('./pages/tools/AutoBan')).AutoBan }));
+const RepeatOffenders = lazy(async () => ({ default: (await import('./pages/tools/RepeatOffenders')).RepeatOffenders }));
+const Blocklists = lazy(async () => ({ default: (await import('./pages/tools/Blocklists')).Blocklists }));
+const Hosts = lazy(async () => ({ default: (await import('./pages/tools/Hosts')).Hosts }));
+const Wallboard = lazy(async () => ({ default: (await import('./pages/tools/Wallboard')).Wallboard }));
+const Hub = lazy(async () => ({ default: (await import('./pages/tools/Hub')).Hub }));
+const AsnView = lazy(async () => ({ default: (await import('./pages/tools/AsnView')).AsnView }));
+const IpTimeline = lazy(async () => ({ default: (await import('./pages/tools/IpTimeline')).IpTimeline }));
+const AuditLog = lazy(async () => ({ default: (await import('./pages/tools/AuditLog')).AuditLog }));
+const AttackMap = lazy(async () => ({ default: (await import('./pages/tools/AttackMap')).AttackMap }));
+const Report = lazy(async () => ({ default: (await import('./pages/tools/Report')).Report }));
 const Settings = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const Login = lazy(async () => ({ default: (await import('./pages/Login')).Login }));
 const Setup = lazy(async () => ({ default: (await import('./pages/Setup')).Setup }));
@@ -115,6 +128,19 @@ function ProtectedAppShell() {
               </Suspense>
             )}
           />
+          <Route path="tools" element={<Suspense fallback={<RouteFallback />}><Tools /></Suspense>} />
+          <Route path="tools/geo-blocking" element={<Suspense fallback={<RouteFallback />}><GeoBlocking /></Suspense>} />
+          <Route path="tools/auto-ban" element={<Suspense fallback={<RouteFallback />}><AutoBan /></Suspense>} />
+          <Route path="tools/repeat-offenders" element={<Suspense fallback={<RouteFallback />}><RepeatOffenders /></Suspense>} />
+          <Route path="tools/blocklists" element={<Suspense fallback={<RouteFallback />}><Blocklists /></Suspense>} />
+          <Route path="tools/hosts" element={<Suspense fallback={<RouteFallback />}><Hosts /></Suspense>} />
+          <Route path="tools/wallboard" element={<Suspense fallback={<RouteFallback />}><Wallboard /></Suspense>} />
+          <Route path="tools/hub" element={<Suspense fallback={<RouteFallback />}><Hub /></Suspense>} />
+          <Route path="tools/asn" element={<Suspense fallback={<RouteFallback />}><AsnView /></Suspense>} />
+          <Route path="tools/ip-timeline" element={<Suspense fallback={<RouteFallback />}><IpTimeline /></Suspense>} />
+          <Route path="tools/audit-log" element={<Suspense fallback={<RouteFallback />}><AuditLog /></Suspense>} />
+          <Route path="tools/attack-map" element={<Suspense fallback={<RouteFallback />}><AttackMap /></Suspense>} />
+          <Route path="tools/report" element={<Suspense fallback={<RouteFallback />}><Report /></Suspense>} />
           <Route
             path="settings"
             element={(

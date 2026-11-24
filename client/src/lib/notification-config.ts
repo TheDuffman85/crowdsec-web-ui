@@ -34,6 +34,17 @@ export interface AppriseConfig {
   titlePrefix: string;
 }
 
+export interface DiscordConfig {
+  discordWebhookUrl: string;
+  discordUsername: string;
+  discordMention: string;
+  discordLinkUrl: string;
+}
+
+export interface WebPushConfig {
+  webpushSubject: string;
+}
+
 export interface GotifyConfig {
   gotifyUrl: string;
   gotifyToken: string;
@@ -174,6 +185,19 @@ export function defaultGotifyConfig(): GotifyConfig {
   };
 }
 
+export function defaultWebPushConfig(): WebPushConfig {
+  return { webpushSubject: '' };
+}
+
+export function defaultDiscordConfig(): DiscordConfig {
+  return {
+    discordWebhookUrl: '',
+    discordUsername: '',
+    discordMention: '',
+    discordLinkUrl: '',
+  };
+}
+
 export function defaultNtfyConfig(): NtfyConfig {
   return {
     ntfyUrl: 'https://ntfy.sh',
@@ -220,8 +244,10 @@ export function defaultChannelConfig(type: NotificationChannelType): Record<stri
   if (type === 'apprise') return defaultAppriseConfig() as unknown as Record<string, AlertMetaValue>;
   if (type === 'email') return defaultEmailConfig() as unknown as Record<string, AlertMetaValue>;
   if (type === 'gotify') return defaultGotifyConfig() as unknown as Record<string, AlertMetaValue>;
+  if (type === 'discord') return defaultDiscordConfig() as unknown as Record<string, AlertMetaValue>;
   if (type === 'mqtt') return defaultMqttConfig() as unknown as Record<string, AlertMetaValue>;
   if (type === 'webhook') return defaultWebhookConfig() as unknown as Record<string, AlertMetaValue>;
+  if (type === 'webpush') return defaultWebPushConfig() as unknown as Record<string, AlertMetaValue>;
   return defaultNtfyConfig() as unknown as Record<string, AlertMetaValue>;
 }
 
@@ -259,6 +285,20 @@ export function coerceAppriseConfig(config: unknown): AppriseConfig {
     appriseUsername: stringValue(raw.appriseUsername),
     apprisePassword: stringValue(raw.apprisePassword),
     titlePrefix: stringValue(raw.titlePrefix, 'CrowdSec'),
+  };
+}
+
+export function coerceWebPushConfig(config: unknown): WebPushConfig {
+  return { webpushSubject: stringValue(asRecord(config).webpushSubject) };
+}
+
+export function coerceDiscordConfig(config: unknown): DiscordConfig {
+  const raw = asRecord(config);
+  return {
+    discordWebhookUrl: stringValue(raw.discordWebhookUrl),
+    discordUsername: stringValue(raw.discordUsername),
+    discordMention: stringValue(raw.discordMention),
+    discordLinkUrl: stringValue(raw.discordLinkUrl),
   };
 }
 
@@ -393,6 +433,47 @@ export function validateNotificationChannelConfig(type: NotificationChannelType,
       if (!apprise.appriseKey.trim()) return 'Apprise configuration key is required';
       if (!/^[\w-]{1,128}$/.test(apprise.appriseKey.trim())) {
         return 'Apprise configuration key must only contain letters, numbers, hyphens, and underscores';
+      }
+    }
+    return null;
+  }
+
+  if (type === 'webpush') {
+    const subject = coerceWebPushConfig(config).webpushSubject.trim();
+    if (!subject) return null;
+    if (subject.length > 200) return 'Web Push contact must be at most 200 characters';
+    if (/^mailto:[^\s@]+@[^\s@]+$/.test(subject)) return null;
+    try {
+      if (new URL(subject).protocol === 'https:') return null;
+    } catch {
+      // Falls through to the message below.
+    }
+    return 'Web Push contact must be a mailto: address or an https URL';
+  }
+
+  if (type === 'discord') {
+    const discord = coerceDiscordConfig(config);
+    const webhookUrl = discord.discordWebhookUrl.trim();
+    if (!webhookUrl) return 'Discord webhook URL is required';
+    // A stored webhook URL is masked in the form, so only validate what was typed.
+    if (webhookUrl !== STORED_SECRET_SENTINEL) {
+      try {
+        const parsed = new URL(webhookUrl);
+        if (parsed.protocol !== 'https:') return 'Discord webhook URL must use https';
+        if (!/^\/api(?:\/v\d+)?\/webhooks\/\d+\/[\w-]+\/?$/.test(parsed.pathname)) {
+          return 'Discord webhook URL must look like https://discord.com/api/webhooks/<id>/<token>';
+        }
+      } catch {
+        return 'Discord webhook URL must be a valid URL';
+      }
+    }
+    const linkUrl = discord.discordLinkUrl.trim();
+    if (linkUrl) {
+      try {
+        const parsed = new URL(linkUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) return 'Web UI link URL must be a valid http or https URL';
+      } catch {
+        return 'Web UI link URL must be a valid http or https URL';
       }
     }
     return null;

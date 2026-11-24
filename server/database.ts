@@ -53,6 +53,7 @@ const STATE_SETTING_KEYS = new Set([
   'statistics_settings',
   'statistics_existing_install_default_disabled',
   'notification_secret_key',
+  'webpush_vapid',
   'language',
   'metrics_sidebar_visible',
   'allowlists_sidebar_visible',
@@ -352,6 +353,19 @@ export interface AuthUserRow {
 }
 
 export type OidcLinkMethod = 'verified' | 'username';
+
+export interface AuthSessionRecord {
+  session_id: string;
+  user_id: number;
+  username: string;
+  auth_method: string | null;
+  /** Unix seconds. */
+  created_at: number;
+  last_seen_at: number;
+  expires_at: number;
+  ip: string | null;
+  user_agent: string | null;
+}
 
 export interface AuthUserListRow extends AuthUserRow {
   passkey_count: number;
@@ -1376,6 +1390,16 @@ export class CrowdsecDatabase {
       return (this.db.prepare('SELECT COUNT(*) as count FROM alerts WHERE instance_id = ?').get(instanceId) as CountRow).count;
     }
     return (this.countAlertsStatement.get() as CountRow).count;
+  }
+
+  /** Live (non-simulated) alerts created at or after `since`, an ISO timestamp. */
+  countAlertsSince(since: string): number {
+    return (this.db.prepare('SELECT COUNT(*) as count FROM alerts WHERE created_at >= ? AND simulated = 0').get(since) as CountRow).count;
+  }
+
+  /** Live (non-simulated) decisions that have not expired at `now`, an ISO timestamp. */
+  countActiveDecisions(now: string): number {
+    return (this.db.prepare('SELECT COUNT(*) as count FROM decisions WHERE stop_at > ? AND simulated = 0').get(now) as CountRow).count;
   }
 
   countDecisions(instanceId?: string): number {
@@ -2551,6 +2575,63 @@ export class CrowdsecDatabase {
     this.insertRevokedAuthSessionStatement.run({ $session_id: sessionId, $expires_at: expiresAt });
   }
 
+  /** Remembers a dashboard session so it can be listed and revoked; `login` also stamps the user's last sign-in. */
+  recordAuthSession(params: {
+    sessionId: string;
+    userId: number;
+    method: string | null;
+    createdAt: number;
+    now: number;
+    expiresAt: number;
+    ip: string | null;
+    userAgent: string | null;
+    login: boolean;
+  }): void {
+    this.db.query('DELETE FROM auth_sessions WHERE expires_at <= ?').run(params.now);
+    this.db.query(`
+      INSERT INTO auth_sessions (session_id, user_id, auth_method, created_at, last_seen_at, expires_at, ip, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, expires_at = excluded.expires_at
+    `).run(params.sessionId, params.userId, params.method, params.createdAt, params.now, params.expiresAt, params.ip, params.userAgent);
+    if (params.login) {
+      this.db.query(`
+        INSERT INTO auth_last_login (user_id, at, method, ip) VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET at = excluded.at, method = excluded.method, ip = excluded.ip
+      `).run(params.userId, params.now, params.method, params.ip);
+    }
+  }
+
+  touchAuthSession(sessionId: string, now: number): void {
+    this.db.query('UPDATE auth_sessions SET last_seen_at = ? WHERE session_id = ?').run(now, sessionId);
+  }
+
+  getAuthSessionRecord(sessionId: string): AuthSessionRecord | null {
+    return (this.db.query(`
+      SELECT s.session_id, s.user_id, u.username, s.auth_method, s.created_at, s.last_seen_at, s.expires_at, s.ip, s.user_agent
+      FROM auth_sessions s JOIN auth_users u ON u.id = s.user_id WHERE s.session_id = ?
+    `).get(sessionId) as AuthSessionRecord | null) ?? null;
+  }
+
+  /** Sessions that have neither expired nor been revoked, newest activity first. */
+  listAuthSessions(now: number, userId?: number): AuthSessionRecord[] {
+    return this.db.query(`
+      SELECT s.session_id, s.user_id, u.username, s.auth_method, s.created_at, s.last_seen_at, s.expires_at, s.ip, s.user_agent
+      FROM auth_sessions s JOIN auth_users u ON u.id = s.user_id
+      WHERE s.expires_at > ? AND (? IS NULL OR s.user_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM revoked_auth_sessions r WHERE r.session_id = s.session_id AND r.expires_at > ?)
+      ORDER BY s.last_seen_at DESC, s.session_id
+    `).all(now, userId ?? null, userId ?? null, now) as AuthSessionRecord[];
+  }
+
+  deleteAuthSessionRecord(sessionId: string): void {
+    this.db.query('DELETE FROM auth_sessions WHERE session_id = ?').run(sessionId);
+  }
+
+  getAuthLastLogins(): Map<number, { at: number; method: string | null }> {
+    const rows = this.db.query('SELECT user_id, at, method FROM auth_last_login').all() as Array<{ user_id: number; at: number; method: string | null }>;
+    return new Map(rows.map((row) => [row.user_id, { at: row.at, method: row.method }]));
+  }
+
   isAuthSessionRevoked(sessionId: string): boolean {
     return Boolean(this.getRevokedAuthSessionStatement.get({
       $session_id: sessionId,
@@ -3299,6 +3380,57 @@ function createStateSchema(db: Database, schema: string, fresh: boolean): void {
       expires_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS ${schema}.auth_sessions (
+      session_id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      auth_method TEXT,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      ip TEXT,
+      user_agent TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_auth_sessions_user ON auth_sessions(user_id);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.auth_last_login (
+      user_id INTEGER PRIMARY KEY,
+      at INTEGER NOT NULL,
+      method TEXT,
+      ip TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      time TEXT NOT NULL,
+      user TEXT NOT NULL,
+      role TEXT,
+      action TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      target TEXT,
+      details TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_audit_events_time ON audit_events(time);
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_audit_events_user ON audit_events(user, time);
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_audit_events_target ON audit_events(target);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.auto_ban_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.auto_ban_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      rule_id TEXT NOT NULL,
+      rule_name TEXT NOT NULL,
+      ip TEXT NOT NULL,
+      action TEXT NOT NULL,
+      duration TEXT,
+      alerts INTEGER NOT NULL,
+      detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_auto_ban_log_rule_ip ON auto_ban_log(rule_id, ip, at);
+
     CREATE TABLE IF NOT EXISTS ${schema}.oidc_processed_logouts (
       issuer TEXT NOT NULL,
       token_id TEXT NOT NULL,
@@ -3386,6 +3518,69 @@ function createStateSchema(db: Database, schema: string, fresh: boolean): void {
     );
     CREATE INDEX IF NOT EXISTS ${schema}.idx_recent_search_filters_owner_used
       ON recent_search_filters(owner_id, used_at_ms DESC);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.entity_notes (
+      id TEXT PRIMARY KEY,
+      subject_type TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      author_id INTEGER NOT NULL,
+      author_name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_entity_notes_subject
+      ON entity_notes(subject_type, subject, created_at);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.hub_executors (
+      id TEXT PRIMARY KEY,
+      machine TEXT,
+      instance_id TEXT,
+      name TEXT NOT NULL,
+      source TEXT NOT NULL,
+      transport TEXT NOT NULL,
+      host TEXT,
+      port INTEGER,
+      ssh_user TEXT,
+      key_ref TEXT,
+      known_hosts_ref TEXT,
+      host_key TEXT,
+      public_key TEXT,
+      command TEXT,
+      mode TEXT,
+      status TEXT NOT NULL,
+      last_check_at TEXT,
+      last_error TEXT,
+      pending_reload INTEGER NOT NULL DEFAULT 0,
+      profile TEXT,
+      apply_profile INTEGER NOT NULL DEFAULT 0,
+      app_from TEXT,
+      created_at TEXT NOT NULL,
+      paired_at TEXT,
+      paired_from TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ${schema}.idx_hub_executors_machine ON hub_executors(machine) WHERE machine IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS ${schema}.hub_pairing_tokens (
+      token_hash TEXT PRIMARY KEY,
+      executor_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      expires_at INTEGER NOT NULL,
+      downloads INTEGER NOT NULL DEFAULT 0,
+      used_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_hub_pairing_tokens_executor ON hub_pairing_tokens(executor_id);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.push_subscriptions (
+      endpoint TEXT PRIMARY KEY,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      username TEXT NOT NULL,
+      user_agent TEXT,
+      created_at TEXT NOT NULL,
+      last_success_at TEXT
+    );
 
     CREATE TABLE IF NOT EXISTS ${schema}.pending_alert_deletions (
       alert_id TEXT PRIMARY KEY,

@@ -238,3 +238,52 @@ describe('allowlist protection in the Add Decision modal', () => {
     }
   });
 });
+
+describe('ban presets in the Add Decision modal', () => {
+  test.each([
+    ['1 hour', '1h'],
+    ['24 hours', '24h'],
+    ['7 days', '7d'],
+    ['Permanent (10 years)', '3650d'],
+  ])('the %s preset sets the duration sent to the server', async (label, duration) => {
+    vi.mocked(api.addDecision).mockResolvedValue(undefined);
+    const dialog = await openAddDecision('/decisions');
+    const preset = within(dialog).getByRole('button', { name: label });
+    expect(preset).toHaveAttribute('aria-pressed', 'false');
+
+    await userEvent.click(preset);
+    expect(preset).toHaveAttribute('aria-pressed', 'true');
+    expect(within(dialog).getByRole('textbox', { name: 'Duration' })).toHaveValue(duration);
+
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP / Range' }), '203.0.113.20');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add Decision' }));
+    await waitFor(() => expect(api.addDecision).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.20', duration })));
+  });
+
+  test('typing a custom duration clears the preset highlight', async () => {
+    const dialog = await openAddDecision('/decisions');
+    await userEvent.click(within(dialog).getByRole('button', { name: '24 hours' }));
+    await userEvent.clear(within(dialog).getByRole('textbox', { name: 'Duration' }));
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Duration' }), '2d');
+    expect(within(dialog).getByRole('button', { name: '24 hours' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('the reason dropdown fills the reason and stays in sync with manual edits', async () => {
+    vi.mocked(api.addDecision).mockResolvedValue(undefined);
+    const dialog = await openAddDecision('/decisions');
+    const presetSelect = within(dialog).getByRole('combobox', { name: 'Reason preset' });
+    expect(presetSelect).toHaveValue('');
+
+    await userEvent.selectOptions(presetSelect, 'Brute force');
+    expect(within(dialog).getByRole('textbox', { name: 'Reason' })).toHaveValue('Brute force');
+    expect(presetSelect).toHaveValue('bruteForce');
+
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Reason' }), ' on ssh');
+    expect(presetSelect).toHaveValue('');
+
+    await userEvent.selectOptions(presetSelect, 'Spam');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP / Range' }), '203.0.113.21');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add Decision' }));
+    await waitFor(() => expect(api.addDecision).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.21', reason: 'Spam' })));
+  });
+});

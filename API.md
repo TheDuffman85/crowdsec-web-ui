@@ -87,6 +87,7 @@ Names are limited to 80 characters, queries to 4096 characters, and named filter
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/health` | Public health check returning `{ "status": "ok" }`. |
+| GET | `/api/status` | Token-protected summary for monitors (`Authorization: Bearer <token>`; token from `STATUS_API_TOKEN` or `STATUS_API_TOKEN_FILE`, at least 16 characters). Returns `status` (`ok`, `degraded`, `down`), `version`, `cache_ready`, `last_update`, per-instance LAPI connectivity, `alerts_last_24h` and `active_decisions`, excluding simulated records. Answers `503` when `down` and `404` when no token is configured. |
 
 ## Auth
 
@@ -404,7 +405,7 @@ Channel create/update body:
 }
 ```
 
-Supported channel types: `apprise`, `ntfy`, `gotify`, `email`, `mqtt`, `webhook`.
+Supported channel types: `apprise`, `ntfy`, `gotify`, `discord`, `email`, `mqtt`, `webhook`, `webpush`.
 
 Rule create/update body:
 
@@ -422,6 +423,52 @@ Rule create/update body:
 Supported rule types: `alert-spike`, `alert-threshold`, `new-alert-decision`, `new-cve`, `ip-ban`, `application-update`, `crowdsec-update`, `lapi-availability`. The `crowdsec-update` rule has an empty config and checks each configured Prometheus endpoint against the latest stable CrowdSec release.
 
 Supported severities: `info`, `warning`, `critical`.
+
+## Tools and Insights
+
+All routes require a signed-in session unless noted. Routes that change data need the same permissions as the matching page.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/notes?type=ip\|alert&subject=` | Notes on an IP or alert. Each note has `can_edit` (author) and `can_delete` (author or administrator). |
+| POST | `/api/notes` | Add a note: `{ "subject_type", "subject", "body" }`. Bodies are limited to 2000 characters and 200 notes per subject. |
+| PATCH / DELETE | `/api/notes/:id` | Edit or delete a note. |
+| GET | `/api/repeat-offenders?limit=` | Addresses banned more than once, with a suggested next duration. |
+| GET | `/api/repeat-offenders/check?ip=` | Ban history for one address. |
+| GET | `/api/ip-intel?ip=` | WHOIS (RDAP), AbuseIPDB and Shodan data for a public address. Rate limited and cached. |
+| GET | `/api/ip-intel/sources` | Which intelligence sources are configured. |
+| GET | `/api/geo-blocking?hours=` | Recent alerts and unique IPs per country, and countries that already have a `Country` decision. |
+| POST | `/api/decisions/bulk-add` | With `"value_scope": "country"`, `values` are ISO 3166-1 alpha-2 codes and each becomes a `Country`-scope decision. |
+| GET | `/api/hosts` | Machines that reported alerts, with 24 hour, 7 day and total counts. |
+| GET | `/api/hosts/detail?machine=` | One machine: 14 day series, top scenarios, sources, countries and targets, recent alerts and active decisions. |
+| GET | `/api/blocklists` | Active decisions grouped by origin (community, subscribed, local). Read-only; `manageable` is always `false`. |
+| GET | `/api/live-feed?since=&limit=` | Newest live alerts with last hour and 24 hour counters for the wallboard. |
+| GET | `/api/report?days=\|month=YYYY-MM` | Report figures as JSON. |
+| GET | `/api/report.pdf?days=\|month=YYYY-MM` | The same report as a PDF download. |
+| GET | `/api/auto-ban` | Auto-ban settings and the 50 most recent log entries. |
+| PUT | `/api/auto-ban` | Replace the settings (`can_manage_settings` required): `{ "enabled", "dry_run", "rules": [{ "name", "scenario", "min_alerts", "window_minutes", "duration", "escalate" }] }`. |
+| POST | `/api/auto-ban/preview` | Addresses the saved rules match right now. Bans and logs nothing. |
+| GET | `/api/auth/sessions?all=1` | Signed-in sessions. `all=1` lists every user's sessions and is administrator only. |
+| DELETE | `/api/auth/sessions/:id` | End a session: your own, or any session as an administrator. |
+| GET | `/api/audit-log?user=&action=&outcome=&from=&to=&q=&page=&page_size=` | Administrators only. Who changed what: decisions, alerts, users, sessions, push subscriptions and hub changes, newest first, with filters and paging. |
+| GET | `/api/threat-score?ip=` | Score from 0 to 100 for one address (alert volume, scenario severity, repeat bans and cached AbuseIPDB reputation) with the factors behind it. Never triggers a lookup. |
+| GET | `/api/threat-scores?ips=a,b,c` | The same for up to 100 comma-separated addresses. |
+| GET | `/api/ip-timeline?ip=` | Alerts, decisions, notes and (for administrators) audit entries for one address in time order. |
+| GET | `/api/asn?days=` | Attackers grouped by network (AS number and name) with alert and address counts, top scenarios, countries and ranges. Alerts with no known network are counted in `unknown_alerts`. |
+| GET | `/api/asn/:asn?days=` | One network: its addresses, ranges and scenarios. |
+| GET | `/api/push/status?endpoint=` | Administrators only. The public VAPID key, the number of subscriptions and whether `endpoint` is subscribed. The private key is never returned. |
+| POST | `/api/push/subscribe` | Administrators only. Save a browser subscription: `{ "endpoint", "keys": { "p256dh", "auth" } }`. |
+| POST | `/api/push/unsubscribe` | Administrators only. Remove one: `{ "endpoint" }`. |
+| GET | `/api/hub?server=<id>` | Hub status for one server (default: the first paired one): executor state (`disabled` or `ready`), whether the user can manage it, whether a reload is pending, the catalog (when the executor works) and the scenarios that raised alerts. |
+| GET | `/api/hub/servers` | The server registry plus detected machines: id, name, machine, host, mode, status (`detected`, `pending`, `paired` or `error`), last check and error, pending pairing expiry, and the available profiles. Private keys are never returned. |
+| POST | `/api/hub/action` | Administrators only. `{ "action": "install" \| "remove" \| "upgrade", "type": "scenarios" \| "collections" \| "parsers" \| "postoverflows", "name", "servers": ["<id>", ...], "confirm": true }`, or `{ "action": "update" \| "upgrade-all", "servers": [...], "confirm": true }`. Without `"confirm": true` the request is refused. Runs on every listed server and answers with one result per server; a failing server does not stop the others. Sets that server's pending-reload flag. |
+| POST | `/api/hub/reload` | Administrators only. `{ "servers": [...], "confirm": true }` sends CrowdSec a reload signal on each server and clears its pending-reload flag. |
+| POST | `/api/hub/profile` | Administrators only. `{ "profile": "web" \| "linux", "servers": [...], "confirm": true }` installs the profile's items on each server, with a result per server. |
+| POST | `/api/hub/servers/pair` | Administrators only. `{ "machine", "name"?, "profile"?, "apply_profile"?, "from"? }` creates a pending server and a one-time token. Answers with `command` (the one-line install command), `uninstall_command` and `token_expires_at`. The token is stored only as a hash. |
+| POST | `/api/hub/servers/:id/check` | Administrators only. Reads the hub through the server's executor and records the result. |
+| DELETE | `/api/hub/servers/:id` | Administrators only. Removes the server, its key and its pinned host key. The `env` entry cannot be removed. Answers with `uninstall_command`. |
+| GET | `/api/hub/pair/:token/install.sh` | No login: the token is the credential. Returns the install script. Valid for the token's lifetime and at most five downloads. |
+| POST | `/api/hub/pair/:token/complete` | No login: the token is the credential. Used once by the install script to report the user, mode and host key. |
 
 ## Update Check
 

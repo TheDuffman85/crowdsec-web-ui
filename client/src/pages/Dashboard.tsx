@@ -5,6 +5,9 @@ import { fetchDashboardStats, fetchConfig } from "../lib/api";
 import { useRefresh } from "../contexts/useRefresh";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
+import { ProtectionCoverageCard } from "../components/ProtectionCoverageCard";
+import { SmartSummary } from "../components/SmartSummary";
+import { TrendCards } from "../components/TrendCards";
 import { ScenarioName } from "../components/ScenarioName";
 import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
@@ -112,6 +115,7 @@ interface InFlightDashboardLoad {
 }
 
 const ActivityBarChart = memo(lazy(async () => ({ default: (await import('../components/DashboardCharts')).ActivityBarChart })));
+const PeriodCompareCard = memo(lazy(async () => ({ default: (await import('../components/PeriodCompareCard')).PeriodCompareCard })));
 const WorldMapCard = memo(lazy(async () => ({ default: (await import('../components/WorldMapCard')).WorldMapCard })));
 
 const EMPTY_FILTERS: DashboardFilters = {
@@ -1705,6 +1709,29 @@ export function Dashboard() {
                         </Suspense>
                     </div>
                 </div>
+
+                <SmartSummary
+                    alerts={dashboardData.series.alertsHistory}
+                    granularity={granularity}
+                    totalAlerts={dashboardData.filteredTotals.alerts}
+                    topScenarios={dashboardData.topScenarios}
+                    topCountries={dashboardData.topCountries}
+                    topIPs={dashboardData.topIPs}
+                />
+
+                <ProtectionCoverageCard />
+
+                <TrendCards
+                    alerts={dashboardData.series.alertsHistory}
+                    decisions={dashboardData.series.decisionsHistory}
+                    granularity={granularity}
+                />
+
+                {config?.statistics?.settings.enabled && (
+                    <Suspense fallback={null}>
+                        <PeriodCompareCard timeZone={config.statistics.timeZone} />
+                    </Suspense>
+                )}
 
                 {/* Top Statistics Grid */}
                 <div

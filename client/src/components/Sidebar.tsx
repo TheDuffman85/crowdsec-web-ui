@@ -1,5 +1,5 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, ListChecks, Bell, X, Sun, Moon, Monitor, ArrowUpCircle, BarChart3, ChartLine, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown, Boxes } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, ListChecks, Bell, X, Sun, Moon, Monitor, ArrowUpCircle, BarChart3, ChartLine, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown, Boxes, Wrench } from "lucide-react";
 import { Badge } from "./ui/Badge";
 import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
@@ -173,6 +173,7 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
         ...(showStatisticsNav ? [{ to: "/statistics", label: "pages.statistics.title", icon: ChartLine }] : []),
         ...(showMetricsNav ? [{ to: "/metrics", label: "components.sidebar.nav.metrics", icon: BarChart3 }] : []),
         { to: "/notifications", label: "components.sidebar.nav.notifications", icon: Bell },
+        { to: "/tools", label: "components.sidebar.nav.tools", icon: Wrench },
         { to: "/settings", label: "components.sidebar.nav.settings", icon: SettingsIcon },
     ];
 

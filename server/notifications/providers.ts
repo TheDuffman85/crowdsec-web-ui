@@ -10,6 +10,8 @@ import type { SmtpTlsMode } from '../smtp';
 import { publishMqttNotification, type MqttPublishConfig } from './mqtt-client';
 import { renderTemplate, validateTemplate } from './webhook-template';
 import type { OutboundLookup } from './outbound-guard';
+import { buildDiscordEmbed, normalizeLinkBaseUrl } from './discord-embed';
+import type { WebPushDelivery } from './web-push-service';
 
 export const STORED_SECRET_SENTINEL = '(stored)';
 
@@ -33,6 +35,8 @@ export interface NotificationProviderPayload {
 export interface NotificationProviderContext {
   fetchImpl: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
+  // Browsers subscribed to Web Push; absent where the feature is not wired up.
+  webPush?: WebPushDelivery;
   assertHostAllowed: (host: string, label: string) => Promise<void>;
   assertUrlAllowed: (value: string, label: string) => Promise<void>;
   // Validating DNS lookup that sockets must connect through, so the checked address is the one used.
@@ -102,6 +106,9 @@ interface WebhookConfig {
 const HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 const NTFY_PRIORITIES = new Set(['auto', 'min', 'low', 'default', 'high', 'urgent']);
 const APPRISE_TYPES = new Set(['auto', 'info', 'success', 'warning', 'failure']);
+const DISCORD_WEBHOOK_PATH_PATTERN = /^\/api(?:\/v\d+)?\/webhooks\/\d+\/[\w-]+\/?$/;
+const DISCORD_USERNAME_LIMIT = 80;
+const DISCORD_MENTION_LIMIT = 200;
 const APPRISE_KEY_PATTERN = /^[\w-]{1,128}$/;
 const WEBHOOK_ERROR_BODY_SNIPPET_LIMIT = 500;
 const MAX_NOTIFICATION_REDIRECTS = 3;
@@ -904,6 +911,101 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
       return rawStringValue(config.gotifyToken) ? ['gotifyToken'] : [];
     },
   },
+  discord: {
+    type: 'discord',
+    secretFields: ['discordWebhookUrl'],
+    getDefaultConfig() {
+      return {
+        discordWebhookUrl: '',
+        discordUsername: '',
+        discordMention: '',
+        discordLinkUrl: '',
+      };
+    },
+    normalizeConfig(config, existingConfig) {
+      const raw = asRecord(config);
+      const existing = existingConfig ? this.normalizeConfig(existingConfig) : this.getDefaultConfig();
+      const incomingUrl = rawStringValue(raw.discordWebhookUrl ?? raw.webhook_url).trim();
+      return {
+        discordWebhookUrl: isStoredSecret(incomingUrl)
+          ? rawStringValue(existing.discordWebhookUrl)
+          : incomingUrl,
+        discordUsername: stringValue(raw.discordUsername ?? raw.username, stringValue(existing.discordUsername)),
+        discordMention: stringValue(raw.discordMention ?? raw.mention, stringValue(existing.discordMention)),
+        discordLinkUrl: stringValue(raw.discordLinkUrl ?? raw.link_url, stringValue(existing.discordLinkUrl)),
+      };
+    },
+    maskConfig(config) {
+      return {
+        ...config,
+        discordWebhookUrl: maskSecret(rawStringValue(config.discordWebhookUrl)),
+      };
+    },
+    validateConfig(config) {
+      const normalized = this.normalizeConfig(config);
+      const webhookUrl = stringValue(normalized.discordWebhookUrl);
+      if (!webhookUrl) return 'Discord webhook URL is required';
+      try {
+        const parsed = new URL(webhookUrl);
+        if (parsed.protocol !== 'https:') return 'Discord webhook URL must use https';
+        if (!DISCORD_WEBHOOK_PATH_PATTERN.test(parsed.pathname)) {
+          return 'Discord webhook URL must look like https://discord.com/api/webhooks/<id>/<token>';
+        }
+      } catch {
+        return 'Discord webhook URL must be a valid URL';
+      }
+      if (stringValue(normalized.discordUsername).length > DISCORD_USERNAME_LIMIT) {
+        return `Discord username must be at most ${DISCORD_USERNAME_LIMIT} characters`;
+      }
+      if (stringValue(normalized.discordMention).length > DISCORD_MENTION_LIMIT) {
+        return `Discord mention must be at most ${DISCORD_MENTION_LIMIT} characters`;
+      }
+      const linkUrl = stringValue(normalized.discordLinkUrl);
+      if (linkUrl && !normalizeLinkBaseUrl(linkUrl)) return 'Web UI link URL must be a valid http or https URL';
+      return null;
+    },
+    async send(channel, payload, context) {
+      const config = this.normalizeConfig(channel.config);
+      const embed = buildDiscordEmbed({
+        title: payload.title,
+        message: payload.message,
+        severity: payload.severity,
+        metadata: payload.metadata,
+        sentAt: payload.sent_at,
+        appName: payload.app_name,
+        ruleName: payload.rule_name,
+        linkBaseUrl: stringValue(config.discordLinkUrl),
+      });
+      const mention = stringValue(config.discordMention);
+      const shouldMention = Boolean(mention) && payload.severity === 'critical';
+      const body: Record<string, unknown> = {
+        embeds: [embed],
+        // Only ping when a mention is configured and the event is critical; never from event text.
+        allowed_mentions: shouldMention ? { parse: ['roles', 'users', 'everyone'] } : { parse: [] },
+      };
+      if (shouldMention) body.content = mention;
+      const username = stringValue(config.discordUsername);
+      if (username) body.username = username;
+
+      const response = await guardedFetch(context, stringValue(config.discordWebhookUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, 'Discord webhook URL');
+      if (!response.ok) {
+        const responseSnippet = await readResponseSnippet(response);
+        const message = `Discord request failed with status ${response.status}`;
+        throw createNotificationSendError(
+          responseSnippet ? `${message}: ${responseSnippet}` : message,
+          response.status >= 500 || response.status === 429,
+          { status: response.status, responseSnippet },
+        );
+      }
+    },
+    getConfiguredSecrets(config) {
+      return rawStringValue(config.discordWebhookUrl) ? ['discordWebhookUrl'] : [];
+    },
+  },
   mqtt: {
     type: 'mqtt',
     secretFields: ['password'],
@@ -1148,6 +1250,63 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
     },
     getConfiguredSecrets(config) {
       return getWebhookConfiguredSecrets(normalizeWebhookConfig(config));
+    },
+  },
+  webpush: {
+    type: 'webpush',
+    secretFields: [],
+    getDefaultConfig() {
+      return { webpushSubject: '' };
+    },
+    normalizeConfig(config, existingConfig) {
+      const raw = asRecord(config);
+      const existing = existingConfig ? this.normalizeConfig(existingConfig) : this.getDefaultConfig();
+      return { webpushSubject: stringValue(raw.webpushSubject ?? raw.subject, stringValue(existing.webpushSubject)) };
+    },
+    maskConfig(config) {
+      return config;
+    },
+    validateConfig(config) {
+      const subject = stringValue(this.normalizeConfig(config).webpushSubject);
+      if (!subject) return null;
+      if (subject.length > 200) return 'Web Push contact must be at most 200 characters';
+      if (/^mailto:[^\s@]+@[^\s@]+$/.test(subject)) return null;
+      try {
+        if (new URL(subject).protocol === 'https:') return null;
+      } catch {
+        // Falls through to the message below.
+      }
+      return 'Web Push contact must be a mailto: address or an https URL';
+    },
+    async send(channel, payload, context) {
+      const delivery = context.webPush;
+      if (!delivery) throw createNotificationSendError('Web Push is not available', false);
+      if (delivery.subscriptionCount() === 0) {
+        throw createNotificationSendError('No browsers are subscribed to Web Push yet. Open Notifications in a browser over HTTPS and turn it on.', false);
+      }
+      const config = this.normalizeConfig(channel.config);
+      const subject = stringValue(config.webpushSubject)
+        || (context.hostname ? `https://${context.hostname}` : 'mailto:admin@example.invalid');
+      const eventType = payload.metadata.event_type;
+      const result = await delivery.sendAll(
+        {
+          title: payload.title.slice(0, 100),
+          body: payload.message.replace(/\s+/g, ' ').slice(0, 240),
+          severity: payload.severity,
+          url: eventType === 'decision' ? '/decisions' : '/alerts',
+        },
+        (url, init) => guardedFetch(context, url, init, 'Web Push endpoint'),
+        subject,
+      );
+      if (result.sent === 0) {
+        throw createNotificationSendError(
+          result.failed > 0 ? 'Web Push delivery failed for every subscribed browser' : 'Every subscribed browser had expired and was removed',
+          result.failed > 0,
+        );
+      }
+    },
+    getConfiguredSecrets() {
+      return [];
     },
   },
 };

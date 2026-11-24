@@ -3,6 +3,7 @@ import { Sidebar } from "./Sidebar";
 import { useState, useEffect, useRef } from "react";
 import { Toast } from "./Toast";
 import { BackToTop } from "./BackToTop";
+import { CommandPalette } from "./CommandPalette";
 import { useToast } from "../contexts/useToast";
 import { useI18n } from "../lib/i18n";
 import { useHistoryBackedOverlay } from "../lib/historyOverlay";
@@ -128,6 +129,7 @@ export function Layout() {
                     <Outlet />
                 </div>
                 <BackToTop visibilityTargetRef={pageTopRef} />
+                <CommandPalette />
             </main>
             <div className="fixed bottom-4 right-4 z-50 flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-2">
                 {toasts.map((toast) => (

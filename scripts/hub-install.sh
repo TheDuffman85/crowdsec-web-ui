@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# Pairing installer for the CrowdSec Web UI "Scenarios / Hub" page.
+#
+# It lets the Web UI install, remove and upgrade CrowdSec hub items on this server
+# through one narrow SSH door:
+#   1. a dedicated low-privilege user that cannot log in with a password,
+#   2. a wrapper (hub-exec.sh) that accepts only a short list of hub requests,
+#   3. an authorized_keys entry for the Web UI's key that can run that wrapper and
+#      nothing else (forced command, only from the Web UI's address, no tty, no
+#      port or agent forwarding).
+# It then reports this server's SSH host key to the Web UI so the key can be pinned.
+#
+# Run it as root. Set DRY_RUN=1 (or pass --dry-run) to see what it would do.
+# Optional settings: HUB_USER, HUB_MODE (docker|native), CROWDSEC_CONTAINER,
+# APP_FROM (address the Web UI connects from), HUB_HOST, SSH_PORT.
+set -euo pipefail
+
+BASE_URL='__BASE_URL__'
+TOKEN='__TOKEN__'
+PUBLIC_KEY='__PUBLIC_KEY__'
+DEFAULT_FROM='__APP_FROM__'
+
+HUB_USER="${HUB_USER:-cshub}"
+CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
+LIB_DIR="/usr/local/lib/crowdsec-hub"
+CONF_DIR="/etc/crowdsec-hub"
+SUDOERS_FILE="/etc/sudoers.d/crowdsec-hub"
+DRY_RUN="${DRY_RUN:-0}"
+for arg in "$@"; do
+  if [[ "$arg" == "--dry-run" ]]; then DRY_RUN=1; fi
+done
+
+say() { echo "==> $*"; }
+fail() { echo "error: $*" >&2; exit 1; }
+run() {
+  if [[ "$DRY_RUN" == 1 ]]; then echo "+ $*"; else "$@"; fi
+}
+
+if [[ "$DRY_RUN" != 1 && $EUID -ne 0 ]]; then
+  fail "run this as root, for example: curl -fsSL ... | sudo bash"
+fi
+[[ "$HUB_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "HUB_USER is not a valid user name"
+
+# 1. Where does CrowdSec run?
+mode="${HUB_MODE:-}"
+if [[ -z "$mode" ]]; then
+  if command -v docker >/dev/null 2>&1 && [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)" == true ]]; then
+    mode="docker"
+  elif command -v cscli >/dev/null 2>&1; then
+    mode="native"
+  else
+    if [[ "$DRY_RUN" == 1 ]]; then mode="docker"; else fail "CrowdSec was not found: no running container named $CONTAINER and no cscli on the PATH"; fi
+  fi
+fi
+[[ "$mode" == docker || "$mode" == native ]] || fail "HUB_MODE must be docker or native"
+say "CrowdSec runs in $mode mode"
+
+cscli_bin=""
+systemctl_bin=""
+if [[ "$mode" == native ]]; then
+  cscli_bin="$(command -v cscli || true)"
+  [[ -n "$cscli_bin" || "$DRY_RUN" == 1 ]] || fail "cscli was not found"
+  cscli_bin="${cscli_bin:-/usr/bin/cscli}"
+  systemctl_bin="$(command -v systemctl || echo /bin/systemctl)"
+  command -v sudo >/dev/null 2>&1 || [[ "$DRY_RUN" == 1 ]] || fail "native mode needs sudo"
+fi
+
+# 2. Which address will the Web UI connect from?
+app_host="${BASE_URL#*://}"
+app_host="${app_host%%/*}"
+app_host="${app_host%%:*}"
+app_from="${APP_FROM:-$DEFAULT_FROM}"
+app_ip=""
+if [[ "$app_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  app_ip="$app_host"
+elif command -v getent >/dev/null 2>&1; then
+  app_ip="$(getent ahostsv4 "$app_host" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
+fi
+if [[ -z "$app_from" ]]; then app_from="$app_ip"; fi
+[[ -n "$app_from" ]] || fail "could not work out the Web UI's address; run again with APP_FROM=<address>"
+[[ "$app_from" =~ ^[0-9A-Fa-f:.,/*-]+$ ]] || fail "APP_FROM must be an address, a network such as 192.168.0.0/24, or a comma separated list"
+say "SSH access will be limited to $app_from"
+
+# 3. The dedicated user.
+created_user=0
+if id "$HUB_USER" >/dev/null 2>&1; then
+  say "User $HUB_USER already exists, reusing it"
+else
+  command -v useradd >/dev/null 2>&1 || [[ "$DRY_RUN" == 1 ]] || fail "useradd was not found"
+  say "Creating user $HUB_USER"
+  run useradd --system --create-home --home-dir "/var/lib/$HUB_USER" --shell /bin/bash --comment "CrowdSec Web UI hub executor" "$HUB_USER"
+  created_user=1
+fi
+# A "*" password hash keeps password logins impossible while still allowing key logins.
+run usermod --password '*' "$HUB_USER"
+if [[ "$mode" == docker ]]; then
+  getent group docker >/dev/null 2>&1 || [[ "$DRY_RUN" == 1 ]] || fail "docker mode needs the docker group"
+  run usermod --append --groups docker "$HUB_USER"
+fi
+
+# 4. The wrapper, its settings and the uninstaller.
+say "Installing the executor wrapper into $LIB_DIR"
+run install -d -m 755 -o root -g root "$LIB_DIR" "$CONF_DIR"
+write_file() { # write_file <path> <mode>; content on stdin
+  if [[ "$DRY_RUN" == 1 ]]; then
+    echo "+ write $1 (mode $2)"
+    cat >/dev/null
+  else
+    cat >"$1"
+    chown root:root "$1"
+    chmod "$2" "$1"
+  fi
+}
+write_file "$LIB_DIR/hub-exec.sh" 755 <<'HUB_EXEC_EOF'
+__HUB_EXEC_SCRIPT__
+HUB_EXEC_EOF
+write_file "$LIB_DIR/uninstall.sh" 755 <<'HUB_UNINSTALL_EOF'
+__HUB_UNINSTALL_SCRIPT__
+HUB_UNINSTALL_EOF
+write_file "$CONF_DIR/hub-exec.conf" 644 <<EOF_CONF
+USER=$HUB_USER
+CREATED_USER=$created_user
+MODE=$mode
+CONTAINER=$CONTAINER
+CSCLI=${cscli_bin:-/usr/bin/cscli}
+SYSTEMCTL=${systemctl_bin:-/bin/systemctl}
+EOF_CONF
+
+if [[ "$mode" == native ]]; then
+  say "Allowing $HUB_USER to run only the hub commands through sudo"
+  sudoers_tmp="$(mktemp)"
+  {
+    echo "# Written by the CrowdSec Web UI pairing installer; removed by $LIB_DIR/uninstall.sh"
+    echo "$HUB_USER ALL=(root) NOPASSWD: $cscli_bin hub list -a -o json, $cscli_bin hub update, $cscli_bin hub upgrade, $systemctl_bin reload crowdsec"
+    for type in scenarios collections parsers postoverflows; do
+      for action in install remove upgrade; do
+        echo "$HUB_USER ALL=(root) NOPASSWD: $cscli_bin $type $action *"
+      done
+    done
+  } >"$sudoers_tmp"
+  if [[ "$DRY_RUN" == 1 ]]; then
+    echo "+ write $SUDOERS_FILE"
+  else
+    if command -v visudo >/dev/null 2>&1; then
+      visudo -cf "$sudoers_tmp" >/dev/null || { rm -f "$sudoers_tmp"; fail "the generated sudo rule was rejected by visudo"; }
+    fi
+    install -m 440 -o root -g root "$sudoers_tmp" "$SUDOERS_FILE"
+  fi
+  rm -f "$sudoers_tmp"
+fi
+
+# 5. The SSH key, limited to the wrapper.
+home_dir="/var/lib/$HUB_USER"
+if [[ "$DRY_RUN" != 1 ]]; then
+  home_dir="$(getent passwd "$HUB_USER" | cut -d: -f6)"
+  [[ -n "$home_dir" ]] || fail "could not find the home directory of $HUB_USER"
+fi
+say "Authorizing the Web UI's SSH key for $HUB_USER (forced command, from $app_from only)"
+run install -d -m 700 -o "$HUB_USER" "$home_dir/.ssh"
+key_line="command=\"$LIB_DIR/hub-exec.sh\",from=\"$app_from\",restrict,no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc $PUBLIC_KEY"
+if [[ "$DRY_RUN" == 1 ]]; then
+  echo "+ add to $home_dir/.ssh/authorized_keys: $key_line"
+else
+  touch "$home_dir/.ssh/authorized_keys"
+  sed -i '/crowdsec-web-ui-hub/d' "$home_dir/.ssh/authorized_keys"
+  echo "$key_line" >>"$home_dir/.ssh/authorized_keys"
+  chown "$HUB_USER" "$home_dir/.ssh/authorized_keys"
+  chmod 600 "$home_dir/.ssh/authorized_keys"
+fi
+
+# 6. Tell the Web UI which host keys to trust.
+command -v sshd >/dev/null 2>&1 || [[ "$DRY_RUN" == 1 ]] || echo "warning: sshd was not found on this server; install and start an SSH server so the Web UI can connect" >&2
+ssh_port="${SSH_PORT:-}"
+if [[ -z "$ssh_port" ]] && command -v sshd >/dev/null 2>&1; then
+  ssh_port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}' || true)"
+fi
+ssh_port="${ssh_port:-22}"
+[[ "$ssh_port" =~ ^[0-9]{1,5}$ ]] || fail "SSH_PORT must be a number"
+
+host_address="${HUB_HOST:-}"
+if [[ -z "$host_address" && -n "$app_ip" ]] && command -v ip >/dev/null 2>&1; then
+  host_address="$(ip -4 route get "$app_ip" 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1 || true)"
+fi
+if [[ -z "$host_address" ]]; then
+  host_address="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+fi
+[[ -n "$host_address" ]] || fail "could not work out this server's address; run again with HUB_HOST=<address>"
+
+host_keys=""
+for pub in /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_ecdsa_key.pub /etc/ssh/ssh_host_rsa_key.pub; do
+  if [[ -r "$pub" ]]; then
+    host_keys="$host_keys\"$(awk '{print $1 " " $2}' "$pub")\","
+  fi
+done
+host_keys="${host_keys%,}"
+if [[ -z "$host_keys" ]]; then
+  if [[ "$DRY_RUN" == 1 ]]; then host_keys='"ssh-ed25519 DRYRUN"'; else fail "no SSH host keys were found in /etc/ssh"; fi
+fi
+
+payload="{\"address\":\"$host_address\",\"port\":$ssh_port,\"user\":\"$HUB_USER\",\"mode\":\"$mode\",\"host_keys\":[$host_keys]}"
+if [[ "$DRY_RUN" == 1 ]]; then
+  echo "+ POST $BASE_URL/api/hub/pair/<token>/complete $payload"
+  say "Dry run finished; nothing was changed"
+  exit 0
+fi
+say "Reporting this server's host keys to the Web UI"
+if ! curl -fsS -X POST -H 'Content-Type: application/json' -d "$payload" "$BASE_URL/api/hub/pair/$TOKEN/complete" >/dev/null; then
+  echo "error: the installer is set up here, but the Web UI did not accept the pairing (the token may have expired)." >&2
+  echo "Generate a new command in the Web UI, or remove everything with: sudo $LIB_DIR/uninstall.sh" >&2
+  exit 1
+fi
+
+say "Paired. To undo this later, run: sudo $LIB_DIR/uninstall.sh"

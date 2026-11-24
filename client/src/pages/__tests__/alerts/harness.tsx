@@ -6,6 +6,10 @@ import { compileAlertSearch } from '../../../../../shared/search';
 import { I18nContext, type I18nContextValue, type TranslationValues } from '../../../lib/i18n';
 import en from '../../../locales/en.json';
 
+vi.mock('../../../components/IpInsights', () => ({
+  IpInsights: () => null,
+}));
+
 const largeDecisionList = Array.from({ length: 75 }, (_, index) => ({
   id: 1000 + index,
   value: `203.0.113.${index}`,

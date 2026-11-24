@@ -35,10 +35,12 @@ A self-hosted web UI for investigating alerts, managing decisions, tracking long
 | Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Statistics, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
-| Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Email, Gotify, MQTT, ntfy, or Webhooks |
+| Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Browser push, Discord, Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, linking local accounts to SSO identities, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
-| Experience | Unified search, server-synced saved and recent filters, light, dark, and system themes, and responsive layouts |
+| Tools | Geo-blocking with impact preview, an attack map, networks (ASN) with range bans, auto-ban rules (off by default, with a dry run), repeat-offender tracking, per-IP timelines, a read-only blocklist overview, per-host pages, a live wallboard, an audit log, PDF security reports, and a Scenarios & hub page (read-only by default, optional install/remove/upgrade) |
+| Investigation | Threat scores, a plain-language summary and a compare-with-previous-period view on the Dashboard and Statistics, notes shared between users on IPs and alerts, optional IP intelligence (RDAP, AbuseIPDB, Shodan), scenario explanations, ban presets, CSV export, and a Ctrl/Cmd+K command palette |
+| Experience | Installable app (PWA) with an offline page, Unified search, server-synced saved and recent filters, light, dark, and system themes, and responsive layouts |
 | Branding | Custom application name, light and dark mode logos, and colors for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
 
 ### Screenshots
@@ -852,6 +854,101 @@ docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
 
 `server.basePath` does not affect the internal check at `localhost:3000/api/health`. If `server.port` changes, update the health-check command and port mapping.
 
+### Status Endpoint for Uptime Kuma and Homepage
+
+`GET /api/status` returns a small read-only summary for dashboards and monitors. It is disabled unless the process environment sets `STATUS_API_TOKEN` (or `STATUS_API_TOKEN_FILE` pointing at a secret file) to a token of at least 16 characters. It is read from the container environment even when a configuration file is used, and it is not a `config.yaml` setting. Requests must send `Authorization: Bearer <token>`; a token in the query string is rejected so it never reaches access logs.
+
+```bash
+curl -H "Authorization: Bearer $STATUS_API_TOKEN" http://localhost:3000/api/status
+# {"status":"ok","version":"2026.11.12","cache_ready":true,"last_update":"...",
+#  "instances":[{"id":"default","name":"CrowdSec","connected":true,...}],
+#  "alerts_last_24h":42,"active_decisions":7}
+```
+
+`status` is `ok`, `degraded` (some LAPI instances are offline or the cache is still building) or `down` (no LAPI is reachable). The endpoint answers `503` when `down`, so an Uptime Kuma HTTP monitor with a custom `Authorization` header alerts without parsing the body. In Homepage, use the `customapi` widget with the same header and map `alerts_last_24h` and `active_decisions`. Counts exclude simulated records.
+
+### Optional integrations and features
+
+| Variable | Purpose |
+| --- | --- |
+| `STATUS_API_TOKEN` / `STATUS_API_TOKEN_FILE` | Enables `GET /api/status` (see above). |
+| `ABUSEIPDB_API_KEY` / `ABUSEIPDB_API_KEY_FILE` | Adds AbuseIPDB reputation to the IP intelligence panel. |
+| `SHODAN_API_KEY` / `SHODAN_API_KEY_FILE` | Adds Shodan host data to the IP intelligence panel. |
+| `REPORT_MONTHLY_ENABLED` | Set to `true` to write the previous month's PDF report once a month. Nothing is sent anywhere. |
+| `REPORT_DIR` | Directory for those PDFs. Defaults to a `reports` folder next to the database. |
+
+- **IP intelligence** runs only when someone presses the lookup button. WHOIS data comes from the public RDAP service (`rdap.org`) and needs no key. Keys are read on each lookup, are never returned to the browser and never logged. Private addresses are refused, lookups are limited to 30 per minute and results are cached for an hour.
+- **Geo-blocking** creates one `Country`-scope decision per country. CrowdSec stores them, but a remediation component only enforces them if it supports that scope, and many firewall bouncers do not. Check yours first.
+- **Auto-ban rules** are disabled by default and start in dry-run mode, which only records what would have been banned. Allowlisted and private addresses and addresses that are already banned are skipped, and at most 25 addresses are handled per minute. Only administrators can change them.
+- **Blocklists** are shown read-only. The Local API cannot subscribe to or remove blocklists; use the CrowdSec Console or its Service API.
+- **Allowlists** stay read-only. The Local API only exposes allowlists for reading and checking, so entries cannot be added from the Web UI.
+- **Sessions** show the device and address of every signed-in session, with sign-out for your own sessions and for any session as an administrator. Ending a session is recorded in the audit log as `user.session-revoke`.
+
+### Installable app and browser push
+
+The Web UI is an installable app: browsers offer **Install** from the address bar, and `/sw.js` serves an offline page when the server cannot be reached. The service worker never caches API responses.
+
+Browser push (Web Push) is a notification destination type, **Browser push**. Each browser turns it on for itself from the destination's settings. Two things to know:
+
+- **It needs HTTPS.** Browsers only allow push on `https://` pages and on `localhost`. Open the dashboard through its HTTPS address (for example behind a reverse proxy) before turning it on; the toggle explains this when the page is opened over plain HTTP.
+- **Keys.** A VAPID key pair is created on first use and stored in the database, encrypted when `NOTIFICATION_SECRET_KEY` is set. The private key is never returned by the API or written to the log. If the pair cannot be decrypted (for example the secret changed), a new pair is created and old browser subscriptions are dropped, so browsers turn it on again. Subscriptions are limited to 200. An optional contact (`mailto:` or `https:`) is sent to push services; Apple's service expects a real one.
+
+Push messages go through the same outbound guard as other notifications and contain only the alert title and text.
+
+### Scenarios & hub
+
+**Tools → Scenarios & hub** lists the hub scenarios, collections, parsers and post-overflows with their installed state, available updates and the number of alerts each scenario raised. The Local API has no hub endpoints, so installing, removing and upgrading needs an executor that can run `cscli` next to CrowdSec. Executors are **off until you set one up**, and each CrowdSec server has its own:
+
+- Without one the page is read-only: it shows the scenarios that raised alerts and offers copyable `cscli` commands to run yourself.
+- With one, administrators can pick one or several servers and install, remove and upgrade items, update the hub index and upgrade everything on all of them at once. Every row shows the state per server (installed, outdated, tainted, not installed). Every change asks for confirmation naming the servers, is limited to the four item types, returns a result per server (one failing server never stops the others) and is written to the audit log (`hub.*`). Items you wrote by hand ("local") cannot be removed from the page.
+- Changes only take effect after CrowdSec reloads. The page then shows a banner per server, and **Reload CrowdSec** sends a reload signal only after a second confirmation naming the servers. Nothing reloads on its own.
+- **Profiles** are optional starting sets: *Web server* (nginx, traefik, wordpress, base HTTP scenarios) and *Linux base* (linux, sshd). They are applied only when an administrator chooses them, either on a server or as an opt-in tick box while pairing. They are off by default.
+
+#### Servers and pairing
+
+The app keeps a registry of servers, one per CrowdSec machine (host, SSH user, key, pinned host key, status and last check). CrowdSec machines are detected automatically from the alerts they sent and from the Prometheus metrics, and show as **Detected, installer not set up**. The app never connects to a detected machine until an administrator pairs it. The Local API has no machine list for the app to read, so a machine that has sent no alert and is not in the metrics will not appear.
+
+To pair a server, an administrator clicks **Set up installer** on it. The app creates a one-time token (32 random bytes, stored only as a hash, valid for 15 minutes, the install script can be downloaded at most five times and the final report is accepted once) and shows a single command:
+
+```bash
+curl -fsSL http://<app>/api/hub/pair/<token>/install.sh | sudo bash
+```
+
+Run it as root on the CrowdSec server. The script creates a low-privilege user (`cshub`), installs the allow-listed `hub-exec.sh` under `/usr/local/lib/crowdsec-hub/`, detects whether CrowdSec runs in Docker (a container called `crowdsec`) or natively, and adds one `authorized_keys` line locked to the wrapper with `command=`, `restrict` (no terminal, no forwarding) and `from="<app address>"`. For a native install it adds a sudoers file that allows only the listed `cscli` subcommands and `systemctl reload crowdsec`, checked with `visudo`. It then reports its host key to the app, which pins it. Using the token is written to the audit log (`hub.pair-script`, `hub.pair`). The app address in `from=` is guessed from the request; set `HUB_APP_ADDRESS` or fill in the address in the dialog if it is wrong.
+
+The app generates a separate ed25519 key pair for each server. Private keys are stored as mode-600 files in `hub-keys` next to the database and are never shown. To remove a server, use **Remove** in the page (it forgets the key and the pin) and run the uninstall command on the server:
+
+```bash
+sudo /usr/local/lib/crowdsec-hub/uninstall.sh
+```
+
+The installer is plain shell and is checked with `shellcheck` in the tests when it is available (set `SHELLCHECK_BIN`).
+
+| Variable | Purpose |
+| --- | --- |
+| `HUB_EXECUTOR` | `disabled` (default), `ssh` or `command`. When set it becomes the registry entry `env` (see below). |
+| `HUB_SSH_HOST`, `HUB_SSH_PORT`, `HUB_SSH_USER` | Where to connect for `ssh` (port defaults to 22). |
+| `HUB_SSH_KEY_FILE`, `HUB_SSH_KNOWN_HOSTS_FILE` | A dedicated private key and a pinned `known_hosts` file. Host keys are always checked and passwords are never used. |
+| `HUB_EXEC_COMMAND` | For `command`: the program to run, for example `sudo /opt/hub-exec.sh`. The request is passed as arguments. |
+| `HUB_EXEC_TIMEOUT_MS` | Timeout per operation (default 120000). |
+| `HUB_EXECUTOR_INSTANCE` | Which configured instance the executor belongs to (default: the first). |
+| `HUB_EXECUTOR_NAME`, `HUB_EXECUTOR_MACHINE` | Display name and CrowdSec machine name of the `env` entry, so it lines up with a detected machine. |
+| `HUB_PUBLIC_URL` | Address the install command uses to reach this app (default: taken from the request). |
+| `HUB_APP_ADDRESS` | Address this app connects from, as the server sees it. It becomes `from=` in `authorized_keys`. |
+| `HUB_PAIRING_TTL_MINUTES` | How long a pairing token is valid (default 15, at most 120). |
+
+The single-server `HUB_*` settings keep working: they appear in the registry as the `env` server and cannot be removed from the page (unset the variables instead).
+
+The application sends one short request line (for example `install scenarios crowdsecurity/ssh-bf`). It never sends a shell command. [`scripts/hub-exec.sh`](scripts/hub-exec.sh) runs on the CrowdSec host, checks the line again against a fixed list (`hub-list`, `hub-update`, `upgrade-all`, `install|remove|upgrade <type> <name>`, `reload`) and turns it into a fixed `cscli` call, through `docker exec <container>` or natively. Set `CROWDSEC_CONTAINER` there if the container is not called `crowdsec`. Calls to one server are run one at a time.
+
+Manual setup for a single server (instead of the pairing command): create a key pair used only for this, copy `hub-exec.sh` to the CrowdSec host, and add the public key to the `authorized_keys` of a user that can run `docker`, locked to the script:
+
+```text
+command="/srv/CrowdSec/deploy/hub-exec.sh",restrict,from="<web ui address>" ssh-ed25519 AAAA... crowdsec-web-ui-hub
+```
+
+`restrict` turns off terminals and port forwarding, and `command=` makes the script the only thing the key can run. To undo it, delete that line, delete the script and unset `HUB_EXECUTOR`.
+
 ## Runtime Behavior
 
 ### Prometheus Metrics Page
@@ -1047,6 +1144,7 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 | Destination | Settings |
 | --- | --- |
 | Apprise | Apprise API URL, then either a configuration key with optional tags (`POST /notify/{key}`, URLs stay on the Apprise server) or notification URLs sent with each request (`POST /notify`, stored encrypted). Optional basic auth for a reverse proxy, title prefix, and notification type (`auto`, `info`, `success`, `warning`, `failure`). Auto type maps `info` to `info`, `warning` to `warning`, and `critical` to `failure`. Use it to reach any [Apprise-supported service](https://github.com/caronc/apprise/wiki) such as Matrix, Discord, Slack, Telegram, or Pushover. |
+| Discord | Discord webhook URL (stored encrypted), optional display name, optional mention used only for critical events, and an optional Web UI URL. Messages are sent as rich embeds coloured by severity, with the key event details as fields. When the Web UI URL is set, events that carry an IP address link to the matching Alerts and Decisions searches. Mentions are never taken from event text. |
 | Email | SMTP host/port/security (`Plain SMTP`, `STARTTLS`, `SMTPS / Implicit TLS`), optional user/password, from address, comma-separated recipients, importance (`auto`, `normal`, `important`), and optional insecure TLS for trusted self-signed SMTP endpoints. Auto importance maps `info` to `normal` and `warning`/`critical` to `important`. The `EHLO` name comes from [`server.hostname`](#server-storage-ui-and-updates). |
 | Gotify | Gotify URL, app token, and priority (`auto` or explicit integer). Auto priority maps `info` to `5`, `warning` to `7`, and `critical` to `10`. |
 | ntfy | Server URL, topic, optional access token, and priority (`auto`, `min`, `low`, `default`, `high`, `urgent`). Auto priority maps `info` to `default`, `warning` to `high`, and `critical` to `urgent`. |

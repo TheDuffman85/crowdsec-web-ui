@@ -20,6 +20,8 @@ import { PeriodChangeRow } from '../components/PeriodChange';
 import { RemediationPills } from '../components/RemediationPills';
 import { useRemediationTypeLabel } from '../lib/remediationTypes';
 import { usePeriodChange } from '../lib/periodChange';
+import { CompareToggle } from '../components/CompareToggle';
+import { alignSeries, fetchPreviousStatistics, previousRange } from '../lib/comparePeriods';
 import { BanAllButton, DecisionAddedBadge, DecisionIconButton, StatisticsFindings, type DecisionDraft, type Finding } from '../components/StatisticsFindings';
 import { fetchConfig, lookupManualDecisions } from '../lib/api';
 import { pendingBanValues } from '../lib/pendingBans';
@@ -303,6 +305,7 @@ export function Statistics() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [result, setResult] = useState<{ key: string; queryString: string; data: StatisticsResponse | null; error: string; retryable?: boolean } | null>(null);
   const [configError, setConfigError] = useState('');
+  const [previousResult, setPreviousResult] = useState<{ key: string; data: StatisticsResponse | null } | null>(null);
   const [reload, setReload] = useState(0);
   const [archiveChange, setArchiveChange] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -339,7 +342,9 @@ export function Statistics() {
   if (network) query.set('network', network);
   if (target) query.set('target', target);
   const queryString = query.toString();
+  const compare = params.get('compare') === '1';
   const requestKey = `${queryString}:${reload}:${archiveChange}`;
+  const previousKey = compare ? requestKey : null;
   const current = result?.key === requestKey;
   // Keep showing the previous result for the same filters while it refreshes.
   const data = result && (current || result.queryString === queryString) ? result.data : null;
@@ -390,6 +395,14 @@ export function Statistics() {
     });
     return () => abort.abort();
   }, [queryString, requestKey, statisticsZone, t]);
+  useEffect(() => {
+    if (!previousKey || !statisticsZone) return;
+    const abort = new AbortController();
+    void fetchPreviousStatistics(new URLSearchParams(queryString), abort.signal)
+      .then((payload) => { if (!abort.signal.aborted) setPreviousResult({ key: previousKey, data: payload }); })
+      .catch(() => { if (!abort.signal.aborted) setPreviousResult({ key: previousKey, data: null }); });
+    return () => abort.abort();
+  }, [previousKey, queryString, statisticsZone]);
   const refreshArchive = useEffectEvent((statistics: ConfigResponse['statistics']) => {
     if (!statistics) return;
     const retentionDays = statistics.settings.retentionDays;
@@ -627,6 +640,10 @@ export function Statistics() {
   const machineInstance = (value: string) => { try { return (JSON.parse(value) as string[])[0]; } catch { return undefined; } };
   // Ranges within the last two days are charted by hour.
   const hourly = data?.granularity === 'hour';
+  const previousSeries = compare && previousResult?.key === previousKey ? previousResult.data?.series ?? null : null;
+  const comparison = previousSeries !== null;
+  const chartRows = data ? (comparison ? alignSeries(data.series, previousSeries) : data.series) : [];
+  const previousPeriod = comparison ? previousRange(from, to) : null;
   const compared = data && !data.coverage.comparisonPartial ? data.previousTotals : null;
   const coverage = data ? remediationCoverage(data.totals.remediatedIPs, data.totals.uniqueIPs) : null;
   const previousCoverage = compared ? remediationCoverage(compared.remediatedIPs, compared.uniqueIPs) : null;
@@ -927,11 +944,12 @@ export function Statistics() {
         </div>
 
         <Card>
-          <SectionHeader icon={TrendingUp} title={t('components.dashboardCharts.activityHistory')} description={t('pages.statistics.activityHistoryHelp')} />
+          <SectionHeader icon={TrendingUp} title={t('components.dashboardCharts.activityHistory')} description={t('pages.statistics.activityHistoryHelp')}
+            actions={<CompareToggle checked={compare} onChange={(checked) => update({ compare: checked ? '1' : null })} />} />
           <CardContent>
             <div className="h-72 min-w-0" role="img" aria-label={t('components.dashboardCharts.activityHistory')}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data.series} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                <LineChart data={chartRows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
                   <XAxis dataKey="date" {...axisProps} tickFormatter={(value: string) => (hourly ? formatHour(value, from !== to) : formatDay(value, true))} minTickGap={hourly && from !== to ? 48 : 32} />
                   <YAxis {...axisProps} allowDecimals={false} width={48} tickFormatter={formatNumber} />
@@ -939,9 +957,13 @@ export function Statistics() {
                   <Legend verticalAlign="top" height={36} iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 13 }} />
                   <Line type="monotone" dataKey="alerts" name={t('pages.statistics.alerts')} stroke={DASHBOARD_COLORS.liveAlerts} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />
                   <Line type="monotone" dataKey="decisions" name={t('pages.statistics.decisions')} stroke={DASHBOARD_COLORS.liveDecisions} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />
+                  {comparison && <Line type="monotone" dataKey="previousAlerts" name={t('components.compare.previousAlerts')} stroke={DASHBOARD_COLORS.liveAlerts} strokeOpacity={0.55} strokeDasharray="5 4" dot={false} activeDot={{ r: 3 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />}
+                  {comparison && <Line type="monotone" dataKey="previousDecisions" name={t('components.compare.previousDecisions')} stroke={DASHBOARD_COLORS.liveDecisions} strokeOpacity={0.55} strokeDasharray="5 4" dot={false} activeDot={{ r: 3 }} isAnimationActive={false} connectNulls={false} strokeWidth={2} />}
                 </LineChart>
               </ResponsiveContainer>
             </div>
+            {previousPeriod && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t('components.compare.caption', { from: formatDay(previousPeriod.from), to: formatDay(previousPeriod.to) })}</p>}
+            {compare && previousResult?.key === previousKey && !previousSeries && <p role="status" className="mt-2 text-xs text-amber-700 dark:text-amber-400">{t('components.compare.unavailable')}</p>}
           </CardContent>
         </Card>
 

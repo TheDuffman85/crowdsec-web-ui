@@ -210,6 +210,12 @@ function getPublicOrigin(context: Context): string {
   return host ? `${protocol}://${host}` : url.origin;
 }
 
+/** The client address a reverse proxy reports, for display only; it can be spoofed by direct callers. */
+function requestAddress(context: Context): string | null {
+  const forwarded = context.req.header('x-forwarded-for')?.split(',')[0]?.trim() || context.req.header('x-real-ip')?.trim();
+  return forwarded ? forwarded.slice(0, 64) : null;
+}
+
 function isSecureRequest(context: Context): boolean {
   return getPublicOrigin(context).startsWith('https://');
 }
@@ -1151,8 +1157,11 @@ export function createDashboardAuth(options: {
     authMethod?: AuthMethod,
     authenticatedAt?: number,
     oidcSessionId?: string,
-    sessionId: string = crypto.randomUUID(),
+    existingSessionId?: string,
+    /** False when a session is reissued after an account change rather than by signing in. */
+    recordLogin = true,
   ): void {
+    const sessionId = existingSessionId ?? crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
     const userId = 'id' in user ? user.id : user.userId;
     const persistedUser = 'id' in user ? user : database.getAuthUserById(userId);
@@ -1187,6 +1196,29 @@ export function createDashboardAuth(options: {
       maxAge: SESSION_LIFETIME_SECONDS,
       path: cookiePath,
     });
+    const sessionExpiresAt = Math.min(now + sessionLifetime, absoluteStart + sessionLifetime);
+    void writeDatabase(() => database.recordAuthSession({
+      sessionId,
+      userId,
+      method: effectiveAuthMethod ?? null,
+      createdAt: absoluteStart,
+      now,
+      expiresAt: sessionExpiresAt,
+      ip: requestAddress(context),
+      userAgent: context.req.header('user-agent')?.slice(0, 200) ?? null,
+      login: recordLogin && existingSessionId === undefined,
+    })).catch(() => { /* Session history is informational; signing in must not fail because of it. */ });
+  }
+
+  const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+  const sessionTouches = new Map<string, number>();
+  function touchSessionActivity(sessionId: string): void {
+    const nowMs = Date.now();
+    const last = sessionTouches.get(sessionId);
+    if (last !== undefined && nowMs - last < SESSION_TOUCH_INTERVAL_MS) return;
+    if (sessionTouches.size > 5000) sessionTouches.clear();
+    sessionTouches.set(sessionId, nowMs);
+    void writeDatabase(() => database.touchAuthSession(sessionId, Math.floor(nowMs / 1000))).catch(() => undefined);
   }
 
   function clearSession(context: HonoContext): void {
@@ -1218,6 +1250,7 @@ export function createDashboardAuth(options: {
       ) return null;
     }
     if (session.authMethod === 'passkey' && user.auth_provider === 'oidc' && !user.password_hash) return null;
+    touchSessionActivity(session.sessionId);
     return {
       userId: user.id,
       username: user.username,
@@ -1428,8 +1461,14 @@ export function createDashboardAuth(options: {
     return session;
   }
 
-  function serializeUser(user: AuthUserRow & { passkey_count?: number }, session: SessionData) {
+  function serializeUser(
+    user: AuthUserRow & { passkey_count?: number },
+    session: SessionData,
+    lastLogin?: { at: number; method: string | null },
+  ) {
     return {
+      lastLoginAt: lastLogin ? new Date(lastLogin.at * 1000).toISOString() : null,
+      lastLoginMethod: lastLogin?.method ?? null,
       id: user.id,
       username: user.username,
       role: user.role,
@@ -1474,8 +1513,9 @@ export function createDashboardAuth(options: {
     auth.get('/users', (context) => {
       const session = requireAdmin(context, false);
       if (session instanceof Response) return session;
+      const lastLogins = database.getAuthLastLogins();
       return context.json({
-        users: database.listAuthUsers().map((user) => serializeUser(user, session)),
+        users: database.listAuthUsers().map((user) => serializeUser(user, session, lastLogins.get(user.id))),
         totpManagedByConfig: Boolean(config.totpSeed),
       });
     });
@@ -1735,6 +1775,52 @@ export function createDashboardAuth(options: {
       return context.json({ status: 'ok' });
     });
 
+    // Sessions that are still valid. People see their own; administrators can list everyone's with ?all=1.
+    auth.get('/sessions', (context) => {
+      const session = getSession(context);
+      if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const wantsAll = context.req.query('all') === '1';
+      if (wantsAll && session.role !== 'admin') return context.json({ error: 'Administrator access required', code: 'FORBIDDEN' }, 403);
+      const token = getCookie(context, SESSION_COOKIE);
+      const currentId = token ? verifySessionToken(token, sessionSecret)?.sessionId : undefined;
+      const rows = database.listAuthSessions(Math.floor(Date.now() / 1000), wantsAll ? undefined : session.userId);
+      return context.json({
+        sessions: rows.map((row) => ({
+          id: row.session_id,
+          user_id: row.user_id,
+          username: row.username,
+          method: row.auth_method,
+          created_at: new Date(row.created_at * 1000).toISOString(),
+          last_seen_at: new Date(row.last_seen_at * 1000).toISOString(),
+          expires_at: new Date(row.expires_at * 1000).toISOString(),
+          ip: row.ip,
+          user_agent: row.user_agent,
+          current: row.session_id === currentId,
+        })),
+      });
+    });
+
+    // Revoking signs that session out everywhere. Anyone can end their own; only administrators end other people's.
+    auth.delete('/sessions/:id', async (context) => {
+      const session = getSession(context);
+      if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const record = database.getAuthSessionRecord(context.req.param('id'));
+      if (!record) return context.json({ error: 'Session not found' }, 404);
+      const own = record.user_id === session.userId;
+      if (!own) {
+        if (session.role !== 'admin') return context.json({ error: 'Administrator access required', code: 'FORBIDDEN' }, 403);
+        if (instanceReadOnly) return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
+      }
+      await writeDatabase(() => {
+        database.revokeAuthSession(record.session_id, record.expires_at);
+        database.deleteAuthSessionRecord(record.session_id);
+      });
+      if (!own) {
+        options.recordAudit?.(context, { action: 'user.session-revoke', outcome: 'success', target_user_id: record.user_id, target_username: record.username });
+      }
+      return context.json({ success: true });
+    });
+
     auth.get('/me', (context) => {
       const session = getSession(context);
       if (!session) return context.json({ error: 'Not authenticated' }, 401);
@@ -1895,7 +1981,7 @@ export function createDashboardAuth(options: {
 
       const passwordHash = await hashPassword(newPassword);
       await writeDatabase(() => database.updateAuthUserPassword(user.id, passwordHash));
-      createSession(context, database.getAuthUserById(user.id)!, 'password');
+      createSession(context, database.getAuthUserById(user.id)!, 'password', undefined, undefined, undefined, false);
       return context.json({ status: 'ok' });
     });
 
@@ -1947,7 +2033,7 @@ export function createDashboardAuth(options: {
       // Enabling TOTP ends every other session, so one opened before enrollment cannot remove it again.
       await writeDatabase(() => database.updateAuthUserTotp(user.id, encryptSecret(secret, totpSecretEncryptionSecret), true));
       deleteCookie(context, TOTP_SETUP_COOKIE, { path: cookiePath });
-      createSession(context, database.getAuthUserById(user.id)!, 'password');
+      createSession(context, database.getAuthUserById(user.id)!, 'password', undefined, undefined, undefined, false);
       return context.json({ status: 'ok', totpEnabled: true });
     });
 
@@ -1980,7 +2066,7 @@ export function createDashboardAuth(options: {
       if (totpCheck.retryAfter !== null) return authThrottleResponse(context, totpCheck.retryAfter);
       if (!totpCheck.valid) return context.json({ error: 'Invalid authenticator code' }, 400);
       await writeDatabase(() => database.updateAuthUserTotp(user.id, null, false));
-      createSession(context, database.getAuthUserById(user.id)!, 'password');
+      createSession(context, database.getAuthUserById(user.id)!, 'password', undefined, undefined, undefined, false);
       return context.json({ status: 'ok', totpEnabled: false });
     });
 
@@ -2321,7 +2407,7 @@ export function createDashboardAuth(options: {
         oidc_username: pending.username,
         ...(result.mergedAccount ? { merged_account: result.mergedAccount } : {}),
       });
-      createSession(context, database.getAuthUserById(user.id)!, session.authMethod);
+      createSession(context, database.getAuthUserById(user.id)!, session.authMethod, undefined, undefined, undefined, false);
       return context.json({ status: 'ok' });
     });
 
@@ -2353,7 +2439,7 @@ export function createDashboardAuth(options: {
         issuer: user.oidc_issuer,
         oidc_username: user.oidc_username,
       });
-      createSession(context, database.getAuthUserById(user.id)!, session.authMethod);
+      createSession(context, database.getAuthUserById(user.id)!, session.authMethod, undefined, undefined, undefined, false);
       return context.json({ status: 'ok' });
     });
 

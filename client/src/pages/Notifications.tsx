@@ -24,6 +24,8 @@ import {
   APPRISE_TYPES,
   coerceAppriseConfig,
   coerceEmailConfig,
+  coerceDiscordConfig,
+  coerceWebPushConfig,
   coerceGotifyConfig,
   coerceMqttConfig,
   coerceNtfyConfig,
@@ -34,6 +36,8 @@ import {
   validateNotificationChannelConfig,
   type AppriseConfig,
   type EmailConfig,
+  type DiscordConfig,
+  type WebPushConfig,
   type GotifyConfig,
   type MqttConfig,
   type NtfyConfig,
@@ -47,6 +51,7 @@ import { useDateTime } from '../lib/dateTime';
 import { useRefresh } from '../contexts/useRefresh';
 import { useBranding } from '../contexts/useBranding';
 import { Badge } from '../components/ui/Badge';
+import { WebPushToggle } from '../components/WebPushToggle';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
 import { Switch } from '../components/ui/Switch';
@@ -206,6 +211,7 @@ function generateChannelName(form: ChannelFormState, t: (key: string) => string)
   if (form.type === 'ntfy') detail = setting('ntfyTopic');
   if (form.type === 'apprise') detail = setting('appriseMode') === 'urls' ? hostAndPath(setting('appriseUrl')) : setting('appriseKey');
   if (form.type === 'gotify') detail = hostAndPath(setting('gotifyUrl'));
+  if (form.type === 'discord') detail = setting('discordUsername');
   if (form.type === 'email') detail = setting('emailTo').split(/[;,]/)[0].trim();
   if (form.type === 'mqtt') detail = setting('topic') || hostAndPath(setting('brokerUrl'));
   if (form.type === 'webhook') detail = hostAndPath(setting('url'));
@@ -1707,9 +1713,11 @@ function ChannelModal({
               <option value="ntfy">ntfy</option>
               <option value="apprise">Apprise</option>
               <option value="gotify">Gotify</option>
+              <option value="discord">Discord</option>
               <option value="email">Email</option>
               <option value="mqtt">MQTT</option>
               <option value="webhook">Webhook</option>
+              <option value="webpush">{t('pages.notifications.webpush.typeLabel')}</option>
             </select>
           </div>
         </div>
@@ -2005,9 +2013,16 @@ function ChannelConfigFields({
     const gotify = coerceGotifyConfig(form.config);
     return <GotifyChannelFields config={gotify} onSetForm={onSetForm} />;
   }
+  if (form.type === 'discord') {
+    const discord = coerceDiscordConfig(form.config);
+    return <DiscordChannelFields config={discord} onSetForm={onSetForm} />;
+  }
   if (form.type === 'mqtt') {
     const mqtt = coerceMqttConfig(form.config);
     return <MqttChannelFields config={mqtt} onSetForm={onSetForm} />;
+  }
+  if (form.type === 'webpush') {
+    return <WebPushChannelFields config={coerceWebPushConfig(form.config)} onSetForm={onSetForm} />;
   }
   if (form.type === 'webhook') {
     const webhook = coerceWebhookConfig(form.config);
@@ -2108,6 +2123,37 @@ function GotifyChannelFields({ config, onSetForm }: { config: GotifyConfig; onSe
       </label>
       <div className="md:col-span-2">
         <SecretInput label={t('pages.notifications.appToken')} value={config.gotifyToken} onChange={(value) => updateChannelConfig<GotifyConfig>(onSetForm, (current) => ({ ...coerceGotifyConfig(current), gotifyToken: value || current.gotifyToken }))} />
+      </div>
+    </div>
+  );
+}
+
+function WebPushChannelFields({ config, onSetForm }: { config: WebPushConfig; onSetForm: Dispatch<SetStateAction<ChannelFormState>> }) {
+  const { t } = useI18n();
+
+  return (
+    <div className="space-y-4 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+      <p className="text-sm text-gray-600 dark:text-gray-300">{t('pages.notifications.webpush.hint')}</p>
+      <WebPushToggle />
+      <LabeledInput label={t('pages.notifications.webpush.subject')} value={config.webpushSubject} placeholder="mailto:admin@example.com" onChange={(value) => updateChannelConfig<WebPushConfig>(onSetForm, (current) => ({ ...coerceWebPushConfig(current), webpushSubject: value }))} />
+      <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.webpush.subjectHint')}</p>
+    </div>
+  );
+}
+
+function DiscordChannelFields({ config, onSetForm }: { config: DiscordConfig; onSetForm: Dispatch<SetStateAction<ChannelFormState>> }) {
+  const { t } = useI18n();
+
+  return (
+    <div className="grid gap-4 rounded-xl border border-gray-200 p-4 md:grid-cols-2 dark:border-gray-700">
+      <div className="md:col-span-2">
+        <SecretInput label={t('pages.notifications.discordWebhookUrl')} value={config.discordWebhookUrl} onChange={(value) => updateChannelConfig<DiscordConfig>(onSetForm, (current) => ({ ...coerceDiscordConfig(current), discordWebhookUrl: value }))} />
+      </div>
+      <LabeledInput label={t('pages.notifications.discordUsername')} value={config.discordUsername} onChange={(value) => updateChannelConfig<DiscordConfig>(onSetForm, (current) => ({ ...coerceDiscordConfig(current), discordUsername: value }))} />
+      <LabeledInput label={t('pages.notifications.discordMention')} value={config.discordMention} placeholder="<@&123456789012345678>" onChange={(value) => updateChannelConfig<DiscordConfig>(onSetForm, (current) => ({ ...coerceDiscordConfig(current), discordMention: value }))} />
+      <div className="md:col-span-2">
+        <LabeledInput label={t('pages.notifications.discordLinkUrl')} value={config.discordLinkUrl} placeholder="https://crowdsec.example.com" onChange={(value) => updateChannelConfig<DiscordConfig>(onSetForm, (current) => ({ ...coerceDiscordConfig(current), discordLinkUrl: value }))} />
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.discordHint')}</p>
       </div>
     </div>
   );
