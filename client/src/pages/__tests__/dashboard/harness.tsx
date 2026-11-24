@@ -38,6 +38,10 @@ vi.mock('../../../components/WorldMapCard', () => ({
   },
 }));
 
+vi.mock('../../../components/ProtectionCoverageCard', () => ({
+  ProtectionCoverageCard: () => null,
+}));
+
 vi.mock('../../../lib/api', () => ({
   fetchConfig: fetchConfigMock,
   fetchDashboardStats: fetchDashboardStatsMock,

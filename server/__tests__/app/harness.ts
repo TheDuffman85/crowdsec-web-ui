@@ -366,6 +366,8 @@ export function createTestDistRoot(): string {
   writeFileSync(path.join(distRoot, 'world-50m.json'), '{"type":"Topology"}');
   writeFileSync(path.join(distRoot, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
   writeFileSync(path.join(distRoot, 'logo-sidebar.png'), 'png');
+  writeFileSync(path.join(distRoot, 'sw.js'), 'self.addEventListener("fetch", () => {});');
+  writeFileSync(path.join(distRoot, 'offline.html'), '<!doctype html><title>Offline</title>');
   return distRoot;
 }
 
@@ -387,6 +389,8 @@ export function createController(options: {
   database?: CrowdsecDatabase;
   initialCacheState?: CreateAppOptions['initialCacheState'];
   attackLocationResolver?: CreateAppOptions['attackLocationResolver'];
+  hubEnv?: CreateAppOptions['hubEnv'];
+  hubRunner?: CreateAppOptions['hubRunner'];
 } = {}) {
   const authMode = options.authMode || 'password';
   const mtlsCertPath = path.join(tempDir, 'agent.pem');
@@ -521,6 +525,8 @@ export function createController(options: {
     analyticsQueryWorker: options.analyticsQueryWorker,
     facetQueryWorker: options.facetQueryWorker,
     initialCacheState: options.initialCacheState,
+    hubEnv: options.hubEnv ?? {},
+    hubRunner: options.hubRunner,
   });
 
   return { controller, database, lapiClient, fetchCalls };

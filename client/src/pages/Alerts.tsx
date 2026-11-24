@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
+import { ExportCsvButton } from "../components/ExportCsvButton";
+import { ALERT_CSV_COLUMNS, CSV_EXPORT_PAGE_SIZE } from "../lib/csvExport";
 import { fetchAlertsPaginated, fetchAlertSessionsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, checkAllowlist } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
@@ -16,6 +18,8 @@ import { TableColumnsModal } from "../components/TableColumnsModal";
 import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
+import { IpInsights } from "../components/IpInsights";
+import { ScenarioExplainer } from "../components/ScenarioExplainer";
 import { AlertSessionScenarioGroup } from "../components/AlertSessionScenarioGroup";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { TargetDisplay } from "../components/TargetDisplay";
@@ -2434,6 +2438,11 @@ export function Alerts() {
                         <SavedFiltersMenu page="alerts" query={searchDraft} onApply={applySavedFilter} />
                         <QuickFilters {...quickFilterProps} onOpenChange={setQuickFiltersOpen} />
                     </div>
+                    <ExportCsvButton
+                        kind="alerts"
+                        columns={ALERT_CSV_COLUMNS}
+                        fetchPage={(page) => fetchAlertsPaginated(page, CSV_EXPORT_PAGE_SIZE, facetFilters)}
+                    />
                 </div>
             </div>
 
@@ -2596,6 +2605,7 @@ export function Alerts() {
                                         simulated={simulationsEnabled && selectedAlertIsSimulated}
                                         size="lg"
                                     />
+                                    <ScenarioExplainer scenario={selectedAlert.scenario} />
                                 </div>
                             </div>
                             <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
@@ -2731,6 +2741,8 @@ export function Alerts() {
                                 </div>
                             </div>
                         )}
+
+                        <IpInsights ip={selectedAlertSourceValue ? String(selectedAlertSourceValue) : null} alertId={selectedAlert.id} />
 
                         {/* Decisions */}
                         {(modalDecisionsLoading || modalDecisionsTotal > 0) && (

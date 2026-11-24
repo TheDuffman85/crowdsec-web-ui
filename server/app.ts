@@ -1,5 +1,7 @@
 import { StatisticsService } from './statistics-service';
 import { registerStatisticsRoutes } from './app/statistics-routes';
+import { registerStatusRoutes } from './app/status-routes';
+import { resolveSecretEnv } from './env-secrets';
 import { PublishedRevisionLock } from './published-revision-lock';
 import fs from 'fs';
 import path from 'path';
@@ -18,6 +20,7 @@ import type {
   SyncStatus,
   UpdateCheckResponse,
 } from '../shared/contracts';
+import { DEFAULT_MANUAL_DECISION_SCENARIO } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
 import {
@@ -68,10 +71,28 @@ import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics, fetchCrowdsecMetricsSamples, summarizeCrowdsecMetrics } from './metrics';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
 import { manualDecisionScenariosOf, registerApiRoutes } from './app/api-routes';
+import { registerAuditEventRoutes, insertAuditEvent } from './app/audit-events';
+import { loadAutoBanSettings, registerAutoBanRoutes, startAutoBanSchedule } from './app/auto-ban';
+import { registerBlocklistRoutes } from './app/blocklists';
+import { registerReportRoutes, startMonthlyReportSchedule } from './app/report';
+import { registerLiveFeedRoutes } from './app/live-feed';
+import { registerGeoBlockingRoutes } from './app/geo-blocking';
+import { registerHostRoutes } from './app/hosts';
+import { IpIntelService, registerIpIntelRoutes, type IntelFetch } from './app/ip-intel';
+import { registerHubRoutes } from './app/hub';
+import { parseHubExecutorConfig, type HubRunner } from './hub/executor';
+import { HubRegistry } from './hub/registry';
+import { registerPushRoutes } from './app/push';
+import { createWebPushService } from './notifications/web-push-service';
+import { registerAsnRoutes } from './app/asn';
+import { registerIpTimelineRoutes } from './app/ip-timeline';
+import { registerThreatScoreRoutes } from './app/threat-score';
+import { registerNoteRoutes } from './app/notes';
+import { registerRepeatOffenderRoutes } from './app/repeat-offenders';
 import { registerSavedFilterRoutes } from './app/saved-filters';
 import { registerBrandingRoutes } from './app/branding-routes';
 import { createAllowlistService, registerAllowlistRoutes, type AllowlistService } from './app/allowlists';
-import { applyBrandingToIndexHtml, getPublicBranding, serializeBrandingForScript } from './branding';
+import { applyBrandingToIndexHtml, getAppName, getPublicBranding, serializeBrandingForScript } from './branding';
 import { createQueryService } from './app/query-service';
 import { createDeletionService } from './app/deletion-service';
 import { createSyncService } from './app/sync-service';
@@ -219,6 +240,11 @@ export interface CreateAppOptions {
   crowdsecUpdateChecker?: CrowdsecUpdateChecker;
   notificationFetchImpl?: FetchLike;
   metricsFetchImpl?: FetchLike;
+  ipIntelFetchImpl?: IntelFetch;
+  /** Environment the hub executor settings are read from; defaults to process.env. */
+  hubEnv?: NodeJS.ProcessEnv;
+  /** Replaces the ssh call that reaches a server, for tests. */
+  hubRunner?: HubRunner;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   initialCacheState?: Partial<CacheState>;
   rootRedirectPath?: string;
@@ -251,6 +277,9 @@ export interface AppController {
   database: CrowdsecDatabase;
   lapiClient: LapiClient;
   lapiClients: Map<string, LapiClient>;
+  hubRegistry: HubRegistry;
+  /** Resolves when background work started by hub pairing has finished; for tests. */
+  hubSettled: () => Promise<void>;
   startBackgroundTasks: () => void;
   stopBackgroundTasks: () => void;
   getSyncStatus: () => SyncStatus;
@@ -499,8 +528,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const attackLocationResolver = options.attackLocationResolver || createAttackLocationResolver({
     dumpDirectory: config.geonamesDumpDir,
   });
+  const webPush = createWebPushService({
+    database,
+    secretStore: notificationSecretStore,
+    write: (operation) => syncWorker.runExclusive(operation),
+  });
   const notificationService = createNotificationService({
     database,
+    webPush,
     queryWorker,
     writeDatabase: (operation) => syncWorker.runExclusive(operation),
     fetchImpl: options.notificationFetchImpl,
@@ -539,6 +574,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     enabled: config.auditEnabled,
     logFile: config.auditLogFile,
     getActor: (context) => dashboardAuth.getSession(context),
+    // Kept in the database too so administrators can browse it; a failed write never blocks the action.
+    store: (entry) => {
+      syncWorker.runExclusive(() => insertAuditEvent(database, entry)).catch((error: unknown) => {
+        console.error(`Failed to store audit entry: ${error instanceof Error ? error.message : error}`);
+      });
+    },
   });
 
   const app = new Hono();
@@ -553,6 +594,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     '/apple-touch-icon.png',
     '/android-chrome-192x192.png',
     '/android-chrome-512x512.png',
+    '/offline.html',
   ];
 
   const syncStatus: SyncStatus = {
@@ -683,6 +725,42 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let nextRefreshAt: string | null = null;
   let isSchedulerRunning = false;
   let stopped = false;
+  let stopMonthlyReports: (() => void) | null = null;
+  let stopAutoBan: (() => void) | null = null;
+  let backgroundTasksActive = false;
+
+  // The timer only exists while the rules are enabled, so a default install schedules nothing.
+  function syncAutoBanSchedule(): void {
+    const wanted = backgroundTasksActive && loadAutoBanSettings(database).enabled;
+    if (!wanted) {
+      stopAutoBan?.();
+      stopAutoBan = null;
+      return;
+    }
+    if (stopAutoBan) return;
+    stopAutoBan = startAutoBanSchedule({
+      database,
+      log: (message) => console.log(message),
+      isAllowlisted: async (ip) => {
+        const check = await allowlistService.checkValue(config.instances, ip);
+        if (check.results.some((result) => result.allowlisted)) return true;
+        return check.results.every((result) => result.status === 'unavailable') ? null : false;
+      },
+      addBan: async (ip, duration, reason) => {
+        try {
+          await Promise.all(config.instances.map(async (instance) => {
+            await lapiClients.get(instance.id)!.addDecision(ip, 'ban', duration, reason.slice(0, 256), DEFAULT_MANUAL_DECISION_SCENARIO);
+            if (instance.id === primaryInstance.id) await syncService.updateCacheDelta({ publishUnchanged: true });
+            else await syncInstanceDelta(instance.id);
+          }));
+          auditLog.recordSystem('auto-ban', { action: 'decision.add', outcome: 'success', ip, type: 'ban', scenario: DEFAULT_MANUAL_DECISION_SCENARIO, duration, reason: reason.slice(0, 256), instances: config.instances.map((instance) => instance.name) });
+        } catch (error) {
+          auditLog.recordSystem('auto-ban', { action: 'decision.add', outcome: 'failure', ip, type: 'ban', scenario: DEFAULT_MANUAL_DECISION_SCENARIO, duration, reason: reason.slice(0, 256), instances: config.instances.map((instance) => instance.name) });
+          throw error;
+        }
+      },
+    });
+  }
   let bootstrapRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootstrapPromise: Promise<boolean> | null = null;
   let bootstrapSource: string | null = null;
@@ -1277,12 +1355,151 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   if (config.basePath) {
     app.get(`${config.basePath}/api/health`, healthHandler);
   }
+  // Optional token-protected summary for Uptime Kuma or Homepage. The token comes from the
+  // process environment (STATUS_API_TOKEN or STATUS_API_TOKEN_FILE), so it also works with a config file.
+  let statusApiToken: string | undefined;
+  try {
+    statusApiToken = resolveSecretEnv('STATUS_API_TOKEN')?.trim() || undefined;
+  } catch (error) {
+    console.warn(error instanceof Error ? error.message : String(error));
+  }
+  registerStatusRoutes({
+    app,
+    basePath: config.basePath,
+    token: statusApiToken,
+    data: {
+      instances: () => config.instances.map((instance) => ({
+        id: instance.id,
+        name: instance.name,
+        status: lapiClients.get(instance.id)?.getStatus() ?? { isConnected: false, lastCheck: null, lastError: null, offline_since: null },
+      })),
+      countAlertsSince: (since) => database.countAlertsSince(since),
+      countActiveDecisions: (now) => database.countActiveDecisions(now),
+      cacheReady: () => cache.isInitialized,
+      lastUpdate: () => cache.lastUpdate,
+      version: config.version,
+    },
+  });
   dashboardAuth.registerRoutes(app);
   registerSavedFilterRoutes({
     app,
     basePath: config.basePath,
     database,
     auth: dashboardAuth,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
+  });
+  registerLiveFeedRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+  });
+  registerReportRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    appName: () => getAppName(database),
+  });
+  registerAuditEventRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+  });
+  registerAutoBanRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
+    onSettingsChanged: syncAutoBanSchedule,
+  });
+  registerBlocklistRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+  });
+  registerHostRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+  });
+  registerGeoBlockingRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+  });
+  registerRepeatOffenderRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    isValidIpOrRange,
+  });
+  const ipIntelService = new IpIntelService({
+    // Optional keys come from the environment (or *_FILE) and are only read when a lookup runs.
+    keys: () => ({
+      abuseipdb: resolveSecretEnv('ABUSEIPDB_API_KEY')?.trim() || undefined,
+      shodan: resolveSecretEnv('SHODAN_API_KEY')?.trim() || undefined,
+    }),
+    fetch: options.ipIntelFetchImpl,
+  });
+  registerIpIntelRoutes({
+    app,
+    basePath: config.basePath,
+    auth: dashboardAuth,
+    service: ipIntelService,
+  });
+  const hubEnv = options.hubEnv ?? process.env;
+  const hubSettings = parseHubExecutorConfig(hubEnv);
+  const hubInstanceId = (hubSettings.config.transport !== 'disabled' && hubSettings.config.instance) || primaryInstance.id;
+  const hubInstance = config.instances.find((candidate) => candidate.id === hubInstanceId) ?? primaryInstance;
+  const hubRegistry = new HubRegistry({
+    database,
+    keysDir: path.join(config.dbDir, 'hub-keys'),
+    runner: options.hubRunner,
+    execTimeoutMs: Number.parseInt(hubEnv.HUB_EXEC_TIMEOUT_MS ?? '', 10) > 0 ? Math.min(Number.parseInt(hubEnv.HUB_EXEC_TIMEOUT_MS!, 10), 600_000) : undefined,
+    pairingTtlMs: Number.parseInt(hubEnv.HUB_PAIRING_TTL_MINUTES ?? '', 10) > 0 ? Math.min(Number.parseInt(hubEnv.HUB_PAIRING_TTL_MINUTES!, 10), 120) * 60_000 : undefined,
+  });
+  // The single-server HUB_* settings stay supported: they become the "env" entry of the registry.
+  hubRegistry.syncEnvironment(hubSettings.config, {
+    instanceId: hubInstance.id,
+    name: hubEnv.HUB_EXECUTOR_NAME?.trim() || hubInstance.name,
+    machine: hubEnv.HUB_EXECUTOR_MACHINE?.trim() || null,
+  });
+  const hubRoutes = registerHubRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    audit: auditLog,
+    registry: hubRegistry,
+    configError: hubSettings.error ?? null,
+    defaultInstance: { id: hubInstance.id, name: hubInstance.name },
+    publicUrl: hubEnv.HUB_PUBLIC_URL?.trim() || undefined,
+    appAddress: hubEnv.HUB_APP_ADDRESS?.trim() || undefined,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
+  });
+  registerPushRoutes({ app, basePath: config.basePath, auth: dashboardAuth, push: webPush, audit: auditLog });
+  registerAsnRoutes({ app, basePath: config.basePath, database, auth: dashboardAuth });
+  registerIpTimelineRoutes({ app, basePath: config.basePath, database, auth: dashboardAuth });
+  registerThreatScoreRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    abuseScore: (ip) => ipIntelService.peekAbuseScore(ip),
+  });
+  registerNoteRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    isValidIpOrRange,
     writeDatabase: (operation) => syncWorker.runExclusive(operation),
   });
 
@@ -1508,6 +1725,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     await next();
   });
 
+  // The service worker must always be fetched fresh so updates reach installed copies.
+  app.use(`${config.basePath}/sw.js`, async (context, next) => {
+    await next();
+    if (context.res.headers.get('content-type')?.includes('javascript')) context.header('Cache-Control', 'no-cache');
+  });
+  app.use(
+    `${config.basePath}/sw.js`,
+    serveStatic({
+      root: distRoot,
+      rewriteRequestPath: (requestPath) => (config.basePath ? requestPath.replace(config.basePath, '') : requestPath),
+    }),
+  );
+
   staticFiles.forEach((file) => {
     app.use(
       `${config.basePath}${file}`,
@@ -1535,6 +1765,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       background_color: '#ffffff',
       display: 'standalone',
       start_url: config.basePath || '/',
+      id: `${config.basePath || ''}/`,
+      scope: `${config.basePath || ''}/`,
+      shortcuts: [
+        { name: 'Alerts', url: `${config.basePath}/alerts` },
+        { name: 'Decisions', url: `${config.basePath}/decisions` },
+        { name: 'Live wallboard', url: `${config.basePath}/tools/wallboard` },
+      ],
     });
   });
 
@@ -1732,9 +1969,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     database,
     lapiClient,
     lapiClients,
+    hubRegistry,
+    hubSettled: hubRoutes.settled,
     startBackgroundTasks,
     stopBackgroundTasks: () => {
       stopped = true;
+      stopMonthlyReports?.();
+      stopMonthlyReports = null;
+      backgroundTasksActive = false;
+      syncAutoBanSchedule();
       pendingAlertDeletionStopped = true;
       stopRefreshScheduler();
       stopHeartbeatScheduler();
@@ -1761,6 +2004,16 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   function startBackgroundTasks(): void {
     if (stopped) return;
     statistics.start();
+    backgroundTasksActive = true;
+    syncAutoBanSchedule();
+    // Opt-in: writes last month's PDF report to disk once a month. Nothing is ever sent anywhere.
+    if (process.env.REPORT_MONTHLY_ENABLED?.trim().toLowerCase() === 'true' && !stopMonthlyReports) {
+      stopMonthlyReports = startMonthlyReportSchedule({
+        database,
+        directory: process.env.REPORT_DIR?.trim() || path.join(config.dbDir, 'reports'),
+        appName: getAppName(database),
+      });
+    }
     if (!lapiClient.hasAuthConfig()) {
       console.warn('Cache initialization skipped - CrowdSec LAPI authentication not configured');
       return;

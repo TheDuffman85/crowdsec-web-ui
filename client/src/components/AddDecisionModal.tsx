@@ -16,6 +16,8 @@ import type {
     MultiInstanceOperationResponse,
 } from '../types';
 import { Modal } from './ui/Modal';
+import { EscalationHint } from './EscalationHint';
+import { BAN_DURATION_PRESETS, BAN_REASON_PRESETS, findDurationPreset, findReasonPreset } from '../lib/banPresets';
 
 interface AddedDecisions {
     values: string[];
@@ -354,6 +356,30 @@ export function AddDecisionModal({
                         value={decision.duration}
                         onChange={(event) => updateDecision({ duration: event.target.value })}
                     />
+                    <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label={t('components.banPresets.durationGroup')}>
+                        {BAN_DURATION_PRESETS.map((preset) => (
+                            <button
+                                key={preset.id}
+                                type="button"
+                                disabled={inProgress}
+                                aria-pressed={findDurationPreset(decision.duration)?.id === preset.id}
+                                onClick={() => updateDecision({ duration: preset.duration })}
+                                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${findDurationPreset(decision.duration)?.id === preset.id
+                                    ? 'border-primary-300 bg-primary-50 text-primary-700 dark:border-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                                    : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'}`}
+                            >
+                                {t(preset.labelKey)}
+                            </button>
+                        ))}
+                    </div>
+                    {!bulk && (
+                        <EscalationHint
+                            ip={decisionValue}
+                            currentDuration={decision.duration ?? ''}
+                            disabled={inProgress}
+                            onApply={(duration) => updateDecision({ duration })}
+                        />
+                    )}
                     <p className="text-xs text-gray-500 mt-1">{t('pages.decisions.durationHint')}</p>
                 </div>
                 {scenarioOptions.length > 1 && (
@@ -383,6 +409,22 @@ export function AddDecisionModal({
                         value={decision.reason}
                         onChange={(event) => updateDecision({ reason: event.target.value })}
                     />
+                    <label htmlFor="add-decision-reason-preset" className="sr-only">{t('components.banPresets.reasonPreset')}</label>
+                    <select
+                        id="add-decision-reason-preset"
+                        disabled={inProgress}
+                        className="mt-2 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                        value={findReasonPreset(decision.reason, t)?.id ?? ''}
+                        onChange={(event) => {
+                            const preset = BAN_REASON_PRESETS.find((entry) => entry.id === event.target.value);
+                            if (preset) updateDecision({ reason: t(preset.labelKey) });
+                        }}
+                    >
+                        <option value="">{t('components.banPresets.reasonCustom')}</option>
+                        {BAN_REASON_PRESETS.map((preset) => (
+                            <option key={preset.id} value={preset.id}>{t(preset.labelKey)}</option>
+                        ))}
+                    </select>
                 </div>
                 {multipleInstances && (
                     <div className="space-y-1">

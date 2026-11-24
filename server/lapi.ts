@@ -451,11 +451,13 @@ export class LapiClient {
     duration: string,
     reason = MANUAL_DECISION_MESSAGE_PREFIX,
     scenario = DEFAULT_MANUAL_DECISION_SCENARIO,
+    valueKind: 'address' | 'country' = 'address',
   ): Promise<unknown> {
     const now = new Date().toISOString();
     const payload = values.map((ip) => {
       // Like `cscli decisions add --range`, a CIDR value is sent with the range scope.
-      const scope = ip.includes('/') ? 'range' : 'ip';
+      // Like `cscli decisions add --scope Country`, a country code is sent with the Country scope.
+      const scope = valueKind === 'country' ? 'Country' : ip.includes('/') ? 'range' : 'ip';
       return {
         scenario,
         campaign_name: scenario,

@@ -52,6 +52,7 @@ import {
 } from './normalized-record';
 import type { DatabaseQueryWorker } from './query-worker-client';
 import type { DatabaseWrite } from './sync-worker-client';
+import type { WebPushDelivery } from './notifications/web-push-service';
 
 const NOTIFICATION_WRITE_BATCH_SIZE = 100;
 
@@ -64,6 +65,8 @@ export interface NotificationServiceOptions {
   writeDatabase?: DatabaseWrite;
   fetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
+  /** Sends to the browsers subscribed to Web Push. */
+  webPush?: WebPushDelivery;
   updateChecker?: UpdateChecker;
   crowdsecUpdateChecker?: CrowdsecUpdateChecker;
   getLapiStatus?: () => LapiStatus;
@@ -1295,6 +1298,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
       await provider.send(channel, payload, {
         fetchImpl: options.fetchImpl || outboundGuard.fetch,
         mqttPublishImpl,
+        webPush: options.webPush,
         assertHostAllowed: outboundGuard.assertHostAllowed,
         assertUrlAllowed: outboundGuard.assertUrlAllowed,
         lookup: outboundGuard.lookup,
@@ -1531,7 +1535,7 @@ function extractCveIds(alert: AlertRecord): string[] {
 }
 
 function normalizeChannelType(value: unknown): NotificationChannelType {
-  if (value === 'apprise' || value === 'ntfy' || value === 'gotify' || value === 'email' || value === 'mqtt' || value === 'webhook') return value;
+  if (value === 'apprise' || value === 'ntfy' || value === 'gotify' || value === 'discord' || value === 'email' || value === 'mqtt' || value === 'webhook' || value === 'webpush') return value;
   throw new Error('Invalid notification channel type');
 }
 

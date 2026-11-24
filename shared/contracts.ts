@@ -475,7 +475,7 @@ export interface UpdateCheckResponse {
   error?: string;
 }
 
-export type NotificationChannelType = 'apprise' | 'ntfy' | 'gotify' | 'email' | 'mqtt' | 'webhook';
+export type NotificationChannelType = 'apprise' | 'ntfy' | 'gotify' | 'discord' | 'email' | 'mqtt' | 'webhook' | 'webpush';
 export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-alert-decision' | 'new-cve' | 'ip-ban' | 'application-update' | 'crowdsec-update' | 'lapi-availability';
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';
@@ -990,6 +990,8 @@ export const BULK_ADD_DECISIONS_MAX = 500;
 /** Adds one decision per value with the same settings, in one LAPI request per instance. */
 export interface BulkAddDecisionRequest extends Omit<AddDecisionRequest, 'ip'> {
   values: string[];
+  /** `country` adds one Country-scope decision per ISO 3166-1 alpha-2 code instead of IP or range decisions. */
+  value_scope?: 'ip' | 'country';
 }
 
 export interface BulkAddDecisionResponse extends MultiInstanceOperationResponse {

@@ -12,6 +12,8 @@ import { SavedFiltersMenu } from "../components/SavedFiltersMenu";
 import { useRecentFilter } from "../lib/savedFilters";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { TableColumnsModal } from "../components/TableColumnsModal";
+import { ExportCsvButton } from "../components/ExportCsvButton";
+import { CSV_EXPORT_PAGE_SIZE, DECISION_CSV_COLUMNS } from "../lib/csvExport";
 import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
@@ -1394,6 +1396,11 @@ export function Decisions() {
                         <SavedFiltersMenu page="decisions" query={searchDraft} onApply={applySavedFilter} />
                         <QuickFilters {...quickFilterProps} onOpenChange={setQuickFiltersOpen} />
                     </div>
+                    <ExportCsvButton
+                        kind="decisions"
+                        columns={DECISION_CSV_COLUMNS}
+                        fetchPage={(page) => fetchDecisionsPaginated(page, CSV_EXPORT_PAGE_SIZE, facetFilters)}
+                    />
                 </div>
             </div>
 

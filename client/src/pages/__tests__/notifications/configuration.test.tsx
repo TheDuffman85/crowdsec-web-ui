@@ -210,6 +210,34 @@ describe('Notifications page configuration', () => {
     expect(screen.getByLabelText('Priority')).toHaveValue('9');
   });
 
+  test('submits Discord settings and rejects a webhook URL that is not a Discord webhook', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await user.click(await screen.findByRole('button', { name: /add destination/i }));
+    await user.selectOptions(screen.getByLabelText('Type'), 'discord');
+
+    await user.type(screen.getByLabelText('Name'), 'Homelab Discord');
+    await user.type(screen.getByLabelText('Discord Webhook URL'), 'https://example.com/hook');
+    await user.click(screen.getByRole('button', { name: /save destination/i }));
+    expect(createNotificationChannel).not.toHaveBeenCalled();
+
+    await user.clear(screen.getByLabelText('Discord Webhook URL'));
+    await user.type(screen.getByLabelText('Discord Webhook URL'), 'https://discord.com/api/webhooks/123456789012345678/abc-DEF_123');
+    await user.type(screen.getByLabelText('Display Name (optional)'), 'Shield');
+    await user.type(screen.getByLabelText('Web UI URL (optional)'), 'https://crowdsec.example.com');
+    await user.click(screen.getByRole('button', { name: /save destination/i }));
+
+    await waitFor(() => expect(createNotificationChannel).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'discord',
+      config: expect.objectContaining({
+        discordWebhookUrl: 'https://discord.com/api/webhooks/123456789012345678/abc-DEF_123',
+        discordUsername: 'Shield',
+        discordLinkUrl: 'https://crowdsec.example.com',
+      }),
+    })));
+  });
+
   test('submits Apprise settings for key and stateless URL modes', async () => {
     const user = userEvent.setup();
     render(<Notifications />);

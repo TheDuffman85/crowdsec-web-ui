@@ -20,6 +20,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useBranding } from "../contexts/useBranding";
 import { AppLogo } from "../components/AppLogo";
 import { BrandingColorsSettings } from "../components/BrandingColorsSettings";
+import { SessionsSettings } from "../components/SessionsSettings";
 import { UsersSettings } from "../components/UsersSettings";
 import { OidcLinkSettings } from "../components/OidcLinkSettings";
 import { THEME_MODES, type BrandingTheme } from "../../../shared/branding-theme";
@@ -1625,6 +1626,9 @@ export function Settings() {
                         labelClass={labelClass}
                         showToast={showToast}
                     />
+                    <div className="mt-6">
+                        <SessionsSettings canManage={canManageSettings} showToast={showToast} />
+                    </div>
                 </TabPanel>
             )}
 

@@ -79,6 +79,19 @@ describe('Statistics page', () => {
     expect(sessionFetch).toHaveBeenCalledWith(expect.stringContaining('/api/statistics?'), expect.anything());
   });
 
+  test('compares the activity chart with the period before when asked', async () => {
+    mount();
+    await screen.findByText('Top IPs');
+    expect(screen.queryByText(/Dashed lines show the previous period/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Compare with previous period' }));
+    expect(await screen.findByText('Dashed lines show the previous period: Sep 9, 2026 to Oct 8, 2026.')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('compare=1');
+    const urls = vi.mocked(sessionFetch).mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.includes('from=2026-09-09') && url.includes('to=2026-10-08') && !url.includes('compare'))).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Compare with previous period' }));
+    await waitFor(() => expect(screen.queryByText(/Dashed lines show/)).not.toBeInTheDocument());
+  });
+
   test('resizes the columns of a table, keeps the widths per table and resets them', async () => {
     mount();
     const topIps = (await screen.findByRole('row', { name: '192.0.2.7' })).closest('table')!;

@@ -1728,8 +1728,14 @@ app.post(`${config.basePath}/api/decisions/bulk-add`, ensureAuth, async (context
     if (values.length > BULK_ADD_DECISIONS_MAX) {
       return context.json({ error: `At most ${BULK_ADD_DECISIONS_MAX} values can be added at once` }, 400);
     }
-    const invalid = values.find((value) => !value || !isValidIpOrRange(value));
-    if (invalid !== undefined) return context.json({ error: `Invalid IP address format: ${invalid}` }, 400);
+    const countryScope = body.value_scope === 'country';
+    if (body.value_scope !== undefined && body.value_scope !== 'ip' && !countryScope) {
+      return context.json({ error: 'Invalid value scope. Must be one of: ip, country' }, 400);
+    }
+    const invalid = values.find((value) => !value || (countryScope ? !/^[A-Z]{2}$/.test(value) : !isValidIpOrRange(value)));
+    if (invalid !== undefined) {
+      return context.json({ error: countryScope ? `Invalid country code: ${invalid}` : `Invalid IP address format: ${invalid}` }, 400);
+    }
     const settings = parseDecisionSettings(body);
     if ('error' in settings) return context.json({ error: settings.error }, 400);
     const { duration, reason, type, scenario } = settings;
@@ -1740,7 +1746,8 @@ app.post(`${config.basePath}/api/decisions/bulk-add`, ensureAuth, async (context
     // Allowlisted values are skipped rather than failing the whole request,
     // and reported so they can be resent with an explicit bypass.
     const allowlisted: BulkAddDecisionResponse['allowlisted'] = [];
-    if (!bypassAllowlist) {
+    // Allowlists hold addresses and ranges, so a country code has nothing to match against.
+    if (!bypassAllowlist && !countryScope) {
       let next = 0;
       await Promise.all(Array.from({ length: Math.min(BULK_ALLOWLIST_CHECK_CONCURRENCY, values.length) }, async () => {
         while (next < values.length) {
@@ -1769,7 +1776,7 @@ app.post(`${config.basePath}/api/decisions/bulk-add`, ensureAuth, async (context
       const client = lapiClients.get(instance.id)!;
       let upstreamAdded = false;
       try {
-        const result = await client.addDecisions(added, type, duration, reason.slice(0, 256), scenario);
+        const result = await client.addDecisions(added, type, duration, reason.slice(0, 256), scenario, countryScope ? 'country' : 'address');
         upstreamAdded = true;
         if (instance.id === primaryInstance.id) await updateCacheDelta({ publishUnchanged: true });
         else await syncInstanceDelta(instance.id);
